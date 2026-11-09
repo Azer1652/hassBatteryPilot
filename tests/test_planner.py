@@ -225,3 +225,26 @@ def test_dynamic_plan_uses_quarter_hours_and_arbitrage_in_summer():
     hours = {s.start.astimezone(BXL).hour: s.action for s in plan.steps if s.start < now + timedelta(hours=22)}
     assert "charge" in {hours[h] for h in (2, 3, 4)}
     assert "discharge" in {hours[h] for h in (18, 19, 20)}
+
+
+def test_unreachable_night_target_is_capped_so_no_day_rate_charging_before_the_window():
+    """Demo finding: a 100 % target the night window cannot deliver made the plan buy at the day rate at 20:00."""
+    now = datetime(2026, 11, 9, 16, 0, tzinfo=BXL).astimezone(timezone.utc)
+    o = Options()
+    evening = lambda t0, t1: (1.4 if 17 <= t0.astimezone(BXL).hour < 22 else 0.55) * (t1 - t0).total_seconds() / 3600
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], evening, _bell(1.5), soc=38, market_avg=90)
+    t = plan.targets[0]
+    assert t["applied"] and t["capped"] and t["soc"] < 100
+    window_start = datetime.fromisoformat(t["window_start"])
+    assert all(s.action != "charge" for s in plan.steps if s.start < window_start)
+    assert any(s.action == "charge" for s in plan.steps if s.start >= window_start)
+
+
+def test_a_short_first_slot_is_merged_only_at_the_same_price():
+    o = Options()
+    fc = lambda a, b: 0.0
+    at = lambda h, m: datetime(2026, 11, 10, h, m, tzinfo=BXL).astimezone(timezone.utc)   # a Tuesday
+    plan = make_plan(at(22, 55), BXL, o, FixedTariff(o), [], _flat_load(0.5), fc, soc=30, market_avg=90)
+    assert plan.steps[0].start == at(22, 55) and plan.steps[0].hours == pytest.approx(65 / 60)   # night + night
+    plan = make_plan(at(21, 55), BXL, o, FixedTariff(o), [], _flat_load(0.5), fc, soc=30, market_avg=90)
+    assert plan.steps[0].hours == pytest.approx(5 / 60)                                          # day, then night

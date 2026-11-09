@@ -22,7 +22,8 @@ the sidebar. Install Battery Pilot; it takes over from Battery Playbook by itsel
   unless you switch on "Battery Pilot block negative export".
 - Fixed: grid-charged to 100 % when the battery was already above the night target.
 - Fixed: the night target was only checked when the window started, so overnight drain
-  was never topped up.
+  was never topped up. It is also capped at what the night window can charge under the
+  import limit, so an unreachable target no longer buys at the day rate in the evening.
 - Fixed: a missing PV sensor taught the shade correction that it was always dark.
 - Fixed: helper changes made in the HA UI were reset on every restart.
 - Fixed: the monthly peak was not reset if HA was down at midnight on the 1st.

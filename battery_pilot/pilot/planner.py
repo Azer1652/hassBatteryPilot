@@ -318,6 +318,15 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
                           tariff.sell(mid_local, market, market_avg), market,
                           peak_kw(t0, t1) if peak_kw else 0.0))
 
+    if len(slots) > 1 and slots[0].hours < minutes / 60 / 3 \
+            and abs(slots[0].buy - slots[1].buy) < 1e-9 and abs(slots[0].sell - slots[1].sell) < 1e-9:
+        # A few minutes before the boundary at the same price: merge into the next slot, so a replan
+        # just before the hour does not plan a 5-minute self-use gap between two charging hours.
+        a, z = slots[0], slots[1]
+        slots[1] = Slot(a.start, a.hours + z.hours, a.load_kwh + z.load_kwh, a.pv_kwh + z.pv_kwh, z.buy, z.sell,
+                        z.market, max(a.peak_kw, z.peak_kw))
+        slots.pop(0)
+
     targets: dict[int, float] = {}
     target_info = []
     winter = False
@@ -331,17 +340,32 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         solar = sum(p for _, p, _ in day)
         is_winter = solar < o.winter_solar_threshold_kwh
         soc_needed, need_kwh = night_target(b, o, day)
+        # Never ask for more than the night window can charge from the minimum under the import
+        # limit: an unreachable target makes the plan buy at the day rate before the window opens.
+        reachable = 0          # SOC points, counted per hour in whole points as the optimizer does
+        t = ws
+        while t < we:
+            t2 = min(t + timedelta(hours=1), we)
+            h = (t2 - t).total_seconds() / 3600
+            room_kw = b.import_limit_kw - CHARGE_HEADROOM_KW - load_kwh(t, t2) / h
+            reachable += int(min(max(room_kw, 0.0) * b.eta_c, b.max_charge_kw) * h / (b.capacity_kwh / 100) + 1e-9)
+            t = t2
+        cap = int(5 * math.floor((b.min_soc + reachable) / 5))
+        capped = soc_needed > cap
+        soc_needed = min(soc_needed, max(cap, int(math.ceil(b.min_soc))))
         idx = max((i for i, s in enumerate(slots) if s.end <= we + timedelta(seconds=1)), default=None)
         info = {"window_start": ws.isoformat(), "window_end": we.isoformat(), "solar_kwh": round(solar, 1),
-                "need_kwh": need_kwh, "soc": soc_needed, "winter": is_winter}
+                "need_kwh": need_kwh, "soc": soc_needed, "winter": is_winter, "capped": capped}
         # Forecasts list daylight hours only, so a day counts as forecast once the forecast
         # reaches past its late morning.
         known = forecast_until is None or forecast_until >= we + timedelta(hours=4)
         info["forecast"] = known
+        info["applied"] = bool(is_winter and known and idx is not None and o.winter_mode == "full_day")
+        info["winter_mode"] = o.winter_mode
         target_info.append(info)
         if len(target_info) == 1:
             winter = is_winter and known   # the first upcoming night decides winter behaviour now
-        if is_winter and known and idx is not None and o.winter_mode == "full_day":
+        if info["applied"]:
             targets[idx] = soc_needed
 
     buys = [s.buy for s in slots] or [0.0]

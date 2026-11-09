@@ -35,7 +35,7 @@ from pilot.load import LoadProfile  # noqa: E402
 from pilot.meter import QuarterRecord  # noqa: E402
 from pilot.prices import PriceSlot  # noqa: E402
 from pilot.solar import PvForecast, ShadeModel, hourly_from_daily  # noqa: E402
-from pilot.tariffs import capacity_month_eur, tariff  # noqa: E402
+from pilot.tariffs import capacity_month_eur, is_night, tariff  # noqa: E402
 
 TZ = ZoneInfo("Europe/Brussels")
 LAT, LON = 51.2, 4.4
@@ -150,13 +150,23 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         m = months.setdefault(key, {"days": 0, "pv": 0.0, "pv_fc": 0.0, "load": 0.0, "market": [],
                                     **{k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0,
                                            "grid_charged": 0.0, "peak_kw": 0.0} for k in ("fixed", "dynamic")},
-                                    "nobat": {"fixed_c": 0.0, "dynamic_c": 0.0, "peak_kw": 0.0}})
+                                    "nobat": {"fixed_c": 0.0, "dynamic_c": 0.0, "peak_kw": 0.0},
+                                    # what the meter would show on the fixed contract ("same usage" view)
+                                    "same": {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "dyn_c": 0.0}})
         today = [p.eur_mwh for p in prices if p.start.astimezone(TZ).date() == d]
         avg = sum(today) / len(today)
         pv_fc = PvForecast(fc, shade, TZ).kwh
         for kind in ("fixed", "dynamic"):
             res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h)
             soc[kind] = res["soc_end"]
+            if kind == "fixed":
+                dyn = tariff("dynamic", o)
+                for t, imp, exp in res["flows"]:
+                    local = (t + timedelta(minutes=7)).astimezone(TZ)
+                    mk = next(p.eur_mwh for p in prices if p.start <= t < p.end)
+                    m["same"]["imp_night" if is_night(local, o) else "imp_day"] += imp
+                    m["same"]["exp"] += exp
+                    m["same"]["dyn_c"] += imp * dyn.buy(local, mk) - exp * dyn.sell(local, mk)
             acc = m[kind]
             for k in ("cost_c", "imp", "exp", "charged", "discharged", "grid_charged"):
                 acc[k] += res[k]

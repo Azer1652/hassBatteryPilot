@@ -143,7 +143,7 @@ function planChart(plan) {
   });
   g += `<path d="${path}" fill="none" stroke="${css("--soc")}" stroke-width="2.2"/>`;
   for (const t of plan.targets || []) {
-    if (!t.winter) continue;
+    if (!(t.applied ?? t.winter)) continue;
     const tx = x(new Date(t.window_end).getTime());
     if (tx > left && tx < W - right) g += `<line x1="${tx}" x2="${tx}" y1="${ys(t.soc)}" y2="${ys(t.soc) + 0.1}" />
       <circle cx="${tx}" cy="${ys(t.soc)}" r="4" fill="none" stroke="${css("--soc")}" stroke-width="2"><title>night target ${t.soc} %</title></circle>`;
@@ -231,10 +231,12 @@ let render = function (s) {
   ].join("");
   $("plan").innerHTML = planChart(s.plan);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
-  $("plannote").textContent = t ? (t.winter
-      ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery is filled to ${t.soc} % by the end of the night.`
-      : `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`) +
-      (s.plan.allow_export ? "" : " No export in winter.") : "";
+  $("plannote").textContent = !t || t.forecast === false ? "" : !t.winter
+    ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`
+    : t.applied === false
+      ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery keeps enough for your usual peaks (winter strategy: peaks only).`
+      : `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery is charged towards ${t.soc} % by the end of the night, ` +
+        `as far as the import limit allows. No export in winter.`;
   comparison(s.comparison || {});
   $("solar").innerHTML = kpi("today, after shade", fmt(s.solar.today) + " kWh") + kpi("tomorrow, after shade", fmt(s.solar.tomorrow) + " kWh")
     + kpi("house, per day", fmt(s.load.daily_kwh) + " kWh");

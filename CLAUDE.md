@@ -72,6 +72,11 @@ include regressions for the old playbook bugs (overcharge above target, night dr
 `tools/yearsim.py` is a synthetic year (shade, winter dip, peaks, seasonal and negative prices) replayed
 with the app's own `replay_day`; `python tools/yearsim.py [--days N --winter-mode peaks_only]` prints a
 monthly cost table, and `tests/test_scenarios.py` runs whole weeks of it.
+`battery_pilot/DOCS.md` is the user reference (every setting, every entity read and written, every
+published sensor); `test_packaging.py` fails when a setting, Solis entity or `sensor.battery_pilot_*`
+is missing from it. Screenshots in `docs/screenshots/` come from `python tools/demo_dashboard.py`
+(demo data through the real app) + `node tools/screenshots.cjs`; DOCS.md links them by raw GitHub URL
+on `main`, the root README by relative path.
 `tests/test_packaging.py` checks that `config.yaml` options/schema, `translations/en.yaml`,
 `config.Options` defaults and the CHANGELOG version agree — update all of them together.
 

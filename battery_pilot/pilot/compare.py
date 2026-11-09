@@ -175,7 +175,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     tar = tariff(kind, o)
     soc = soc0
     out = {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "peak_kw": 0.0,
-           "grid_charged": 0.0, "soc_end": soc0}
+           "grid_charged": 0.0, "soc_end": soc0, "flows": []}
     plan = None
     for i, r in enumerate(recs):
         if plan is None or (i % (4 * replan_every_h) == 0):
@@ -203,6 +203,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         out["grid_charged"] += max(res.charge_dc_kwh / b.eta_c - max(pv_kwh - load_kwh, 0.0), 0.0)
         out["discharged"] += res.discharge_dc_kwh
         out["peak_kw"] = max(out["peak_kw"], res.import_kwh * 4)
+        out["flows"].append((r.start, res.import_kwh, res.export_kwh))
         soc = res.soc
     out["soc_end"] = soc
     return out

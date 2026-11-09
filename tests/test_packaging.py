@@ -70,3 +70,23 @@ def test_repository_file():
     with open(os.path.join(ROOT, "repository.yaml"), encoding="utf-8") as f:
         repo = yaml.safe_load(f)
     assert repo["name"] == "Battery Pilot"
+
+
+def test_docs_cover_every_setting_entity_and_sensor():
+    """DOCS.md is the user's reference: a new setting, inverter entity or sensor must be documented."""
+    from pilot.helpers import HELPERS
+    from pilot.solis import NEEDED
+
+    with open(os.path.join(APP, "DOCS.md"), encoding="utf-8") as f:
+        docs = f.read()
+    with open(os.path.join(APP, "pilot", "app.py"), encoding="utf-8") as f:
+        app_src = f.read()
+    sensors = set(re.findall(r"sensor\.battery_pilot_[a-z_]*[a-z]", app_src))
+    if "sensor.battery_pilot_solar_{name}" in app_src:
+        sensors |= {"sensor.battery_pilot_solar_today", "sensor.battery_pilot_solar_tomorrow"}
+    sensors.discard("sensor.battery_pilot_solar")
+    wanted = [f"`{k}`" for k in CFG["schema"]] + [f"`{k}`" for k in (*NEEDED, "export_limit")]
+    wanted += [f"`{s}`" for s in sorted(sensors)] + [f"`{eid}`" for eid, _, _ in HELPERS]
+    missing = [w for w in wanted if w not in docs]
+    assert not missing, f"not in DOCS.md: {missing}"
+    assert len(sensors) >= 9
