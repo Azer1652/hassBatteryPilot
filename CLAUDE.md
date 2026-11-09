@@ -56,7 +56,8 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   themselves if the app stops; `controller` renews them each hour.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
-  tariff are added in `report()`.
+  tariff are added in `report()`. The replay, like the live plan, blocks export at negative sell
+  prices only when `App.blocks_negative_export` (block switch on and an export-limit entity found).
 - `solar.ShadeModel`: 12 × 24 actual/forecast factors weighted by forecast kWh; skips hours with
   incomplete PV data. `load.LoadProfile`: 7 × 24 kW EMA.
 - `migrate.py`: takes over from Battery Playbook 1.x (turns its automations off, imports

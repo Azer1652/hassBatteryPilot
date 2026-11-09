@@ -87,8 +87,10 @@ Home Assistant stops, the inverter returns to self-use within the hour.
   consumption and solar. For each contract the planner decides every hour as it would
   have on that contract (cheap-hour charging, export, selling surplus solar, the
   winter night target). A simulated battery follows its commands, and wear is
-  included. This answers: what would each contract have cost me, with the battery
-  used the best way for it?
+  included. With *Battery Pilot block negative export* on (and an export-limit
+  entity), the replay also blocks export whenever that contract's sell price is
+  negative, as Battery Pilot would; otherwise those exports cost money. This answers:
+  what would each contract have cost me, with the battery used the best way for it?
 
 Both include the contract fees and the capacity tariff. The sidebar page shows every
 month; the sensor `sensor.battery_pilot_contract_comparison` holds the 12-month

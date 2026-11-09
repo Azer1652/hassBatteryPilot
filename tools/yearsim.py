@@ -129,8 +129,9 @@ class World:
 
 
 def run(start: date, days: int, opts: Options | None = None, seed: int = 1, price_scale: float = 1.0,
-        replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7) -> dict:
-    """`warmup_days` before `start` are simulated for learning only (like a first install's history)."""
+        replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7, block_negative: bool = False) -> dict:
+    """`warmup_days` before `start` are simulated for learning only (like a first install's history).
+    `block_negative`: as with the *block negative export* switch on."""
     o = opts or Options()
     w = World(seed, price_scale)
     shade, load = ShadeModel(), LoadProfile()
@@ -157,7 +158,8 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         avg = sum(today) / len(today)
         pv_fc = PvForecast(fc, shade, TZ).kwh
         for kind in ("fixed", "dynamic"):
-            res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h)
+            res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h,
+                             block_negative=block_negative)
             soc[kind] = res["soc_end"]
             if kind == "fixed":
                 dyn = tariff("dynamic", o)
@@ -236,9 +238,10 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--price-scale", type=float, default=1.0)
     ap.add_argument("--winter-mode", default="full_day", choices=["full_day", "peaks_only"])
+    ap.add_argument("--block-negative", action="store_true", help="block export at negative sell prices")
     a = ap.parse_args()
     res = run(date.fromisoformat(a.start), a.days, Options(winter_mode=a.winter_mode), seed=a.seed,
-              price_scale=a.price_scale)
+              price_scale=a.price_scale, block_negative=a.block_negative)
     print(table(res))
 
 

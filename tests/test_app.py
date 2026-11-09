@@ -152,7 +152,8 @@ async def test_failed_config_check_keeps_the_old_files(tmp_path, tmpdata):
     assert old.exists()
 
 
-async def test_nightly_learning_and_contract_replay(tmpdata):
+@pytest.mark.parametrize("block", [False, True])
+async def test_nightly_learning_and_contract_replay(tmpdata, block):
     day = datetime(2026, 3, 10, tzinfo=TZ)
     start = day.astimezone(timezone.utc)
     prices = []
@@ -162,8 +163,10 @@ async def test_nightly_learning_and_contract_replay(tmpdata):
         prices.append({"time": t.isoformat(), "price": p})
     fc = winter_forecast(datetime(2026, 3, 10), 12)
     fake = FakeHA(start - timedelta(minutes=5), soc=50, forecast=fc, prices=prices)
+    fake.s["input_boolean.battery_pilot_block_negative_export"]["state"] = "on" if block else "off"
     app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
+    await app.tick()
     for q in range(96):
         t = start + timedelta(minutes=15 * q)
         hour = t.astimezone(TZ).hour
@@ -178,6 +181,8 @@ async def test_nightly_learning_and_contract_replay(tmpdata):
     await app.nightly()
     m = app.comparison.report("2026-03", Options())
     assert m["replay_days"] == 1
+    replayed = [e["text"] for e in app.events if e["text"].startswith("Replayed")]
+    assert len(replayed) == 1 and ("export blocked at negative prices" in replayed[0]) is block
     ws = m["with_strategy"]
     assert ws["fixed"]["eur"] > 0 and ws["dynamic"]["eur"] > 0
     assert ws["dynamic"]["battery_in_kwh"] > 0
@@ -257,6 +262,19 @@ async def test_export_blocked_at_negative_prices_and_restored(tmpdata):
     assert await app2.setup()
     await run_until(app2, fake, utc(2026, 6, 14, 14, 5))
     assert fake.s["number.solis_export_power_limit"]["state"] == "6000"
+
+
+@pytest.mark.parametrize("has_limit", [True, False])
+async def test_plan_counts_on_blocking_only_when_the_inverter_can_block(tmpdata, has_limit):
+    fake = FakeHA(utc(2026, 6, 14, 12))
+    if not has_limit:
+        del fake.s["number.solis_export_power_limit"]
+    fake.s["input_boolean.battery_pilot_block_negative_export"]["state"] = "on"
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    await app.tick()
+    assert app.curtail_on
+    assert app.blocks_negative_export is has_limit      # without an export limit nothing gets blocked
 
 
 async def test_stopping_the_app_while_charging_returns_to_self_use(tmpdata):

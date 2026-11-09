@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.1
+
+- The fixed-vs-dynamic comparison follows *Battery Pilot block negative export*: with
+  it on, the nightly replay blocks export at negative sell prices, as the app does, so
+  a dynamic contract is no longer shown as paying for those exports.
+- The plan only counts on blocking negative export when an export-limit entity was
+  found, since without one nothing gets blocked.
+
 ## 2.0.0
 
 Battery Playbook is now **Battery Pilot**, an always-running app with its own page in

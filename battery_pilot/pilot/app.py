@@ -268,6 +268,12 @@ class App:
             self.event(f"Inverter command '{d.command}' failed: {e}", logging.ERROR)
             self.solis.mode = "unknown"
 
+    @property
+    def blocks_negative_export(self) -> bool:
+        """The block switch is on and there is an export limit to set: the plan and the
+        nightly replay then count on no export while the sell price is negative."""
+        return self.curtail_on and "export_limit" in self.ent_ids
+
     async def _curtail(self, local: datetime):
         if "export_limit" not in self.ent_ids:
             return
@@ -375,7 +381,7 @@ class App:
             self.problem = None
         self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
-                              curtail_negative=self.curtail_on, forecast_until=self.pv.until,
+                              curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz))
 
     def current_prices(self) -> dict:
@@ -415,13 +421,16 @@ class App:
         if self.price_slots or self.o.contract == "fixed":
             # The replay is CPU work: run it in a thread on copies, apply the results here.
             soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
+            block = self.blocks_negative_export
             results = await asyncio.get_running_loop().run_in_executor(
-                None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive), soc0)
-            self._apply_replay(y, results)
+                None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive), soc0,
+                block)
+            self._apply_replay(y, results, block)
         self.comparison.prune()
         self.save_state()
 
-    def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict):
+    def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict,
+                block_negative: bool = False):
         archive = {datetime.fromisoformat(k): v for k, v in forecast_archive.items()}
         pv_fc = PvForecast(archive, self.shade, self.tz)
         avg = self.market_avg_month(start)
@@ -432,13 +441,14 @@ class App:
             s0 = soc0.get(kind)
             if s0 is None:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
-            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg)
+            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
+                             block_negative=block_negative)
             if res is None:
                 return None
             results[kind] = res
         return results
 
-    def _apply_replay(self, day: date, results: dict | None):
+    def _apply_replay(self, day: date, results: dict | None, block_negative: bool = False):
         if results is None:
             self.event(f"Replay of {day} skipped: too much data missing.")
             return
@@ -449,7 +459,8 @@ class App:
         if len(results) == len(KINDS):
             self.comparison.month(key)["replay_days"] += 1
             f, d = results["fixed"]["cost_c"] / 100, results["dynamic"]["cost_c"] / 100
-            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f} (energy and battery wear).")
+            blocked = "; export blocked at negative prices" if block_negative else ""
+            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f} (energy and battery wear{blocked}).")
 
     # ---------------------------------------------------------------- alerts
     async def alert(self, title: str, message: str, key: str | None, phone: bool = True):

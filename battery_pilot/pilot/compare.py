@@ -161,11 +161,13 @@ class Comparison:
 # ---------------------------------------------------------------- replay one day
 def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo, prices: list[PriceSlot],
                load: LoadProfile, pv_forecast, soc0: float, market_avg: float | None,
-               replan_every_h: int = 1) -> dict | None:
+               replan_every_h: int = 1, block_negative: bool = False) -> dict | None:
     """Replay one day of measured quarters on a contract with its battery strategy.
 
     `pv_forecast(t0, t1)` is the (shade-corrected) forecast the app had; the plan uses
     forecasts, the simulation uses what was measured. Returns None when too much data is missing.
+    `block_negative`: export is blocked while this contract's sell price is below zero, as the
+    app does with *Battery Pilot block negative export* on (the solar it cannot use is curtailed).
     """
     recs = sorted(records, key=lambda r: r.start)
     good = [r for r in recs if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5]
@@ -180,7 +182,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     for i, r in enumerate(recs):
         if plan is None or (i % (4 * replan_every_h) == 0):
             plan = make_plan(r.start, tz, o, tar, prices, lambda a, z: load.kwh(a, z, tz), pv_forecast, soc,
-                             market_avg=market_avg, curtail_negative=False, horizon_h=30,
+                             market_avg=market_avg, curtail_negative=block_negative, horizon_h=30,
                              peak_kw=lambda a, z: load.peak_kw(a, z, tz))
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
@@ -190,10 +192,12 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
             load_kwh = load.kwh(r.start, r.start + timedelta(minutes=15), tz)
             pv_kwh = pv_forecast(r.start, r.start + timedelta(minutes=15))
         left = (st.start + timedelta(hours=st.hours) - r.start).total_seconds() / 3600 if st else None
-        res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left)
         local = (r.start + timedelta(minutes=7, seconds=30)).astimezone(tz)
         market = price_at(prices, r.start)
-        out["cost_c"] += res.import_kwh * tar.buy(local, market) - res.export_kwh * tar.sell(local, market, market_avg)
+        sell = tar.sell(local, market, market_avg)
+        res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left,
+                       curtail=block_negative and sell < 0)
+        out["cost_c"] += res.import_kwh * tar.buy(local, market) - res.export_kwh * sell
         # Battery wear counts too: a strategy that cycles more wears the battery more.
         out["cost_c"] += res.discharge_dc_kwh * o.wear_cost_c_kwh
         out["imp"] += res.import_kwh
