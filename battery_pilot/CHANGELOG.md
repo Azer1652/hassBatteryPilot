@@ -12,7 +12,14 @@ the sidebar. Install Battery Pilot; it takes over from Battery Playbook by itsel
   day with the best battery strategy for each contract (no more estimated monthly gains).
 - Every contract, grid, battery and tariff value is a setting; the old Flemish values
   are the defaults.
+- Learns your usual quarter-hour peaks per weekday and hour and keeps enough battery to
+  cover them under the import limit.
+- New winter strategy setting: `full_day` (as before: fill at night to carry the day) or
+  `peaks_only` (keep just enough for the peaks). In a simulated year with the default
+  settings, `peaks_only` was about €38 cheaper on the fixed contract with the same peaks.
 - Starts in shadow mode; switch on "Battery Pilot control" when you trust the plan.
+- Returns the inverter to self-use when the app stops; never changes the export limit
+  unless you switch on "Battery Pilot block negative export".
 - Fixed: grid-charged to 100 % when the battery was already above the night target.
 - Fixed: the night target was only checked when the window started, so overnight drain
   was never topped up.

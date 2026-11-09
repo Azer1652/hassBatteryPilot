@@ -76,7 +76,7 @@ class App:
         self.decision = Decision("none", reason="starting")
         self.control_on = False
         self.curtail_on = False
-        self.curtailing: bool | None = None
+        self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
         self.peak_warned = ""
         self.over_since: datetime | None = None
         self.events: list[dict] = []
@@ -110,6 +110,7 @@ class App:
         self.alerts = dict(s.get("alerts") or {})
         self.last_nightly = s.get("last_nightly", "")
         self.migrated = bool(s.get("migrated"))
+        self.curtailed_by_us = bool(s.get("curtailed_by_us"))
         if s.get("load_default_kw"):
             self.load.default_kw = s["load_default_kw"]
         self.pv = PvForecast({}, self.shade, self.tz)
@@ -122,7 +123,7 @@ class App:
              "comparison": self.comparison.to_json(), "prices": P.to_json(self.price_slots),
              "forecast_archive": self.forecast_archive, "records": [r.to_json() for r in self.records],
              "daily_market": self.daily_market, "alerts": self.alerts, "last_nightly": self.last_nightly,
-             "migrated": self.migrated}
+             "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us}
         tmp = self.state_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f)
@@ -272,14 +273,15 @@ class App:
             return
         sell = self.current_prices()["sell"] if self.price_slots else None
         want = bool(self.control_on and self.curtail_on and sell is not None and sell < 0)
-        if self.curtailing is None:   # after a (re)start: is the limit still at 0 from before?
-            self.curtailing = self._num(await self.ha.state(self.ent_ids["export_limit"])) == 0
-        if want == self.curtailing:
+        # Only touch the export limit for this feature, and only undo what we did ourselves:
+        # a zero-export installation keeps its own setting.
+        if want == self.curtailed_by_us:
             return
         watts = 0 if want else int(self.o.export_limit_kw * 1000)
         try:
             await self.solis.set_export_limit(local, watts)
-            self.curtailing = want
+            self.curtailed_by_us = want
+            self.save_state()
         except Exception as e:  # noqa: BLE001
             self.event(f"Setting the export limit failed: {e}", logging.ERROR)
 
@@ -411,27 +413,36 @@ class App:
         n_load = self.load.learn_records(recs, self.tz)
         self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
         if self.price_slots or self.o.contract == "fixed":
-            await asyncio.get_running_loop().run_in_executor(None, self._replay, y, recs, start)
+            # The replay is CPU work: run it in a thread on copies, apply the results here.
+            soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
+            results = await asyncio.get_running_loop().run_in_executor(
+                None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive), soc0)
+            self._apply_replay(y, results)
         self.comparison.prune()
         self.save_state()
 
-    def _replay(self, day: date, recs: list[QuarterRecord], start: datetime):
-        archive = {datetime.fromisoformat(k): v for k, v in self.forecast_archive.items()}
+    def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict):
+        archive = {datetime.fromisoformat(k): v for k, v in forecast_archive.items()}
         pv_fc = PvForecast(archive, self.shade, self.tz)
-        key = day.strftime("%Y-%m")
         avg = self.market_avg_month(start)
         results = {}
         for kind in KINDS:
-            if kind == "dynamic" and not self.price_slots:
+            if kind == "dynamic" and not price_slots:
                 continue
-            soc0 = self.comparison.sim_soc.get(kind)
-            if soc0 is None:
-                soc0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
-            res = replay_day(recs, kind, self.o, self.tz, self.price_slots, self.load, pv_fc.kwh, soc0, avg)
+            s0 = soc0.get(kind)
+            if s0 is None:
+                s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
+            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg)
             if res is None:
-                self.event(f"Replay of {day} skipped: too much data missing.")
-                return
+                return None
             results[kind] = res
+        return results
+
+    def _apply_replay(self, day: date, results: dict | None):
+        if results is None:
+            self.event(f"Replay of {day} skipped: too much data missing.")
+            return
+        key = day.strftime("%Y-%m")
         for kind, res in results.items():
             self.comparison.add_replay(key, kind, res)
             self.comparison.sim_soc[kind] = res["soc_end"]
@@ -632,11 +643,29 @@ class App:
                     self._last["refresh"] = self.clock()
                 await self.step()
             except Exception as e:  # noqa: BLE001 - keep running, log it
-                self.event(f"Error: {e}", logging.ERROR)
-                log.exception("main loop")
+                self._error(e)
             await _sleep(stop, TICK_S)
         if self.ready:
-            self.save_state()
+            await self.shutdown()
+
+    def _error(self, e: Exception):
+        """Log an error, but the same one at most every 5 minutes (e.g. while HA restarts)."""
+        text = f"{type(e).__name__}: {e}"
+        now = self.clock()
+        last = self._last.get("error:" + text)
+        if last is None or (now - last).total_seconds() >= 300:
+            self._last["error:" + text] = now
+            self.event(f"Error: {text}", logging.ERROR)
+            log.debug("main loop", exc_info=e)
+
+    async def shutdown(self):
+        """App stopping: leave the inverter in self-use and save what was learned."""
+        if self.solis and self.solis.mode in ("charge", "discharge"):
+            try:
+                await self.solis.self_use(self.clock().astimezone(self.tz), "Battery Pilot stopped")
+            except Exception as e:  # noqa: BLE001
+                log.warning("Could not return the inverter to self-use: %s", e)
+        self.save_state()
 
 
 async def _sleep(stop: asyncio.Event, seconds: float):

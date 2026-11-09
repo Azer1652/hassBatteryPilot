@@ -230,3 +230,43 @@ async def test_dashboard_status_is_complete(tmpdata):
     for k in ("plan", "prices", "solar", "load", "peaks", "comparison", "breakeven", "readings", "inverter"):
         assert k in s
     assert s["breakeven"] == {"night": 131, "day": 162}
+
+
+async def test_zero_export_setting_is_left_alone(tmpdata):
+    fake = FakeHA(utc(2026, 6, 14, 12))
+    fake.s["number.solis_export_power_limit"]["state"] = "0"       # a zero-export installation
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    fake.s[CONTROL]["state"] = "on"
+    await run_until(app, fake, utc(2026, 6, 14, 12, 10))
+    assert not [c for c in fake.calls if c[2].get("entity_id") == "number.solis_export_power_limit"]
+
+
+async def test_export_blocked_at_negative_prices_and_restored(tmpdata):
+    day = datetime(2026, 6, 14, tzinfo=TZ)
+    prices = [{"time": (day + timedelta(hours=h)).isoformat(), "price": -0.05 if 12 <= h < 14 else 0.08}
+              for h in range(48)]
+    fake = FakeHA(utc(2026, 6, 14, 11, 50), soc=60, prices=prices, pv=lambda t: 4.0)
+    fake.s[CONTROL]["state"] = "on"
+    fake.s["input_boolean.battery_pilot_block_negative_export"]["state"] = "on"
+    app = App(Options(contract="dynamic"), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    await run_until(app, fake, utc(2026, 6, 14, 12, 5))
+    assert fake.s["number.solis_export_power_limit"]["state"] == "0"
+    app2 = App(Options(contract="dynamic"), fake, data_dir=tmpdata, clock=lambda: fake.now)   # survives a restart
+    assert await app2.setup()
+    await run_until(app2, fake, utc(2026, 6, 14, 14, 5))
+    assert fake.s["number.solis_export_power_limit"]["state"] == "6000"
+
+
+async def test_stopping_the_app_while_charging_returns_to_self_use(tmpdata):
+    fake = FakeHA(utc(2026, 1, 14, 23, 0), soc=20, forecast=winter_forecast(datetime(2026, 1, 15), 2))
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    while fake.mode() != "charge" and fake.now < utc(2026, 1, 15, 7, 0):
+        await app.step()
+        fake.advance(timedelta(seconds=60))
+    assert fake.mode() == "charge"
+    await app.shutdown()
+    assert fake.s["switch.solis_time_of_use"]["state"] == "off"
