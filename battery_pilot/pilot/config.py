@@ -68,6 +68,7 @@ class Options:
     # planning
     safety_margin_pct: int = 30
     winter_solar_threshold_kwh: float = 12.0
+    winter_mode: str = "full_day"            # full_day: fill at night to carry the day | peaks_only
     # inverter
     slot_entities: str = "time_charging"
     notify_service: str = ""
@@ -113,6 +114,8 @@ class Options:
             raise ConfigError("night_start and night_end are the same: the night window would be empty.")
         if not self.battery_min_soc <= self.battery_reserve_soc <= 100:
             raise ConfigError("battery_reserve_soc must be between battery_min_soc and 100.")
+        if self.winter_mode not in ("full_day", "peaks_only"):
+            raise ConfigError("winter_mode must be full_day or peaks_only.")
         if self.slot_entities not in ("time_charging", "grid_time_of_use"):
             raise ConfigError("slot_entities must be time_charging or grid_time_of_use.")
         if self.fixed_contract_end.strip():

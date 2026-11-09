@@ -108,7 +108,7 @@ class HA:
     async def ws(self, *commands: dict) -> list:
         """Run websocket commands in one short connection; returns their results in order."""
         results = []
-        async with self.session.ws_connect(self.ws_url, timeout=aiohttp.ClientWSTimeout(ws_close=10)) as ws:
+        async with self.session.ws_connect(self.ws_url, heartbeat=30) as ws:
             msg = await ws.receive_json(timeout=10)
             if msg.get("type") == "auth_required":
                 await ws.send_json({"type": "auth", "access_token": self.token})

@@ -69,6 +69,9 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 `tests/fake_ha.py` is an in-memory HA with a house/battery/Solis physics model (`advance()`);
 `tests/test_app.py` runs the whole app through simulated nights with it. Planner/controller tests
 include regressions for the old playbook bugs (overcharge above target, night drain, shade collapse).
+`tools/yearsim.py` is a synthetic year (shade, winter dip, peaks, seasonal and negative prices) replayed
+with the app's own `replay_day`; `python tools/yearsim.py [--days N --winter-mode peaks_only]` prints a
+monthly cost table, and `tests/test_scenarios.py` runs whole weeks of it.
 `tests/test_packaging.py` checks that `config.yaml` options/schema, `translations/en.yaml`,
 `config.Options` defaults and the CHANGELOG version agree — update all of them together.
 

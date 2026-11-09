@@ -47,6 +47,11 @@ ACTION_COST_C_PER_H = 2.0
 # Grid charging is planned this far under the import limit: the controller follows the house
 # load in 5 A steps and pauses on quarter-hour spikes, so it cannot charge right up to the limit.
 CHARGE_HEADROOM_KW = 0.3
+# Share of a month's capacity cost charged for each slot in which a typical house peak would hit
+# the grid because the battery is empty. The bill takes the month's highest quarter-hour, so one
+# miss costs the full amount; this is how much the plan pays to avoid the risk on one day.
+PEAK_RISK = 0.5
+PEAK_MARGIN = 1.3   # real peaks vary around the learned typical one
 
 
 @dataclass
@@ -58,6 +63,7 @@ class Slot:
     buy: float               # c/kWh
     sell: float              # c/kWh
     market: float | None = None   # EUR/MWh, None when estimated or not used
+    peak_kw: float = 0.0          # typical highest quarter-hour house load in this slot
 
     @property
     def end(self) -> datetime:
@@ -171,6 +177,11 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         costs[t] = table
         dself_raw = _self_delta(b, sl, e)
         cmin = max(1, math.ceil(min(MIN_CHARGE_KW, b.max_charge_kw) * sl.hours * b.eta_c / e - 1e-9))
+        # Peak cover: a typical quarter-hour peak above the import limit must come out of the
+        # battery, so entering the slot it needs that energy above its minimum (else: capacity cost).
+        excess = sl.peak_kw - sl.pv_kwh / sl.hours - b.import_limit_kw
+        need = int(math.ceil(excess * PEAK_MARGIN * 0.25 / b.eta_d / e)) + 1 if excess > 0 else 0
+        exposed = excess * b.capacity_c_per_kw_month * PEAK_RISK if excess > 0 else 0.0
         cur = [0.0] * 101
         ch = [0] * 101
         for s in levels:
@@ -179,17 +190,19 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
             ds = int(round(min(max(dself_raw, lo), hi)))
             best_d = ds
             best = table[ds][0] + nxt[s + ds]
+            risk = exposed if s - smin < need else 0.0
+            best += risk
             act = ACTION_COST_C_PER_H * sl.hours
             cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
             for d in range(max(ds, 0) + cmin, hi + 1):         # charge from the grid
                 if table[d][1] > cap_kwh + 1e-9:
                     break                                      # more charge only imports more
-                v = table[d][0] + nxt[s + d] + act
+                v = table[d][0] + nxt[s + d] + act + risk
                 if v < best - 1e-9:
                     best, best_d = v, d
             if allow_export:
                 for d in range(max(lo, sres - s), min(ds, 0)):  # discharge / export, not below reserve
-                    v = table[d][0] + nxt[s + d] + act
+                    v = table[d][0] + nxt[s + d] + act + risk
                     if v < best - 1e-9:
                         best, best_d = v, d
             cur[s], ch[s] = best, best_d
@@ -289,7 +302,7 @@ def night_target(b: Battery, o: Options, day: list[tuple[float, float, float]]) 
 def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slots: list[PriceSlot],
               load_kwh: LoadFn, pv_kwh: PvFn, soc: float, market_avg: float | None = None,
               curtail_negative: bool = False, horizon_h: int = 36,
-              forecast_until: datetime | None = None) -> Plan:
+              forecast_until: datetime | None = None, peak_kw: LoadFn | None = None) -> Plan:
     """`forecast_until`: end of the solar forecast; nights after it get no winter target."""
     b = Battery.from_options(o)
     end = now + timedelta(hours=horizon_h)
@@ -302,7 +315,8 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         mid_local = (t0 + (t1 - t0) / 2).astimezone(tz)
         h = (t1 - t0).total_seconds() / 3600
         slots.append(Slot(t0, h, load_kwh(t0, t1), pv_kwh(t0, t1), tariff.buy(mid_local, market),
-                          tariff.sell(mid_local, market, market_avg), market))
+                          tariff.sell(mid_local, market, market_avg), market,
+                          peak_kw(t0, t1) if peak_kw else 0.0))
 
     targets: dict[int, float] = {}
     target_info = []
@@ -327,12 +341,12 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         target_info.append(info)
         if len(target_info) == 1:
             winter = is_winter and known   # the first upcoming night decides winter behaviour now
-        if is_winter and known and idx is not None:
+        if is_winter and known and idx is not None and o.winter_mode == "full_day":
             targets[idx] = soc_needed
 
     buys = [s.buy for s in slots] or [0.0]
     terminal = max(min(statistics.median(buys), statistics.fmean(buys)) * b.eta_d - b.wear_c_kwh, 0.0)
-    allow_export = not winter
+    allow_export = not (winter and o.winter_mode == "full_day")
     steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal)
     return Plan(steps, now, tariff.kind, target_info, winter, allow_export)
 

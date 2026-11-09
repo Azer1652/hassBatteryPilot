@@ -67,9 +67,15 @@ def test_hourly_slot_is_renewed():
 
 
 def test_bug1_target_reached_means_self_use_never_more_charge():
-    d = decide(step("charge", 60), rd(soc=60.2), OPTS, "charge", "01:00:00", 30, True)
+    d = decide(step("charge", 60), rd(soc=62.1), OPTS, "charge", "01:00:00", 30, True)
     assert d.command == "self_use" and d.reason == "target reached"
     assert decide(step("charge", 60), rd(soc=70), OPTS, "self_use", "", 0, True).command == "none"
+
+
+def test_target_reached_early_in_the_slot_holds_at_minimum_current():
+    """So the battery keeps the energy until the slot ends (e.g. for the 18:00 cooking peak)."""
+    d = decide(step("charge", 60), rd(soc=60.5), OPTS, "charge", "01:00:00", 30, True)
+    assert d.command == "current" and d.amps == 10
 
 
 def test_discharge_respects_the_reserve():

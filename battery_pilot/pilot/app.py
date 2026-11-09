@@ -195,8 +195,8 @@ class App:
             return
         load_id, pv_id, fc_id = ids
         if load_id in hist:
-            hourly = history_to_hourly(hist[load_id], self.ents["house_load_power"].scale, start, end)
-            n = self.load.learn_hourly(hourly, self.tz)
+            quarters = history_to_hourly(hist[load_id], self.ents["house_load_power"].scale, start, end, minutes=15)
+            n = self.load.learn_quarters(quarters, self.tz)
             self.event(f"Learned house consumption from {n} hours of history ({self.load.daily_kwh()} kWh/day).")
         if pv_id in hist and fc_id in hist:
             pv = history_to_hourly(hist[pv_id], self.ents["pv_power"].scale, start, end)
@@ -373,7 +373,8 @@ class App:
             self.problem = None
         self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
-                              curtail_negative=self.curtail_on, forecast_until=self.pv.until)
+                              curtail_negative=self.curtail_on, forecast_until=self.pv.until,
+                              peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz))
 
     def current_prices(self) -> dict:
         now = self.clock()
@@ -404,6 +405,8 @@ class App:
         start = datetime.combine(y, time(0), self.tz).astimezone(timezone.utc)
         end = datetime.combine(local.date(), time(0), self.tz).astimezone(timezone.utc)
         recs = day_records(self.records, start, end)
+        if not recs:          # first day after install: nothing measured yet
+            return
         n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz)
         n_load = self.load.learn_records(recs, self.tz)
         self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")

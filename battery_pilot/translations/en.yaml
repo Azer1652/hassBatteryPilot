@@ -95,6 +95,9 @@ configuration:
   winter_solar_threshold_kwh:
     name: "Winter day when solar is below (kWh)"
     description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day and no battery energy is exported."
+  winter_mode:
+    name: "Winter strategy"
+    description: "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin), no export. peaks_only: keep only enough for your usual quarter-hour peaks (cheaper when night power is not much cheaper than day power)."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."

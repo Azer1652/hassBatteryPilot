@@ -62,7 +62,9 @@ Home Assistant once and uninstall the Battery Playbook app.
 
 | Situation | What the battery does |
 | --- | --- |
-| Dull day ahead (winter) | Charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin. No battery export. |
+| Dull day ahead (winter), strategy `full_day` | Charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin. No battery export. |
+| Dull day ahead (winter), strategy `peaks_only` | Only enough charge to cover your usual quarter-hour peaks (cooking, kettle) under the import limit, plus whatever the prices make worth it. |
+| Any day | The battery keeps enough energy for the quarter-hour peaks Battery Pilot has learned for each weekday and hour, topping up shortly before if needed. |
 | Sunny day ahead | No grid charging: the sun fills the battery. |
 | Fixed day/night contract | Buying at night to use by day does not pay after losses and wear, so it only grid-charges for the winter target. |
 | Dynamic contract | Also charges in cheap hours and exports in expensive ones, when the spread beats losses + wear. |
@@ -102,6 +104,15 @@ to your own. The contract formulas:
 
 Market prices are in EUR/MWh. For a flat sell rate, set the × market setting to 0 and
 put the rate in the + setting.
+
+### Winter strategy
+
+`full_day` (the default) is what Battery Playbook did: on a dull day the battery is filled
+overnight to carry the whole day. On a day/night contract where the night rate is only a
+few cents cheaper, that loses money: about 10 % of every kWh is lost in charging and
+discharging, plus battery wear. `peaks_only` keeps just enough for your capacity peaks and
+was cheaper in the year simulation (see the changelog), with the same peak. Try it once
+Battery Pilot has learned your peaks (a week or two).
 
 ## Sensors
 

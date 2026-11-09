@@ -6,9 +6,11 @@ Pure function, so every rule can be tested without Home Assistant:
               slot, never above the current that keeps grid import at the
               import limit (house load is followed live); pause when the
               quarter-hour heads over the limit (the old playbook's rule);
+              once the SOC is reached, hold at the minimum current until the
+              slot ends (at most HOLD_OVER points above the target);
 * discharge - discharge towards the step's SOC, never below the reserve;
-* self_use  - also when a target is reached: never charge above it (the old
-              playbook's overcharge bug).
+* self_use  - also when a charge target is passed: never charge on above it
+              (the old playbook's overcharge bug).
 
 Charge and discharge slots are renewed at each new clock hour.
 """
@@ -20,6 +22,7 @@ from datetime import datetime, timedelta
 
 from .config import Options
 from .planner import Step
+from .simulate import HOLD_OVER
 
 AC_DC = 1.03        # inverter losses AC -> DC while charging (as in the old playbook)
 STEP_A = 5          # Solis current steps
@@ -77,9 +80,12 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
             return Decision("self_use", reason="no plan")
         return Decision("none", reason="no plan")
 
-    if step.action == "charge" and r.soc < step.soc_end:
+    if step.action == "charge" and r.soc < step.soc_end + HOLD_OVER:
         follow = follow_amps(r, o)
-        want = min(follow, paced_amps(step, r, o, up=True))
+        # Paced to reach the target at the end of the slot; once there, held at the minimum
+        # current so the battery does not drain again before the slot ends.
+        paced = paced_amps(step, r, o, up=True) if r.soc < step.soc_end else MIN_A
+        want = min(follow, paced)
         if mode == "charge":
             if r.projection_kw > o.import_limit_kw + 0.1 or follow < MIN_A:
                 return Decision("self_use", reason="house load too high: battery helps instead")

@@ -136,8 +136,10 @@ def utcnow() -> datetime:
 
 
 def history_to_hourly(samples: list[tuple[datetime, str]], scale: float, start: datetime,
-                      end: datetime) -> dict[datetime, tuple[float, float]]:
-    """Recorder history of a power sensor -> {UTC hour start: (kWh, fraction of the hour with data)}.
+                      end: datetime, minutes: int = 60) -> dict[datetime, tuple[float, float]]:
+    """Recorder history of a power sensor -> {UTC bucket start: (kWh, fraction of the bucket with data)}.
+
+    Buckets are hours, or quarter-hours with `minutes=15`.
 
     `samples` are (time, state) pairs in time order; a state holds until the next one;
     'unavailable', 'unknown' and other non-numbers are gaps. `scale` turns the state into kW.
@@ -151,11 +153,12 @@ def history_to_hourly(samples: list[tuple[datetime, str]], scale: float, start: 
         seg_start = max(t, start)
         seg_end = min(samples[i + 1][0] if i + 1 < len(samples) else end, end)
         while seg_start < seg_end:
-            hour = seg_start.replace(minute=0, second=0, microsecond=0)
-            stop = min(hour + timedelta(hours=1), seg_end)
+            bucket = seg_start.replace(minute=(seg_start.minute // minutes) * minutes if minutes < 60 else 0,
+                                       second=0, microsecond=0)
+            stop = min(bucket + timedelta(minutes=minutes), seg_end)
             sec = (stop - seg_start).total_seconds()
-            acc = out.setdefault(hour, [0.0, 0.0])
+            acc = out.setdefault(bucket, [0.0, 0.0])
             acc[0] += kw * sec / 3600
-            acc[1] += sec / 3600
+            acc[1] += sec / (minutes * 60)
             seg_start = stop
     return {h: (v[0], min(v[1], 1.0)) for h, v in out.items()}

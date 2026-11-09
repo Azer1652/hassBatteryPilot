@@ -42,7 +42,8 @@ def _month(t: datetime, tz: ZoneInfo) -> str:
 def _blank():
     return {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "market_sum": 0.0, "market_n": 0,
             "dyn_c": 0.0, "quarters": 0, "replay": {k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0,
-                                                        "discharged": 0.0, "peak_kw": 0.0} for k in KINDS},
+                                                        "discharged": 0.0, "grid_charged": 0.0, "peak_kw": 0.0}
+                       for k in KINDS},
             "replay_days": 0, "peak_kw": 0.0}
 
 
@@ -82,8 +83,8 @@ class Comparison:
     # ---------------------------------------------------------------- replay
     def add_replay(self, key: str, kind: str, result: dict) -> None:
         r = self.month(key)["replay"][kind]
-        for k in ("cost_c", "imp", "exp", "charged", "discharged"):
-            r[k] += result[k]
+        for k in ("cost_c", "imp", "exp", "charged", "discharged", "grid_charged"):
+            r[k] = r.get(k, 0.0) + result.get(k, 0.0)
         r["peak_kw"] = max(r["peak_kw"], result["peak_kw"])
 
     # ---------------------------------------------------------------- report
@@ -117,6 +118,7 @@ class Comparison:
                 ws[kind] = {"eur": round(r["cost_c"] / 100 + fee + capacity_month_eur(r["peak_kw"], o), 2),
                             "bought_kwh": round(r["imp"], 1), "sold_kwh": round(r["exp"], 1),
                             "battery_in_kwh": round(r["charged"], 1), "battery_out_kwh": round(r["discharged"], 1),
+                            "grid_charged_kwh": round(r.get("grid_charged", 0.0), 1),
                             "peak_kw": round(r["peak_kw"], 2)}
             out["with_strategy"] = ws
         if key in self.imported:
@@ -173,12 +175,13 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     tar = tariff(kind, o)
     soc = soc0
     out = {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "peak_kw": 0.0,
-           "soc_end": soc0}
+           "grid_charged": 0.0, "soc_end": soc0}
     plan = None
     for i, r in enumerate(recs):
         if plan is None or (i % (4 * replan_every_h) == 0):
             plan = make_plan(r.start, tz, o, tar, prices, lambda a, z: load.kwh(a, z, tz), pv_forecast, soc,
-                             market_avg=market_avg, curtail_negative=False, horizon_h=30)
+                             market_avg=market_avg, curtail_negative=False, horizon_h=30,
+                             peak_kw=lambda a, z: load.peak_kw(a, z, tz))
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:
@@ -186,7 +189,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         else:
             load_kwh = load.kwh(r.start, r.start + timedelta(minutes=15), tz)
             pv_kwh = pv_forecast(r.start, r.start + timedelta(minutes=15))
-        res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25)
+        left = (st.start + timedelta(hours=st.hours) - r.start).total_seconds() / 3600 if st else None
+        res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left)
         local = (r.start + timedelta(minutes=7, seconds=30)).astimezone(tz)
         market = price_at(prices, r.start)
         out["cost_c"] += res.import_kwh * tar.buy(local, market) - res.export_kwh * tar.sell(local, market, market_avg)
@@ -195,6 +199,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         out["imp"] += res.import_kwh
         out["exp"] += res.export_kwh
         out["charged"] += res.charge_dc_kwh
+        # AC energy into the battery beyond what solar surplus could give: bought from the grid
+        out["grid_charged"] += max(res.charge_dc_kwh / b.eta_c - max(pv_kwh - load_kwh, 0.0), 0.0)
         out["discharged"] += res.discharge_dc_kwh
         out["peak_kw"] = max(out["peak_kw"], res.import_kwh * 4)
         soc = res.soc
