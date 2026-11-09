@@ -32,7 +32,7 @@ class Battery:
     capacity_c_per_kw_month: float = 52.37 / 12 * 100
 
     @classmethod
-    def from_options(cls, o: Options) -> "Battery":
+    def from_options(cls, o: Options) -> Battery:
         return cls(o.battery_capacity_kwh, o.battery_min_soc, o.battery_reserve_soc, o.max_charge_kw,
                    o.max_discharge_kw, o.charge_efficiency, o.discharge_efficiency, o.wear_cost_c_kwh,
                    o.import_limit_kw, o.export_limit_kw, o.capacity_tariff_eur_kw_year / 12 * 100)

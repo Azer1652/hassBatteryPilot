@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Battery Pilot</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
+    --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --soc: #1b9e5a; --warn: #c23b2b;
+    --ok-bg: #e8f5ee; --warn-bg: #fdecea; --shadow-bg: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1b2027; --text: #e6e9ee; --muted: #9aa3b2; --line: #2c333d;
+      --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --soc: #3cc47d; --warn: #ff6b5a;
+      --ok-bg: #16301f; --warn-bg: #3a1c19; --shadow-bg: #3a3017;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 4px 0 12px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+  .banner { border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+  .banner.warn { background: var(--warn-bg); }
+  .banner.shadow { background: var(--shadow-bg); }
+  .banner.ok { background: var(--ok-bg); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .kpi .v { font-size: 22px; font-weight: 600; }
+  .kpi .l { color: var(--muted); font-size: 13px; }
+  .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  .neg { color: var(--soc); } .pos { color: var(--warn); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px; font-size: 13px; color: var(--muted); }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  ul.log { list-style: none; padding: 0; margin: 0; max-height: 260px; overflow-y: auto; font-size: 13px; }
+  ul.log li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  ul.log time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Battery Pilot <span class="muted" id="ver"></span></h1>
+  <div id="banner"></div>
+
+  <div class="card">
+    <div class="kpis" id="kpis"></div>
+  </div>
+
+  <div class="card">
+    <h2>Plan for the next 36 hours</h2>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--charge)"></i>grid charge</span>
+      <span><i class="sw" style="background:var(--discharge)"></i>discharge / export</span>
+      <span><i class="sw" style="background:var(--self)"></i>self-use</span>
+      <span><i class="sw" style="background:var(--soc)"></i>battery SOC</span>
+    </div>
+    <div id="plan"></div>
+    <p class="muted" id="plannote"></p>
+  </div>
+
+  <div class="card">
+    <h2>Fixed or dynamic? Your contract comparison</h2>
+    <p class="muted">"Same usage" prices what you actually bought and sold on both contracts.
+      "Best battery use" replays each day with the battery strategy that fits each contract (cheap-hour charging,
+      export, surplus solar, the winter night target), including battery wear. Contract fees and the capacity tariff are included.</p>
+    <div id="cmpsum" class="kpis"></div>
+    <div class="scroll"><table id="cmp"></table></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Solar and tree shade</h2>
+      <div class="kpis" id="solar"></div>
+      <p class="muted">What your panels deliver compared with the forecast, by month (rows) and hour (columns).
+        Dark cells are hours the forecast overestimates, such as low winter sun behind trees.</p>
+      <div id="shade"></div>
+    </div>
+    <div class="card">
+      <h2>Capacity peaks</h2>
+      <div id="peaks"></div>
+      <p class="muted" id="peaknote"></p>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Inverter commands</h2><ul class="log" id="cmds"></ul></div>
+    <div class="card"><h2>Events</h2><ul class="log" id="events"></ul></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 1) => (v === null || v === undefined) ? "–" : Number(v).toFixed(d);
+const eur = (v) => (v === null || v === undefined) ? "–" : "€" + Number(v).toFixed(0);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+let tz = undefined;
+const hm = (iso) => new Date(iso).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", timeZone: tz});
+
+function kpi(label, value) { return `<div class="kpi"><div class="v">${value}</div><div class="l">${esc(label)}</div></div>`; }
+
+function banner(s) {
+  if (s.problem) return `<div class="banner warn"><b>Needs attention:</b> ${esc(s.problem)}</div>`;
+  if (s.mode === "shadow") return `<div class="banner shadow"><b>Shadow mode.</b> Battery Pilot plans but does not
+    touch the inverter. Watch the plan for a few days, then switch on <b>Battery Pilot control</b>
+    (Settings → Devices &amp; services → Helpers).</div>`;
+  return `<div class="banner ok"><b>Active</b> on the ${esc(s.contract)} contract: ${esc(s.decision.reason)}.</div>`;
+}
+
+function planChart(plan) {
+  if (!plan || !plan.steps.length) return '<p class="muted">No plan yet.</p>';
+  const steps = plan.steps, W = 1000, H = 260, top = 14, bottom = 26, left = 34, right = 34;
+  const t0 = new Date(steps[0].start).getTime();
+  const tEnd = new Date(steps[steps.length - 1].start).getTime() + steps[steps.length - 1].hours * 3600e3;
+  const x = (t) => left + (t - t0) / (tEnd - t0) * (W - left - right);
+  const prices = steps.map((s) => s.buy);
+  const pmax = Math.max(1, ...prices), pmin = Math.min(0, ...prices);
+  const yp = (p) => top + (pmax - p) / (pmax - pmin) * (H - top - bottom);
+  const ys = (soc) => top + (100 - soc) / 100 * (H - top - bottom);
+  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self")};
+  let g = "";
+  for (const s of steps) {
+    const a = new Date(s.start).getTime(), b = a + s.hours * 3600e3;
+    const y = yp(Math.max(s.buy, 0)), y0 = yp(0);
+    g += `<rect x="${x(a)}" y="${Math.min(y, y0)}" width="${Math.max(x(b) - x(a) - 0.5, 0.5)}" height="${Math.abs(y0 - y) || 1}"
+           fill="${col[s.action]}" opacity="0.85"><title>${hm(s.start)} ${s.action} · buy ${fmt(s.buy, 1)} c · sell ${fmt(s.sell, 1)} c · SOC → ${fmt(s.soc_end, 0)} %</title></rect>`;
+  }
+  let path = "";
+  steps.forEach((s, i) => {
+    const a = new Date(s.start).getTime();
+    path += (i ? "L" : "M") + x(a) + "," + ys(s.soc_start) + " L" + x(a + s.hours * 3600e3) + "," + ys(s.soc_end) + " ";
+  });
+  g += `<path d="${path}" fill="none" stroke="${css("--soc")}" stroke-width="2.2"/>`;
+  for (const t of plan.targets || []) {
+    if (!t.winter) continue;
+    const tx = x(new Date(t.window_end).getTime());
+    if (tx > left && tx < W - right) g += `<line x1="${tx}" x2="${tx}" y1="${ys(t.soc)}" y2="${ys(t.soc) + 0.1}" />
+      <circle cx="${tx}" cy="${ys(t.soc)}" r="4" fill="none" stroke="${css("--soc")}" stroke-width="2"><title>night target ${t.soc} %</title></circle>`;
+  }
+  for (let h = Math.ceil(t0 / 3600e3) * 3600e3; h < tEnd; h += 3600e3) {
+    const d = new Date(h), hr = Number(d.toLocaleString("en-GB", {hour: "2-digit", hour12: false, timeZone: tz}));
+    if (hr % 3 === 0) g += `<text x="${x(h)}" y="${H - 8}" text-anchor="middle">${String(hr).padStart(2, "0")}h</text>`;
+  }
+  g += `<text x="${left - 4}" y="${top + 4}" text-anchor="end">${fmt(pmax, 0)}c</text><text x="${left - 4}" y="${yp(0)}" text-anchor="end">0</text>`;
+  g += `<text x="${W - right + 4}" y="${ys(100) + 4}">100%</text><text x="${W - right + 4}" y="${ys(0)}">0%</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Battery plan">${g}</svg>`;
+}
+
+function comparison(c) {
+  const rows = c.months || [];
+  const sum = [];
+  if (c.same_usage) sum.push(kpi(`same usage, ${c.same_usage.months} month(s): dynamic − fixed`, signed(c.same_usage.dynamic_minus_fixed_eur)));
+  if (c.with_strategy) sum.push(kpi(`best battery use, ${c.with_strategy.days} day(s): dynamic − fixed`, signed(c.with_strategy.dynamic_minus_fixed_eur)));
+  if (!sum.length) sum.push(kpi("comparison", "collecting data"));
+  $("cmpsum").innerHTML = sum.join("");
+  let h = `<tr><th>Month</th><th>Bought</th><th>Sold</th><th>Market</th><th>Fixed</th><th>Dynamic</th>
+           <th>Fixed, best use</th><th>Dynamic, best use</th><th>Days replayed</th></tr>`;
+  for (const r of rows.slice().reverse()) {
+    const ws = r.with_strategy;
+    h += `<tr><td>${esc(r.month)}${r.imported_from_playbook ? " *" : ""}</td><td>${fmt(r.bought_kwh, 0)} kWh</td><td>${fmt(r.sold_kwh, 0)} kWh</td>
+      <td>${r.market_avg_eur_mwh === null ? "–" : "€" + fmt(r.market_avg_eur_mwh, 0) + "/MWh"}</td>
+      <td>${eur(r.same_usage.fixed_eur)}</td><td>${eur(r.same_usage.dynamic_eur)}</td>
+      <td>${ws ? eur(ws.fixed.eur) : "–"}</td><td>${ws ? eur(ws.dynamic.eur) : "–"}</td><td>${r.replay_days}</td></tr>`;
+  }
+  $("cmp").innerHTML = h;
+}
+const signed = (v) => `<span class="${v < 0 ? "neg" : "pos"}">${v < 0 ? "−" : "+"}€${Math.abs(v).toFixed(0)}</span>`;
+
+function shade(f) {
+  const cw = 16, ch = 14, left = 30, top = 4;
+  let g = "";
+  const months = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+  f.forEach((row, m) => {
+    g += `<text x="${left - 8}" y="${top + m * ch + 11}" text-anchor="end">${months[m]}</text>`;
+    row.forEach((v, h) => {
+      if (h < 5 || h > 21) return;
+      const light = Math.round(Math.min(Math.max(v, 0), 1.2) / 1.2 * 100);
+      g += `<rect x="${left + (h - 5) * cw}" y="${top + m * ch}" width="${cw - 1}" height="${ch - 1}" rx="2"
+             fill="hsl(45, 85%, ${15 + light * 0.7}%)"><title>${months[m]} ${h}h: ${fmt(v, 2)}</title></rect>`;
+    });
+  });
+  for (let h = 6; h <= 21; h += 3) g += `<text x="${left + (h - 5) * cw + cw / 2}" y="${top + 12 * ch + 12}" text-anchor="middle">${h}h</text>`;
+  return `<svg viewBox="0 0 ${left + 17 * cw + 4} ${top + 12 * ch + 18}" role="img" aria-label="Shade by month and hour">${g}</svg>`;
+}
+
+function peaks(p) {
+  const ks = Object.keys(p.months || {}).sort();
+  if (!ks.length) return '<p class="muted">No full quarter-hours measured yet.</p>';
+  const W = 480, H = 180, left = 30, bottom = 22, top = 10;
+  const max = Math.max(p.limit_kw * 1.3, ...ks.map((k) => p.months[k]));
+  const bw = (W - left) / ks.length;
+  const y = (v) => top + (max - v) / max * (H - top - bottom);
+  let g = "";
+  ks.forEach((k, i) => {
+    const v = p.months[k];
+    g += `<rect x="${left + i * bw + 3}" y="${y(v)}" width="${bw - 6}" height="${H - bottom - y(v)}" rx="3"
+           fill="${v > p.limit_kw ? css("--warn") : css("--charge")}"><title>${k}: ${fmt(v, 2)} kW</title></rect>
+          <text x="${left + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${k.slice(5)}</text>`;
+  });
+  g += `<line x1="${left}" x2="${W}" y1="${y(p.limit_kw)}" y2="${y(p.limit_kw)}" stroke="${css("--muted")}" stroke-dasharray="4 4"/>
+        <text x="${left - 4}" y="${y(p.limit_kw) + 4}" text-anchor="end">${p.limit_kw}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly peaks">${g}</svg>`;
+}
+
+function render(s) {
+  tz = s.tz;
+  $("ver").textContent = s.version;
+  $("banner").innerHTML = banner(s);
+  const r = s.readings || {}, pr = s.prices || {}, step = s.plan && s.plan.steps[0];
+  $("kpis").innerHTML = [
+    kpi("battery", r.soc === undefined ? "–" : fmt(r.soc, 0) + " %"),
+    kpi("now", step ? step.action.replace("_", "-") : "–"),
+    kpi("house", fmt(r.load_kw, 2) + " kW"), kpi("solar", fmt(r.pv_kw, 2) + " kW"),
+    kpi("grid import", fmt(r.import_kw, 2) + " kW"),
+    kpi("this quarter-hour", fmt(r.projection_kw, 2) + " kW"),
+    kpi("buy / sell", `${fmt(pr.buy, 1)} / ${fmt(pr.sell, 1)} c`),
+  ].join("");
+  $("plan").innerHTML = planChart(s.plan);
+  const t = s.plan && s.plan.targets && s.plan.targets[0];
+  $("plannote").textContent = t ? (t.winter
+      ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery is filled to ${t.soc} % by the end of the night.`
+      : `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`) +
+      (s.plan.allow_export ? "" : " No export in winter.") : "";
+  comparison(s.comparison || {});
+  $("solar").innerHTML = kpi("today, after shade", fmt(s.solar.today) + " kWh") + kpi("tomorrow, after shade", fmt(s.solar.tomorrow) + " kWh")
+    + kpi("house, per day", fmt(s.load.daily_kwh) + " kWh");
+  $("shade").innerHTML = shade(s.solar.shade);
+  $("peaks").innerHTML = peaks(s.peaks);
+  $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW. ` +
+    `Break-even market price: night €${s.breakeven.night}/MWh, day €${s.breakeven.day}/MWh` +
+    (s.market_30d !== null ? `; last 30 days €${fmt(s.market_30d, 0)}/MWh.` : ".");
+  const li = (e, text) => `<li><time>${new Date(e.t).toLocaleString([], {timeZone: tz, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"})}</time>${esc(text)}</li>`;
+  $("cmds").innerHTML = ((s.inverter && s.inverter.log) || []).map((e) => li(e, e.command)).join("") || '<li class="muted">None yet.</li>';
+  $("events").innerHTML = (s.events || []).map((e) => li(e, e.text)).join("");
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("api/status", {cache: "no-store"});
+    render(await r.json());
+  } catch (e) {
+    $("banner").innerHTML = `<div class="banner warn">Cannot reach Battery Pilot: ${esc(e)}</div>`;
+  }
+}
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements-dev.txt ruff
+      - run: ruff check .
+      - run: pytest -q
+
+  addon-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: frenck/action-addon-linter@v2
+        with:
+          path: "./battery_pilot"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the amd64 image
+        run: >
+          docker build battery_pilot -t battery-pilot:ci
+          --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
+          --build-arg BUILD_VERSION=ci
+      - name: Smoke test the image
+        run: >
+          docker run --rm --entrypoint python3 battery-pilot:ci -c
+          "import pilot.app, pilot.web, pilot.__main__; print('ok')"

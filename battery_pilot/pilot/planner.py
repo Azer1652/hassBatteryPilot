@@ -25,14 +25,15 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable
 from zoneinfo import ZoneInfo
 
 from .config import Options
 from .prices import PriceSlot
-from .simulate import Battery, step as sim_step
+from .simulate import Battery
+from .simulate import step as sim_step
 from .tariffs import Tariff, in_window, is_night
 
 TARGET_PENALTY_C = 500.0   # per missing SOC point at a target: effectively a hard rule

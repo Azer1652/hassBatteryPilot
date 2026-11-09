@@ -3,8 +3,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from fake_ha import TZ, FakeHA, utc
+
 from pilot.app import App
 from pilot.config import Options
 from pilot.meter import QuarterRecord

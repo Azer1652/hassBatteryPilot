@@ -6,8 +6,7 @@ import pytest
 
 from pilot.load import LoadProfile
 from pilot.meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
-from pilot.solar import (PvForecast, ShadeModel, archive_forecast, hourly_from_daily,
-                         parse_energy_forecast)
+from pilot.solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
 
 BXL = ZoneInfo("Europe/Brussels")
 

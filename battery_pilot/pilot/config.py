@@ -19,6 +19,9 @@ ENTITY_KEYS = (
     "discharge_start", "discharge_end", "export_limit", "forecast_power_now",
     "forecast_today", "forecast_tomorrow", "price_sensor",
 )
+# Option name of each override where it differs from the entity key
+# (battery_voltage is already the nominal-voltage option).
+OVERRIDE_OPTION = {k: k for k in ENTITY_KEYS} | {"battery_voltage": "battery_voltage_sensor"}
 
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
@@ -114,7 +117,7 @@ class Options:
             raise ConfigError("slot_entities must be time_charging or grid_time_of_use.")
         if self.fixed_contract_end.strip():
             try:
-                self.fixed_end_date
+                _ = self.fixed_end_date
             except ValueError:
                 raise ConfigError(f"fixed_contract_end must look like 2027-03-31, not {self.fixed_contract_end!r}.") from None
 
@@ -132,7 +135,7 @@ def from_dict(raw: dict) -> Options:
         if k in kwargs:
             kwargs[k] = str(kwargs[k]).strip()
     opts = Options(**kwargs)
-    opts.entities = {k: str(raw[k]).strip() for k in ENTITY_KEYS if str(raw.get(k) or "").strip()}
+    opts.entities = {k: str(raw[o]).strip() for k, o in OVERRIDE_OPTION.items() if str(raw.get(o) or "").strip()}
     opts.validate()
     return opts
 

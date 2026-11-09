@@ -20,7 +20,8 @@ from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
 from .planner import Plan, make_plan
 from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
-from .solis import NEEDED as SOLIS_NEEDED, Solis
+from .solis import NEEDED as SOLIS_NEEDED
+from .solis import Solis
 from .tariffs import breakeven_eur_mwh, capacity_month_eur, is_night, tariff
 
 log = logging.getLogger("battery_pilot")
@@ -638,5 +639,5 @@ class App:
 async def _sleep(stop: asyncio.Event, seconds: float):
     try:
         await asyncio.wait_for(stop.wait(), seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass

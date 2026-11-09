@@ -28,7 +28,8 @@ from .load import LoadProfile
 from .meter import QuarterRecord
 from .planner import make_plan
 from .prices import PriceSlot, price_at
-from .simulate import Battery, step as sim_step
+from .simulate import Battery
+from .simulate import step as sim_step
 from .tariffs import capacity_month_eur, is_night, tariff
 
 KINDS = ("fixed", "dynamic")

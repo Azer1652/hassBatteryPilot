@@ -1,0 +1,160 @@
+configuration:
+  contract:
+    name: "Your contract now"
+    description: "The contract you are on. Battery Pilot plans for its prices; the comparison always shows both."
+  fixed_contract_end:
+    name: "Fixed price ends on (YYYY-MM-DD)"
+    description: "For reminders 6 weeks, 2 weeks and 3 days before your fixed price renews. Leave empty if you have none."
+  fixed_day_rate:
+    name: "Fixed day rate (c/kWh, incl. VAT)"
+    description: "Energy price only, without grid fees and taxes."
+  fixed_night_rate:
+    name: "Fixed night rate (c/kWh, incl. VAT)"
+    description: "Set it equal to the day rate for a single-rate contract."
+  fixed_yearly_fee_eur:
+    name: "Fixed contract fee (EUR/year)"
+    description: "Fixed yearly fee of the fixed contract."
+  fixed_sell_mult:
+    name: "Fixed: sell price x market"
+    description: "Fixed contract sell price = this x the month's average market price (EUR/MWh) + the next setting. For a flat sell rate, set this to 0."
+  fixed_sell_add:
+    name: "Fixed: sell price + (c/kWh)"
+    description: "Added to the fixed sell price (negative for a deduction). For a flat sell rate, put the rate here."
+  dynamic_buy_mult:
+    name: "Dynamic: buy price x market"
+    description: "Dynamic buy price = (this x market price in EUR/MWh + the next setting) x (1 + VAT) + grid fees."
+  dynamic_buy_add:
+    name: "Dynamic: buy price + (c/kWh)"
+    description: "Supplier margin on the dynamic buy price, before VAT."
+  dynamic_vat_pct:
+    name: "Dynamic: VAT (%)"
+    description: "VAT on the dynamic energy price."
+  dynamic_sell_mult:
+    name: "Dynamic: sell price x market"
+    description: "Dynamic sell price = this x market price (EUR/MWh) + the next setting."
+  dynamic_sell_add:
+    name: "Dynamic: sell price + (c/kWh)"
+    description: "Usually negative: the supplier's deduction on what you sell."
+  dynamic_yearly_fee_eur:
+    name: "Dynamic contract fee (EUR/year)"
+    description: "Fixed yearly fee of the dynamic contract."
+  grid_fees_c_kwh:
+    name: "Grid fees and taxes (c/kWh, incl. VAT)"
+    description: "Added to every bought kWh on both contracts. Update each January from your bill."
+  injection_fee_c_kwh:
+    name: "Injection fee (c/kWh)"
+    description: "Grid operator fee on every sold kWh, on both contracts."
+  night_start:
+    name: "Night tariff starts (HH:MM)"
+    description: "Start of the night tariff, and of the window for winter night charging."
+  night_end:
+    name: "Night tariff ends (HH:MM)"
+    description: "End of the night tariff. On winter days the battery reaches its night target by this time."
+  weekend_is_night:
+    name: "Weekend is night tariff"
+    description: "On in Flanders: the night rate applies all weekend."
+  import_limit_kw:
+    name: "Grid import limit (kW)"
+    description: "Highest quarter-hour average import Battery Pilot aims for (capacity tariff). Grid charging stays under it."
+  export_limit_kw:
+    name: "Normal export limit (kW)"
+    description: "Your inverter's export limit, restored after export was blocked at a negative price."
+  capacity_tariff_eur_kw_year:
+    name: "Capacity tariff (EUR per kW per year, incl. VAT)"
+    description: "Fluvius 2026: about 52 EUR. Set 0 if your grid has no capacity tariff."
+  capacity_min_kw:
+    name: "Capacity tariff minimum (kW)"
+    description: "The lowest monthly peak that is billed (Fluvius: 2.5 kW)."
+  battery_capacity_kwh:
+    name: "Battery capacity (kWh)"
+    description: "Usable capacity between 0 and 100 % SOC."
+  battery_min_soc:
+    name: "Battery minimum SOC (%)"
+    description: "The inverter's own discharge floor; the battery is never planned below it."
+  battery_reserve_soc:
+    name: "Battery reserve for export (%)"
+    description: "Battery Pilot never exports battery energy below this SOC; the house can still use the battery down to the minimum."
+  battery_voltage:
+    name: "Battery nominal voltage (V)"
+    description: "Used to turn amps into kW when there is no voltage sensor."
+  max_charge_current_a:
+    name: "Maximum charge current (A)"
+    description: "Highest charge current Battery Pilot sets."
+  max_discharge_current_a:
+    name: "Maximum discharge current (A)"
+    description: "Highest discharge current when exporting."
+  round_trip_efficiency_pct:
+    name: "Battery round-trip efficiency (%)"
+    description: "Energy you get back for every 100 kWh put in (inverter and battery losses)."
+  wear_cost_c_kwh:
+    name: "Battery wear cost (c/kWh)"
+    description: "Replacement cost / (rated cycles x capacity). Charging and exporting only happen when they beat this."
+  safety_margin_pct:
+    name: "Night target safety margin (%)"
+    description: "Extra SOC on top of what the day needs on winter days. Raise it if the battery runs empty before night on cloudy days."
+  winter_solar_threshold_kwh:
+    name: "Winter day when solar is below (kWh)"
+    description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day and no battery energy is exported."
+  slot_entities:
+    name: "Solis slot entities"
+    description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
+  notify_service:
+    name: "Phone notification action"
+    description: "For example notify.mobile_app_pixel_8. Leave empty to use the only Companion app phone found."
+  grid_import_power:
+    name: "Grid import power entity"
+    description: "Leave empty to find it automatically."
+  grid_export_power:
+    name: "Grid export power entity"
+    description: "Leave empty to find it automatically."
+  house_load_power:
+    name: "House load power entity"
+    description: "Leave empty to find it automatically."
+  pv_power:
+    name: "Solar power entity"
+    description: "Leave empty to find it automatically. Needed to learn tree shade."
+  battery_soc:
+    name: "Battery SOC entity"
+    description: "Leave empty to find it automatically."
+  battery_voltage_sensor:
+    name: "Battery voltage entity"
+    description: "Leave empty to find it automatically."
+  tou_switch:
+    name: "Time-of-use switch entity"
+    description: "Leave empty to find it automatically."
+  grid_charge_switch:
+    name: "Allow grid charging switch entity"
+    description: "Leave empty to find it automatically."
+  charge_current:
+    name: "Charge current entity"
+    description: "Leave empty to find it automatically."
+  discharge_current:
+    name: "Discharge current entity"
+    description: "Leave empty to find it automatically."
+  charge_start:
+    name: "Charge slot 1 start entity"
+    description: "Leave empty to find it automatically."
+  charge_end:
+    name: "Charge slot 1 end entity"
+    description: "Leave empty to find it automatically."
+  discharge_start:
+    name: "Discharge slot 1 start entity"
+    description: "Leave empty to find it automatically."
+  discharge_end:
+    name: "Discharge slot 1 end entity"
+    description: "Leave empty to find it automatically."
+  export_limit:
+    name: "Export power limit entity"
+    description: "Leave empty to find it automatically. Needed to block export at negative prices."
+  forecast_power_now:
+    name: "Forecast power now entity"
+    description: "Forecast.Solar's 'power production now'. Leave empty to find it automatically. Used to learn shade from history."
+  forecast_today:
+    name: "Forecast today entity"
+    description: "Only used when HA's energy dashboard has no solar forecast."
+  forecast_tomorrow:
+    name: "Forecast tomorrow entity"
+    description: "Only used when HA's energy dashboard has no solar forecast."
+  price_sensor:
+    name: "Market price entity"
+    description: "ENTSO-e, Nord Pool or another sensor with hourly or quarter-hour prices. Leave empty to find it automatically."
