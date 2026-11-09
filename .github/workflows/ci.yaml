@@ -36,7 +36,9 @@ jobs:
           docker build battery_pilot -t battery-pilot:ci
           --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
           --build-arg BUILD_VERSION=ci
-      - name: Smoke test the image
+      - name: Smoke test the image (through s6-overlay's /init, as the Supervisor starts it)
         run: >
-          docker run --rm --entrypoint python3 battery-pilot:ci -c
-          "import pilot.app, pilot.web, pilot.__main__; print('ok')"
+          docker run --rm -e SUPERVISOR_TOKEN=ci battery-pilot:ci /command/with-contenv python3 -c
+          "import os, pilot.app, pilot.web, pilot.__main__;
+          assert os.environ.get('SUPERVISOR_TOKEN') == 'ci', 'SUPERVISOR_TOKEN lost';
+          assert os.environ.get('BP_VERSION') == 'ci', 'BP_VERSION lost'; print('ok')"

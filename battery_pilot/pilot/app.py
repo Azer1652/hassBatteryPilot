@@ -55,6 +55,7 @@ class App:
         self.notify: str | None = None
         self.problem: str | None = "starting"
         self.ready = False
+        self._ha_wait: str | None = None       # last reason logged for not reaching HA
         # learned / persistent state
         self.meter = QuarterMeter()
         self.peaks = PeakTracker()
@@ -633,6 +634,20 @@ class App:
         if self._due("save", now, SAVE_S):
             self.save_state()
 
+    async def reach_ha(self) -> bool:
+        """Ping Home Assistant; while it does not answer, say why (logged once per reason)."""
+        if await self.ha.ping():
+            self._ha_wait = None
+            return True
+        reason = getattr(self.ha, "last_error", None) or "no answer"
+        if "HTTP 401" in reason:
+            reason += " - the app has no valid Supervisor token"
+        self.problem = f"waiting for Home Assistant ({reason})"
+        if reason != self._ha_wait:
+            self._ha_wait = reason
+            self.event(f"Waiting for Home Assistant: {reason}", logging.WARNING)
+        return False
+
     def _due(self, name: str, now: datetime, every_s: int) -> bool:
         last = self._last.get(name)
         if last is None or (now - last).total_seconds() >= every_s:
@@ -644,8 +659,7 @@ class App:
         while not stop.is_set():
             try:
                 if not self.ready:
-                    if not await self.ha.ping():
-                        self.problem = "waiting for Home Assistant"
+                    if not await self.reach_ha():
                         await _sleep(stop, 10)
                         continue
                     if not await self.setup():

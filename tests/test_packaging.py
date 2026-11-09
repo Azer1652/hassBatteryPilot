@@ -1,4 +1,5 @@
 """The add-on files agree with each other and with the code."""
+import json
 import os
 import re
 from dataclasses import fields
@@ -60,7 +61,11 @@ def test_version_is_in_the_changelog_and_the_build():
     with open(os.path.join(APP, "CHANGELOG.md"), encoding="utf-8") as f:
         assert f"## {CFG['version']}" in f.read()
     with open(os.path.join(APP, "Dockerfile"), encoding="utf-8") as f:
-        assert "COPY pilot" in f.read()
+        dockerfile = f.read()
+    assert "COPY pilot" in dockerfile
+    # The base image's /init (s6-overlay) clears the environment, SUPERVISOR_TOKEN included.
+    cmd = json.loads(re.search(r"^CMD (.*)$", dockerfile, re.M).group(1))
+    assert cmd[0].endswith("/with-contenv"), cmd
     build = load("build.yaml")
     assert set(build["build_from"]) == set(CFG["arch"])
     assert CFG["ingress"] and CFG.get("ingress_port", 8099) == 8099      # the port web.py listens on

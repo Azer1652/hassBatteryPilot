@@ -12,4 +12,6 @@ RUN apk add --no-cache python3 py3-aiohttp tzdata
 WORKDIR /app
 COPY pilot /app/pilot
 
-CMD ["python3", "-m", "pilot"]
+# The base image's /init (s6-overlay) clears the environment before it runs CMD;
+# with-contenv puts it back (SUPERVISOR_TOKEN, BP_VERSION, ...).
+CMD ["/command/with-contenv", "python3", "-m", "pilot"]

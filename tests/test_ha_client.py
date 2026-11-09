@@ -124,5 +124,18 @@ async def test_wrong_token_is_reported(client):
     ha, _ = client
     ha.token = "wrong"
     assert not await ha.ping()
+    assert "HTTP 401" in ha.last_error
     with pytest.raises(HAError):
         await ha.ws({"type": "energy/solar_forecast"})
+    ha.token = TOKEN
+    assert await ha.ping()
+    assert ha.last_error is None
+
+
+async def test_unreachable_home_assistant_is_reported(unused_tcp_port):
+    ha = HA(f"http://127.0.0.1:{unused_tcp_port}/api", f"ws://127.0.0.1:{unused_tcp_port}/api/websocket", TOKEN)
+    try:
+        assert not await ha.ping()
+        assert ha.last_error.startswith("ClientConnectorError")
+    finally:
+        await ha.close()

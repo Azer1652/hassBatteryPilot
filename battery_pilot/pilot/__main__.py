@@ -34,9 +34,13 @@ async def main() -> int:
     except ConfigError as e:
         log.error("Settings problem: %s", e)
         return 1
+    log.info("Battery Pilot %s starting", VERSION)
+    token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not token:
+        log.error("SUPERVISOR_TOKEN is not set, so Battery Pilot cannot reach Home Assistant. "
+                  "Inside the app it comes from the Supervisor; run locally, set it to a long-lived token.")
     ha = HA(os.environ.get("BP_API", "http://supervisor/core/api"),
-            os.environ.get("BP_WS", "ws://supervisor/core/websocket"),
-            os.environ.get("SUPERVISOR_TOKEN", ""))
+            os.environ.get("BP_WS", "ws://supervisor/core/websocket"), token)
     app = App(opts, ha, data_dir=os.environ.get("BP_DATA", "/data"), config_dir=config_dir(), version=VERSION)
 
     runner = web.AppRunner(make_web(app, default_allowed()), access_log=None)

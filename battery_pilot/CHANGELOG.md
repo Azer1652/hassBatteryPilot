@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2
+
+- Fix: the app could not reach Home Assistant and stayed on "waiting for Home
+  Assistant", because the Supervisor token was not passed to it.
+- When Home Assistant does not answer, the panel and the log now say why.
+
 ## 2.0.1
 
 - The fixed-vs-dynamic comparison follows *Battery Pilot block negative export*: with

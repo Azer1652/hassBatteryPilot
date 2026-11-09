@@ -63,8 +63,12 @@ class FakeHA:
         self.advance(timedelta(0))
 
     # ---------------------------------------------------------------- HA client interface
+    ping_error: str | None = None        # set to make HA unreachable
+    last_error: str | None = None
+
     async def ping(self):
-        return True
+        self.last_error = self.ping_error
+        return self.ping_error is None
 
     async def config(self):
         return {"time_zone": "Europe/Brussels", "latitude": 51.2, "longitude": 4.4}

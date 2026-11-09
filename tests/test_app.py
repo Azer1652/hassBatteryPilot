@@ -1,4 +1,5 @@
 """The whole app against a simulated Home Assistant, house, battery and Solis."""
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -288,3 +289,17 @@ async def test_stopping_the_app_while_charging_returns_to_self_use(tmpdata):
     assert fake.mode() == "charge"
     await app.shutdown()
     assert fake.s["switch.solis_time_of_use"]["state"] == "off"
+
+
+async def test_unreachable_home_assistant_is_explained_once(tmpdata, caplog):
+    fake = FakeHA(utc(2026, 1, 14, 12, 0))
+    fake.ping_error = "GET /: HTTP 401 401: Unauthorized"
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    with caplog.at_level(logging.WARNING):
+        assert not await app.reach_ha()
+        assert not await app.reach_ha()
+    assert "HTTP 401" in app.problem and "Supervisor token" in app.problem
+    assert sum("Waiting for Home Assistant" in r.getMessage() for r in caplog.records) == 1
+    fake.ping_error = None
+    assert await app.reach_ha()
+    assert await app.setup() and app.problem is None

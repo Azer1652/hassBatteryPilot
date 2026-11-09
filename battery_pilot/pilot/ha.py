@@ -23,6 +23,7 @@ class HA:
         self.token = token
         self._session = session
         self._own_session = session is None
+        self.last_error: str | None = None      # why the last ping failed
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -53,9 +54,12 @@ class HA:
     async def ping(self) -> bool:
         try:
             await self._request("GET", "/", timeout=10)
-            return True
-        except Exception:  # noqa: BLE001 - any failure means "not ready"
+        except Exception as e:  # noqa: BLE001 - any failure means "not ready"
+            text = str(e)
+            self.last_error = text if isinstance(e, HAError) else f"{type(e).__name__}: {text}".rstrip(": ")
             return False
+        self.last_error = None
+        return True
 
     async def config(self) -> dict:
         return await self._request("GET", "/config")
