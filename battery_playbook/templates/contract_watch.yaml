@@ -1,0 +1,400 @@
+# =====================================================================
+# CONTRACT WATCH – which Eneco contract would your real usage have cost less on?
+#
+# Every quarter-hour this prices what you actually bought and sold from the
+# grid twice: on your fixed contract and on Eneco Dynamisch (hourly Belpex).
+# It keeps 12 months of history and sends you alerts:
+#   * 1st of each month: last month and the last 12 months, both contracts
+#   * 6 weeks, 2 weeks and 3 days before your fixed price ends
+#   * when the 30-day average Belpex crosses your break-even
+#   * right after you enter new fixed rates (e.g. from a renewal letter)
+#
+# The dynamic figure is "same usage": your flows priced at dynamic rates.
+# "Dynamic with smart rules" also subtracts what the smart rules gained in
+# the model for that month (smart_gain below), because on a dynamic contract
+# the battery would behave differently. That part is an estimate.
+# The capacity tariff is left out: it is the same on both contracts.
+#
+# Needs: peak_shaving.yaml, dynamic_tariff.yaml (for the ENTSO-e price and
+#        flat-cost helpers) and the HA Companion app for phone alerts.
+# Install: copy to /config/packages/ and check the  # set by the Battery Playbook app
+# =====================================================================
+
+input_select:
+  cw_contract:
+    name: "Current contract"
+    options:
+      - "Fixed (Eneco Vast)"
+      - "Dynamic (Eneco Dynamisch)"
+    icon: mdi:file-sign
+
+input_number:
+  # Your fixed energy rates incl. 6% VAT, without grid fees and taxes.
+  # No "initial" so your edits survive restarts; first start fills defaults.
+  cw_fixed_day:
+    name: "Fixed day rate"
+    min: 0
+    max: 80
+    step: 0.01
+    unit_of_measurement: c/kWh
+    mode: box
+  cw_fixed_night:
+    name: "Fixed night rate"
+    min: 0
+    max: 80
+    step: 0.01
+    unit_of_measurement: c/kWh
+    mode: box
+
+input_datetime:
+  cw_fixed_end:
+    name: "Fixed price ends on"
+    has_date: true
+    has_time: false
+
+template:
+  # ---------------- tariff parameters (edit here if Eneco changes them) ----------------
+  - sensor:
+      - name: "CW tariff parameters"
+        unique_id: cw_tariff_parameters
+        icon: mdi:cog
+        state: "Eneco 2026"
+        attributes:
+          fixed_fee: 65            # EUR/year, Zon & Wind Vast
+          dyn_fee: 100             # EUR/year, Zon & Wind Dynamisch (Aug 2026 card)
+          vat: 1.06
+          dyn_mult: 0.102          # dynamic buy  = (0.102 x Belpex + 1) x 1.06  c/kWh
+          dyn_add: 1.0
+          dyn_inj_mult: 0.1        # dynamic sell = 0.1 x Belpex - 1.188  c/kWh
+          dyn_inj_add: -1.188
+          fix_inj_mult: 0.084      # fixed sell   = 0.084 x Belpex-injectie - 2.72  c/kWh (monthly)
+          fix_inj_add: -2.72
+          inj_index_ratio: 0.95    # Belpex-injectie is close to 95% of the plain monthly average
+          inj_fee: 0.19            # Fluvius injection fee incl. VAT, c/kWh
+          # EUR per month the smart rules gained over plain peak shaving in the model
+          # (average of 2025 and 2026 price levels), Jan..Dec
+          smart_gain: [4, -14, -3, 10, 24, 26, 38, 28, 13, -2, 0, 2]
+
+      - name: "CW grid export"
+        unique_id: cw_grid_export
+        unit_of_measurement: kW
+        device_class: power
+        state_class: measurement
+        # set by the Battery Playbook app
+        state: "{{ (states('@@grid_export_power@@') | float(0) * @@grid_export_power_scale@@) | round(3) }}"
+        availability: "{{ has_value('@@grid_export_power@@') }}"
+
+      - name: "CW breakeven night"
+        unique_id: cw_breakeven_night
+        unit_of_measurement: "EUR/MWh"
+        icon: mdi:scale-balance
+        # Belpex below this makes a dynamic kWh cheaper than your fixed night kWh
+        state: >
+          {% set p = state_attr('sensor.cw_tariff_parameters', 'dyn_mult') | float(0.102) %}
+          {% set a = state_attr('sensor.cw_tariff_parameters', 'dyn_add') | float(1) %}
+          {% set v = state_attr('sensor.cw_tariff_parameters', 'vat') | float(1.06) %}
+          {{ ((states('input_number.cw_fixed_night') | float(15.22) / v - a) / p) | round(0) | int }}
+
+      - name: "CW breakeven day"
+        unique_id: cw_breakeven_day
+        unit_of_measurement: "EUR/MWh"
+        icon: mdi:scale-balance
+        state: >
+          {% set p = state_attr('sensor.cw_tariff_parameters', 'dyn_mult') | float(0.102) %}
+          {% set a = state_attr('sensor.cw_tariff_parameters', 'dyn_add') | float(1) %}
+          {% set v = state_attr('sensor.cw_tariff_parameters', 'vat') | float(1.06) %}
+          {{ ((states('input_number.cw_fixed_day') | float(18.59) / v - a) / p) | round(0) | int }}
+
+      - name: "CW days left"
+        unique_id: cw_days_left
+        unit_of_measurement: d
+        icon: mdi:calendar-clock
+        state: >
+          {% set d = states('input_datetime.cw_fixed_end') %}
+          {% if d in ['unknown', 'unavailable', ''] or d[:4] | int(0) < 2000 %}unknown
+          {% else %}{{ (strptime(d, '%Y-%m-%d').date() - now().date()).days }}{% endif %}
+
+      # ---------------- this month so far (energy only, no fees) ----------------
+      - name: "CW this month"
+        unique_id: cw_this_month
+        unit_of_measurement: EUR
+        icon: mdi:compare-horizontal
+        # state = dynamic with smart rules minus fixed (negative: dynamic cheaper)
+        state: >
+          {% set a = state_attr('sensor.cw_shadow_bill', 'cur') or {} %}
+          {% set P = states.sensor.cw_tariff_parameters.attributes if states.sensor.cw_tariff_parameters else {} %}
+          {% set flat = states('input_number.dyn_flat_cost') | float(11.96) %}
+          {% set n = a.n | default(0) %}
+          {% set belpex = (a.p_sum / n) if n > 0 else 0 %}
+          {% set fix_sell = P.fix_inj_mult | default(0.084) * P.inj_index_ratio | default(0.95) * belpex + P.fix_inj_add | default(-2.72) - P.inj_fee | default(0.19) %}
+          {% set fixed = (a.imp_day | default(0) * (states('input_number.cw_fixed_day') | float(18.59) + flat)
+                         + a.imp_night | default(0) * (states('input_number.cw_fixed_night') | float(15.22) + flat)
+                         - a.exp | default(0) * fix_sell) / 100 %}
+          {% set dyn = a.dyn_imp | default(0) - a.dyn_exp | default(0) %}
+          {% set gain = (P.smart_gain | default([0] * 12))[now().month - 1] * now().day / 30.4 %}
+          {{ (dyn - gain - fixed) | round(2) }}
+        attributes:
+          belpex_avg: >
+            {% set a = state_attr('sensor.cw_shadow_bill', 'cur') or {} %}
+            {{ ((a.p_sum / a.n) if a.n | default(0) > 0 else 0) | round(1) }}
+          bought_kwh: >
+            {% set a = state_attr('sensor.cw_shadow_bill', 'cur') or {} %}
+            {{ (a.imp_day | default(0) + a.imp_night | default(0)) | round(1) }}
+          sold_kwh: >
+            {% set a = state_attr('sensor.cw_shadow_bill', 'cur') or {} %}
+            {{ a.exp | default(0) | round(1) }}
+
+      # ---------------- last 12 months, recalculated with today's rates ----------------
+      - name: "CW last 12 months"
+        unique_id: cw_last_12_months
+        unit_of_measurement: EUR
+        icon: mdi:calendar-range
+        # state = dynamic with smart rules minus fixed, incl. fees, over the stored months
+        state: >
+          {% set h = state_attr('sensor.cw_shadow_bill', 'hist') or [] %}
+          {% set P = states.sensor.cw_tariff_parameters.attributes if states.sensor.cw_tariff_parameters else {} %}
+          {% set flat = states('input_number.dyn_flat_cost') | float(11.96) %}
+          {% set fd = states('input_number.cw_fixed_day') | float(18.59) %}
+          {% set fn = states('input_number.cw_fixed_night') | float(15.22) %}
+          {% set ns = namespace(fix=0, dyn=0) %}
+          {% for m in h %}
+            {% set fix_sell = P.fix_inj_mult | default(0.084) * P.inj_index_ratio | default(0.95) * m.belpex + P.fix_inj_add | default(-2.72) - P.inj_fee | default(0.19) %}
+            {% set ns.fix = ns.fix + (m.imp_day * (fd + flat) + m.imp_night * (fn + flat) - m.exp * fix_sell) / 100 + P.fixed_fee | default(65) / 12 %}
+            {% set ns.dyn = ns.dyn + m.dyn_imp - m.dyn_exp + P.dyn_fee | default(100) / 12 - (P.smart_gain | default([0] * 12))[(m.month[5:7] | int) - 1] %}
+          {% endfor %}
+          {{ (ns.dyn - ns.fix) | round(0) if h else 0 }}
+        attributes:
+          months: "{{ (state_attr('sensor.cw_shadow_bill', 'hist') or []) | length }}"
+          fixed_eur: >
+            {% set h = state_attr('sensor.cw_shadow_bill', 'hist') or [] %}
+            {% set P = states.sensor.cw_tariff_parameters.attributes if states.sensor.cw_tariff_parameters else {} %}
+            {% set flat = states('input_number.dyn_flat_cost') | float(11.96) %}
+            {% set ns = namespace(v=0) %}
+            {% for m in h %}
+              {% set fix_sell = P.fix_inj_mult | default(0.084) * P.inj_index_ratio | default(0.95) * m.belpex + P.fix_inj_add | default(-2.72) - P.inj_fee | default(0.19) %}
+              {% set ns.v = ns.v + (m.imp_day * (states('input_number.cw_fixed_day') | float(18.59) + flat) + m.imp_night * (states('input_number.cw_fixed_night') | float(15.22) + flat) - m.exp * fix_sell) / 100 + P.fixed_fee | default(65) / 12 %}
+            {% endfor %}
+            {{ ns.v | round(0) | int }}
+          dynamic_same_usage_eur: >
+            {% set h = state_attr('sensor.cw_shadow_bill', 'hist') or [] %}
+            {% set P = states.sensor.cw_tariff_parameters.attributes if states.sensor.cw_tariff_parameters else {} %}
+            {% set ns = namespace(v=0) %}
+            {% for m in h %}{% set ns.v = ns.v + m.dyn_imp - m.dyn_exp + P.dyn_fee | default(100) / 12 %}{% endfor %}
+            {{ ns.v | round(0) | int }}
+          smart_gain_estimate_eur: >
+            {% set h = state_attr('sensor.cw_shadow_bill', 'hist') or [] %}
+            {% set g = state_attr('sensor.cw_tariff_parameters', 'smart_gain') or [0] * 12 %}
+            {% set ns = namespace(v=0) %}
+            {% for m in h %}{% set ns.v = ns.v + g[(m.month[5:7] | int) - 1] %}{% endfor %}
+            {{ ns.v }}
+
+  # ---------------- the shadow bill itself: one update per quarter-hour ----------------
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+        seconds: 10
+    actions:
+      - variables:
+          prev: "{{ state_attr('sensor.cw_shadow_bill', 'cur') or {} }}"
+          hist: "{{ state_attr('sensor.cw_shadow_bill', 'hist') or [] }}"
+          P: "{{ states.sensor.cw_tariff_parameters.attributes if states.sensor.cw_tariff_parameters else {} }}"
+          flat: "{{ states('input_number.dyn_flat_cost') | float(11.96) }}"
+          # energy in the quarter-hour that just ended
+          q_imp: "{{ state_attr('sensor.ps_import_quarter', 'last_period') | float(0) }}"
+          q_exp: "{{ state_attr('sensor.cw_export_quarter', 'last_period') | float(0) }}"
+          # price and tariff period that applied to that quarter-hour (stored last time)
+          p: "{{ prev.p_next | default(states('sensor.dyn_market_price') | float(0)) }}"
+          was_day: "{{ prev.day_next | default(false) }}"
+          dyn_buy: "{{ (P.dyn_mult | default(0.102) * p + P.dyn_add | default(1)) * P.vat | default(1.06) + flat }}"
+          dyn_sell: "{{ P.dyn_inj_mult | default(0.1) * p + P.dyn_inj_add | default(-1.188) - P.inj_fee | default(0.19) }}"
+          month_key: "{{ prev.month | default(now().strftime('%Y-%m')) }}"
+          # Flanders: day tariff Mon-Fri 07:00-22:00, otherwise night (holidays not handled)
+          day_next: "{{ now().weekday() < 5 and 7 <= now().hour < 22 }}"
+          acc:
+            month: "{{ month_key }}"
+            imp_day: "{{ prev.imp_day | default(0) + (q_imp if was_day else 0) }}"
+            imp_night: "{{ prev.imp_night | default(0) + (0 if was_day else q_imp) }}"
+            exp: "{{ prev.exp | default(0) + q_exp }}"
+            p_sum: "{{ prev.p_sum | default(0) + p }}"
+            n: "{{ prev.n | default(0) + 1 }}"
+            dyn_imp: "{{ prev.dyn_imp | default(0) + q_imp * dyn_buy / 100 }}"
+            dyn_exp: "{{ prev.dyn_exp | default(0) + q_exp * dyn_sell / 100 }}"
+          rollover: "{{ month_key != now().strftime('%Y-%m') }}"
+          new_hist: >
+            {% if rollover and acc.n > 0 %}
+              {% set done = {'month': acc.month, 'imp_day': acc.imp_day | round(3), 'imp_night': acc.imp_night | round(3),
+                             'exp': acc.exp | round(3), 'belpex': (acc.p_sum / acc.n) | round(2),
+                             'dyn_imp': acc.dyn_imp | round(3), 'dyn_exp': acc.dyn_exp | round(3)} %}
+              {{ (hist + [done])[-12:] }}
+            {% else %}{{ hist }}{% endif %}
+          new_cur: >
+            {% if rollover %}
+              {{ {'month': now().strftime('%Y-%m'), 'imp_day': 0, 'imp_night': 0, 'exp': 0, 'p_sum': 0, 'n': 0,
+                  'dyn_imp': 0, 'dyn_exp': 0, 'p_next': states('sensor.dyn_market_price') | float(0), 'day_next': day_next} }}
+            {% else %}
+              {{ dict(acc, p_next=states('sensor.dyn_market_price') | float(0), day_next=day_next) }}
+            {% endif %}
+    sensor:
+      - name: "CW shadow bill"
+        unique_id: cw_shadow_bill
+        icon: mdi:receipt-text-clock
+        # state = month being tracked
+        state: "{{ new_cur.month }}"
+        attributes:
+          cur: "{{ new_cur }}"
+          hist: "{{ new_hist }}"
+
+  # ---------------- 30-day average Belpex ----------------
+sensor:
+  - platform: statistics
+    name: "CW Belpex 30-day average"
+    unique_id: cw_belpex_30d
+    entity_id: sensor.dyn_market_price
+    state_characteristic: average_step
+    max_age:
+      days: 30
+    sampling_size: 4000
+    precision: 1
+  - platform: integration
+    source: sensor.cw_grid_export
+    name: "CW grid export energy"
+    unique_id: cw_grid_export_energy
+    method: left
+    round: 4
+    unit_time: h
+
+utility_meter:
+  cw_export_quarter:
+    unique_id: cw_export_quarter
+    source: sensor.cw_grid_export_energy
+    cron: "*/15 * * * *"
+
+automation:
+  # Fill in your current rates on first start (only if still empty)
+  - id: cw_first_run_defaults
+    alias: "Contract watch – first-run defaults"
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - if: "{{ states('input_number.cw_fixed_day') | float(0) == 0 }}"
+        then:
+          - action: input_number.set_value
+            target: { entity_id: input_number.cw_fixed_day }
+            data: { value: @@fixed_day@@ }
+      - if: "{{ states('input_number.cw_fixed_night') | float(0) == 0 }}"
+        then:
+          - action: input_number.set_value
+            target: { entity_id: input_number.cw_fixed_night }
+            data: { value: @@fixed_night@@ }
+      - if: "{{ states('sensor.cw_days_left') in ['unknown', 'unavailable'] }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              title: "Contract watch"
+              message: "Set 'Fixed price ends on' to the end date of your fixed Eneco price (Mijn Eneco or your latest invoice) so you get a reminder before it renews."
+
+  # Monthly verdict on the 1st
+  - id: cw_monthly_verdict
+    alias: "Contract watch – monthly verdict"
+    triggers:
+      - trigger: time
+        at: "09:00:00"
+    conditions:
+      - "{{ now().day == 1 }}"
+      - "{{ (state_attr('sensor.cw_shadow_bill', 'hist') or []) | length > 0 }}"
+    actions:
+      - variables:
+          h: "{{ state_attr('sensor.cw_shadow_bill', 'hist') }}"
+          last: "{{ h[-1] }}"
+          P: "{{ states.sensor.cw_tariff_parameters.attributes }}"
+          flat: "{{ states('input_number.dyn_flat_cost') | float(11.96) }}"
+          fix_sell: "{{ P.fix_inj_mult * P.inj_index_ratio * last.belpex + P.fix_inj_add - P.inj_fee }}"
+          fixed_m: "{{ ((last.imp_day * (states('input_number.cw_fixed_day') | float(18.59) + flat) + last.imp_night * (states('input_number.cw_fixed_night') | float(15.22) + flat) - last.exp * fix_sell) / 100 + P.fixed_fee / 12) | round(0) | int }}"
+          dyn_m: "{{ (last.dyn_imp - last.dyn_exp + P.dyn_fee / 12) | round(0) | int }}"
+          smart_m: "{{ (dyn_m - P.smart_gain[(last.month[5:7] | int) - 1]) | round(0) | int }}"
+          diff12: "{{ states('sensor.cw_last_12_months') | float(0) }}"
+          months: "{{ h | length }}"
+          on_fixed: "{{ is_state('input_select.cw_contract', 'Fixed (Eneco Vast)') }}"
+          advice: >
+            {% if months < 3 %}Too early to judge: {{ months }} month(s) of data.
+            {% elif on_fixed and diff12 < -30 %}Over the last {{ months }} months dynamic with smart rules would have cost about €{{ (-diff12) | round(0) | int }} less. Worth considering a switch.
+            {% elif (not on_fixed) and diff12 > 30 %}Over the last {{ months }} months your fixed rates would have cost about €{{ diff12 | round(0) | int }} less. Check today's fixed offer.
+            {% else %}No reason to switch: the difference over {{ months }} months is €{{ diff12 | abs | round(0) | int }}.{% endif %}
+      # set by the Battery Playbook app
+      - action: @@notify_service@@
+        data:
+          title: "Contract check {{ last.month }}"
+          message: >
+            Fixed €{{ fixed_m }} · dynamic same usage €{{ dyn_m }} · dynamic with smart rules ≈ €{{ smart_m }}
+            (Belpex avg €{{ last.belpex | round(0) | int }}/MWh). {{ advice }}
+      - action: persistent_notification.create
+        data:
+          title: "Contract check {{ last.month }}"
+          message: "Fixed €{{ fixed_m }} · dynamic same usage €{{ dyn_m }} · dynamic with smart rules ≈ €{{ smart_m }} (Belpex avg €{{ last.belpex | round(0) | int }}/MWh). {{ advice }}"
+
+  # Renewal reminders
+  - id: cw_renewal_reminder
+    alias: "Contract watch – fixed price renewal reminder"
+    triggers:
+      - trigger: time
+        at: "09:05:00"
+    conditions:
+      - "{{ states('sensor.cw_days_left') | int(-1) in [42, 14, 3] }}"
+    actions:
+      # set by the Battery Playbook app
+      - action: @@notify_service@@
+        data:
+          title: "Fixed price ends in {{ states('sensor.cw_days_left') }} days"
+          message: >
+            Your Eneco fixed price ends on {{ states('input_datetime.cw_fixed_end') }}.
+            When the new rates arrive, enter them as 'Fixed day rate' and 'Fixed night rate':
+            you'll get an instant verdict. Dynamic would have been
+            {{ 'cheaper' if states('sensor.cw_last_12_months') | float(0) < 0 else 'dearer' }} by about
+            €{{ states('sensor.cw_last_12_months') | float(0) | abs | round(0) | int }} over the stored months at your current rates.
+
+  # New rates entered (e.g. a renewal letter): instant re-evaluation
+  - id: cw_rates_changed
+    alias: "Contract watch – verdict for new fixed rates"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: [input_number.cw_fixed_day, input_number.cw_fixed_night]
+    conditions:
+      - "{{ trigger.from_state is not none and trigger.from_state.state not in ['unknown', 'unavailable', '0.0'] }}"
+    actions:
+      - delay: "00:00:30"   # wait until both rates are typed in
+      # set by the Battery Playbook app
+      - action: @@notify_service@@
+        data:
+          title: "New fixed rates: {{ states('input_number.cw_fixed_day') }} / {{ states('input_number.cw_fixed_night') }} c/kWh"
+          message: >
+            Dynamic now beats your night rate below €{{ states('sensor.cw_breakeven_night') }}/MWh and your day rate
+            below €{{ states('sensor.cw_breakeven_day') }}/MWh (last 30 days: €{{ states('sensor.cw_belpex_30_day_average') }}).
+            {% set d = states('sensor.cw_last_12_months') | float(0) %}
+            {% set m = state_attr('sensor.cw_last_12_months', 'months') | int(0) %}
+            {% if m > 0 %}Over your last {{ m }} months, dynamic with smart rules would have been {{ 'cheaper' if d < 0 else 'dearer' }} by about €{{ d | abs | round(0) | int }}.{% else %}No stored months yet to compare with.{% endif %}
+
+  # 30-day market average crosses your break-even
+  - id: cw_breakeven_cross
+    alias: "Contract watch – Belpex crosses break-even"
+    triggers:
+      - trigger: template
+        value_template: "{{ states('sensor.cw_belpex_30_day_average') | float(999) < states('sensor.cw_breakeven_night') | float(0) }}"
+        for: { hours: 24 }
+        id: below
+      - trigger: template
+        value_template: "{{ states('sensor.cw_belpex_30_day_average') | float(0) > states('sensor.cw_breakeven_day') | float(999) }}"
+        for: { hours: 24 }
+        id: above
+    actions:
+      # set by the Battery Playbook app
+      - action: @@notify_service@@
+        data:
+          title: "{{ 'Market below your fixed night rate' if trigger.id == 'below' else 'Market above your fixed day rate' }}"
+          message: >
+            {% if trigger.id == 'below' %}The 30-day Belpex average is €{{ states('sensor.cw_belpex_30_day_average') }}/MWh, under your
+            €{{ states('sensor.cw_breakeven_night') }} break-even: every grid kWh is now cheaper on dynamic.
+            {% else %}The 30-day Belpex average is €{{ states('sensor.cw_belpex_30_day_average') }}/MWh, above your
+            €{{ states('sensor.cw_breakeven_day') }} break-even: every grid kWh is now dearer on dynamic.{% endif %}
+            Current contract: {{ states('input_select.cw_contract') }}.

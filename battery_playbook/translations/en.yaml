@@ -1,0 +1,109 @@
+configuration:
+  install_peak_shaving:
+    name: "Install peak shaving"
+    description: "Night charging under the import limit and quarter-hour peak tracking. The other two packages need it."
+  install_dynamic_tariff:
+    name: "Install dynamic-tariff rules"
+    description: "Installed switched off (shadow mode). Turn on \"Dynamic tariff control\" in Home Assistant after you change contract."
+  install_contract_watch:
+    name: "Install contract watch"
+    description: "Prices your real usage on both contracts and sends monthly and renewal alerts."
+  slot_entities:
+    name: "Time-of-use slot entities"
+    description: "Which set of Solis slot entities the inverter really uses. Try time_charging first; switch if the charge test in the guide does nothing."
+  import_limit_kw:
+    name: "Grid import limit (kW)"
+    description: "Highest grid import while the battery charges from the grid. Fluvius bills at least 2.5 kW."
+  night_margin_pct:
+    name: "Night target safety margin (%)"
+    description: "Extra charge on top of the calculated need. Raise it if the battery runs empty before 22:00 on cloudy days."
+  night_window_start:
+    name: "Night tariff start (HH:MM)"
+    description: "Start of your night tariff on weekdays."
+  night_window_end:
+    name: "Night tariff end (HH:MM)"
+    description: "End of your night tariff on weekdays."
+  grid_fees_c_kwh:
+    name: "Grid fees and taxes (c/kWh, incl. VAT)"
+    description: "Added to every grid kWh on both contracts. Update each January from your bill."
+  capacity_eur_kw_year:
+    name: "Capacity tariff (EUR per kW per year, incl. VAT)"
+    description: "Fluvius capacity tariff for your area."
+  fixed_day_rate:
+    name: "Fixed day rate (c/kWh, incl. VAT)"
+    description: "Filled into contract watch on its first start only. Later changes go in the \"Fixed day rate\" helper."
+  fixed_night_rate:
+    name: "Fixed night rate (c/kWh, incl. VAT)"
+    description: "Filled into contract watch on its first start only. Later changes go in the \"Fixed night rate\" helper."
+  auto_configure_packages:
+    name: "Add the packages line to configuration.yaml"
+    description: "Adds \"packages: !include_dir_named packages\" if it's missing. It's undone if the configuration check fails."
+  restart_home_assistant:
+    name: "Restart Home Assistant after changes"
+    description: "Restarts only when a file changed and the configuration check passed."
+  remove_packages:
+    name: "Remove everything this app wrote"
+    description: "Turn on and press Start to uninstall the packages. Turn it off again afterwards."
+  grid_import_power:
+    name: "Grid import power entity"
+    description: "Leave empty to find it automatically. Power bought from the grid, never negative."
+  grid_export_power:
+    name: "Grid export power entity"
+    description: "Leave empty to find it automatically. Power sold to the grid, never negative."
+  house_load_power:
+    name: "House load power entity"
+    description: "Leave empty to find it automatically."
+  battery_soc:
+    name: "Battery SOC entity"
+    description: "Leave empty to find it automatically."
+  battery_voltage:
+    name: "Battery voltage entity"
+    description: "Leave empty to find it automatically."
+  pv_power:
+    name: "Solar power entity"
+    description: "Leave empty to find it automatically."
+  battery_discharge_power:
+    name: "Battery discharge power entity"
+    description: "Leave empty to find it automatically."
+  tou_switch:
+    name: "Time-of-use switch"
+    description: "Leave empty to find it automatically."
+  grid_charge_switch:
+    name: "Allow grid charging switch"
+    description: "Leave empty to find it automatically."
+  charge_current:
+    name: "Timed charge current entity"
+    description: "Leave empty to find it automatically."
+  discharge_current:
+    name: "Timed discharge current entity"
+    description: "Leave empty to find it automatically."
+  charge_start:
+    name: "Charge slot 1 start entity"
+    description: "Leave empty to find it automatically."
+  charge_end:
+    name: "Charge slot 1 end entity"
+    description: "Leave empty to find it automatically."
+  discharge_start:
+    name: "Discharge slot 1 start entity"
+    description: "Leave empty to find it automatically."
+  discharge_end:
+    name: "Discharge slot 1 end entity"
+    description: "Leave empty to find it automatically."
+  export_limit:
+    name: "Export power limit entity"
+    description: "Optional. Needed only for blocking export at negative prices. Enable it in the Solis integration first."
+  forecast_today:
+    name: "Forecast.Solar today entity"
+    description: "Leave empty to find it automatically."
+  forecast_today_remaining:
+    name: "Forecast.Solar remaining today entity"
+    description: "Leave empty to find it automatically."
+  forecast_tomorrow:
+    name: "Forecast.Solar tomorrow entity"
+    description: "Leave empty to find it automatically."
+  entsoe_price:
+    name: "ENTSO-e current price entity"
+    description: "Leave empty to find it automatically."
+  notify_service:
+    name: "Phone notification action"
+    description: "For example notify.mobile_app_pixel_8. Leave empty to use the only Companion app phone found."

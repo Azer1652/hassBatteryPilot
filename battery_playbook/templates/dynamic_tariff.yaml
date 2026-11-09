@@ -1,0 +1,358 @@
+# =====================================================================
+# DYNAMIC TARIFF – battery rules for Eneco Zon & Wind Dynamisch
+# Installed now, switched OFF until you change contract (plan: March).
+#
+# Needs: peak_shaving.yaml (uses script.ps_inverter and the ps_* sensors),
+#        ENTSO-e integration (HACS: JaccoR/hass-entso-e, area Belgium),
+#        Forecast.Solar integration (built in).
+#
+# SHADOW MODE: everything below "PRICES" and "PLAN" calculates already.
+# Watch "Dyn battery plan" over the coming weeks to see what it would do.
+# Nothing touches the inverter until you turn on "Dynamic tariff control".
+#
+# Logic (per hour, using day-ahead prices):
+#   charge     – current hour is among the cheapest hours needed to reach
+#                the solar-aware target SOC, and charging now beats buying
+#                later after ~10% battery losses + wear cost (or SOC is
+#                below the reserve).
+#                Charge current still follows house load under the
+#                capacity limit from peak_shaving.yaml.
+#   discharge  – current hour is among the best export hours, export price
+#                beats what refilling will cost (tomorrow's midday solar or
+#                the cheapest grid hour), and SOC stays above the reserve.
+#   winter     – when winter mode is on (peak_shaving.yaml), it also fills
+#                the battery to the night target overnight and never exports:
+#                the capacity tariff is worth more than a few cents of spread.
+#   self_use   – everything else.
+#   curtail    – export price below zero: export limit set to 0 (optional).
+#
+# Eneco Zon & Wind Dynamisch (Aug 2026 card), Belpex in EUR/MWh:
+#   buy  = (0.102 x Belpex + 1) x 1.06  c/kWh  + grid fees and taxes
+#   sell = 0.1 x Belpex - 1.188        c/kWh  - Fluvius injection fee
+# =====================================================================
+
+input_boolean:
+  # No "initial": stays off after install and remembers your choice.
+  dyn_enabled:
+    name: "Dynamic tariff control"
+    icon: mdi:chart-line
+  dyn_curtail_enabled:
+    name: "Dynamic tariff – block export at negative prices"
+    icon: mdi:transmission-tower-off
+
+input_number:
+  dyn_flat_cost:
+    name: "Grid fees + taxes per kWh (incl. VAT)"
+    # From your 2025-26 bill: (green power/CHP 1.46 + grid 5.22 + excise 4.60) x 1.06
+    min: 0
+    max: 30
+    step: 0.01
+    unit_of_measurement: c/kWh
+    initial: @@grid_fees@@
+  dyn_reserve_soc:
+    name: "Battery reserve SOC"
+    min: 10
+    max: 80
+    step: 5
+    unit_of_measurement: "%"
+    initial: 35
+  dyn_export_hours:
+    name: "Best export hours per 12 h"
+    min: 1
+    max: 6
+    step: 1
+    unit_of_measurement: h
+    initial: 2
+  dyn_export_current:
+    name: "Export discharge current"
+    min: 10
+    max: 100
+    step: 5
+    unit_of_measurement: A
+    initial: 90
+  dyn_good_solar_kwh:
+    name: "Solar forecast that refills the battery"
+    min: 0
+    max: 40
+    step: 1
+    unit_of_measurement: kWh
+    initial: 14
+  dyn_export_limit_normal:
+    name: "Normal export limit"
+    min: 0
+    max: 10000
+    step: 100
+    unit_of_measurement: W
+    initial: 6000
+  dyn_price_to_mwh:
+    name: "ENTSO-e price to EUR/MWh factor"
+    # 1000 if your ENTSO-e sensor is in EUR/kWh (default), 1 if in EUR/MWh
+    min: 1
+    max: 1000
+    step: 1
+    initial: 1000
+
+template:
+  # ============================ PRICES ============================
+  - sensor:
+      - name: "Dyn market price"
+        unique_id: dyn_market_price
+        unit_of_measurement: "EUR/MWh"
+        # set by the Battery Playbook app
+        state: "{{ (states('@@entsoe_price@@') | float(0) * states('input_number.dyn_price_to_mwh') | float(1000)) | round(1) }}"
+        availability: "{{ has_value('@@entsoe_price@@') }}"
+
+      - name: "Dyn buy price"
+        unique_id: dyn_buy_price
+        unit_of_measurement: c/kWh
+        state: "{{ ((0.102 * states('sensor.dyn_market_price') | float(0) + 1) * 1.06 + states('input_number.dyn_flat_cost') | float(11.96)) | round(2) }}"
+        availability: "{{ has_value('sensor.dyn_market_price') }}"
+
+      - name: "Dyn sell price"
+        unique_id: dyn_sell_price
+        unit_of_measurement: c/kWh
+        state: "{{ (0.1 * states('sensor.dyn_market_price') | float(0) - 1.188 - 0.19) | round(2) }}"
+        availability: "{{ has_value('sensor.dyn_market_price') }}"
+
+      # Price lists for the coming hours (attributes), in c/kWh
+      - name: "Dyn price outlook"
+        unique_id: dyn_price_outlook
+        unit_of_measurement: min
+        icon: mdi:chart-timeline
+        # state = price slot length in minutes (60 or 15)
+        # set by the Battery Playbook app
+        state: >
+          {% set raw = state_attr('@@entsoe_price@@', 'prices') or [] %}
+          {% if raw | length >= 2 %}{{ ((as_datetime(raw[1].time) - as_datetime(raw[0].time)).total_seconds() / 60) | int }}{% else %}60{% endif %}
+        attributes:
+          buy_12h: >
+            {% set raw = state_attr('@@entsoe_price@@', 'prices') or [] %}
+            {% set k = states('input_number.dyn_price_to_mwh') | float(1000) %}
+            {% set flat = states('input_number.dyn_flat_cost') | float(11.96) %}
+            {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+            {% set ns = namespace(out=[]) %}
+            {% for p in raw %}{% set t = as_datetime(p.time) %}
+              {% if t and t + timedelta(minutes=slot) > now() and t < now() + timedelta(hours=12) %}
+                {% set ns.out = ns.out + [((0.102 * p.price * k + 1) * 1.06 + flat) | round(2)] %}
+              {% endif %}{% endfor %}
+            {{ ns.out }}
+          sell_12h: >
+            {% set raw = state_attr('@@entsoe_price@@', 'prices') or [] %}
+            {% set k = states('input_number.dyn_price_to_mwh') | float(1000) %}
+            {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+            {% set ns = namespace(out=[]) %}
+            {% for p in raw %}{% set t = as_datetime(p.time) %}
+              {% if t and t + timedelta(minutes=slot) > now() and t < now() + timedelta(hours=12) %}
+                {% set ns.out = ns.out + [(0.1 * p.price * k - 1.188 - 0.19) | round(2)] %}
+              {% endif %}{% endfor %}
+            {{ ns.out }}
+          buy_24h_min: >
+            {% set raw = state_attr('@@entsoe_price@@', 'prices') or [] %}
+            {% set k = states('input_number.dyn_price_to_mwh') | float(1000) %}
+            {% set flat = states('input_number.dyn_flat_cost') | float(11.96) %}
+            {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+            {% set ns = namespace(out=[]) %}
+            {% for p in raw %}{% set t = as_datetime(p.time) %}
+              {% if t and t + timedelta(minutes=slot) > now() and t < now() + timedelta(hours=24) %}
+                {% set ns.out = ns.out + [((0.102 * p.price * k + 1) * 1.06 + flat) | round(2)] %}
+              {% endif %}{% endfor %}
+            {{ ns.out | min if ns.out else 999 }}
+          sell_midday_24h_min: >
+            {% set raw = state_attr('@@entsoe_price@@', 'prices') or [] %}
+            {% set k = states('input_number.dyn_price_to_mwh') | float(1000) %}
+            {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+            {% set ns = namespace(out=[]) %}
+            {% for p in raw %}{% set t = as_datetime(p.time) %}
+              {% if t and t > now() and t < now() + timedelta(hours=24) and 10 <= (t | as_local).hour < 16 %}
+                {% set ns.out = ns.out + [(0.1 * p.price * k - 1.188 - 0.19) | round(2)] %}
+              {% endif %}{% endfor %}
+            {{ ns.out | min if ns.out else 999 }}
+
+      # ============================ PLAN ============================
+      - name: "Dyn solar next"
+        unique_id: dyn_solar_next
+        unit_of_measurement: kWh
+        # Corrected solar still to come before the battery is needed:
+        # rest of today in the morning, tomorrow from noon.
+        state: >
+          {% if now().hour < 12 %}{{ states('sensor.ps_solar_today_remaining') | float(0) }}
+          {% else %}{{ states('sensor.ps_solar_tomorrow') | float(0) }}{% endif %}
+
+      - name: "Dyn charge threshold"
+        unique_id: dyn_charge_threshold
+        unit_of_measurement: c/kWh
+        icon: mdi:battery-arrow-up
+        # Charge in any slot priced at or below this
+        state: >
+          {% set o = state_attr('sensor.dyn_price_outlook', 'buy_12h') or [] %}
+          {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+          {% set soc = states('sensor.ps_battery_soc') | float(50) %}
+          {% set good = states('sensor.dyn_solar_next') | float(0) >= states('input_number.dyn_good_solar_kwh') | float(14) %}
+          {% set target = [states('input_number.dyn_reserve_soc') | float(35), states('sensor.ps_night_target_soc') | float(100)] | max %}
+          {% set kw = [states('input_number.ps_import_limit') | float(2.3) - 0.7, 0.5] | max %}
+          {% set need = ([target - soc, 0] | max) / 100 * 16 / kw * 60 / slot %}
+          {% set n = need | round(0, 'ceil') | int %}
+          {% set cheap = o | sort %}
+          {% if n == 0 or not cheap %}-999{% elif n <= cheap | length %}{{ cheap[n - 1] }}{% else %}{{ cheap | last }}{% endif %}
+        attributes:
+          target_soc: "{{ [states('input_number.dyn_reserve_soc') | float(35), states('sensor.ps_night_target_soc') | float(100)] | max }}"
+
+      - name: "Dyn export threshold"
+        unique_id: dyn_export_threshold
+        unit_of_measurement: c/kWh
+        icon: mdi:battery-arrow-down
+        # Export in any slot priced at or above this (also needs to beat the refill cost)
+        state: >
+          {% set o = state_attr('sensor.dyn_price_outlook', 'sell_12h') or [] %}
+          {% set slot = states('sensor.dyn_price_outlook') | int(60) %}
+          {% set k = (states('input_number.dyn_export_hours') | float(2) * 60 / slot) | int %}
+          {% set top = o | sort(reverse=true) %}
+          {% if not top %}999{% elif k <= top | length %}{{ top[k - 1] }}{% else %}{{ top | last }}{% endif %}
+
+      - name: "Dyn refill cost"
+        unique_id: dyn_refill_cost
+        unit_of_measurement: c/kWh
+        # What it costs to put a kWh back in the battery after exporting it:
+        # tomorrow's midday export price if solar will refill it, else the
+        # cheapest grid hour. Divided by 0.9 for battery losses.
+        state: >
+          {% set good = states('sensor.dyn_solar_next') | float(0) >= states('input_number.dyn_good_solar_kwh') | float(14) %}
+          {% set mid = state_attr('sensor.dyn_price_outlook', 'sell_midday_24h_min') | float(999) %}
+          {% set grid = state_attr('sensor.dyn_price_outlook', 'buy_24h_min') | float(999) %}
+          {{ (([mid, 0] | max if good and mid < 999 else grid) / 0.9) | round(2) }}
+
+      - name: "Dyn battery plan"
+        unique_id: dyn_battery_plan
+        icon: mdi:battery-sync
+        state: >
+          {% set buy = states('sensor.dyn_buy_price') | float(999) %}
+          {% set sell = states('sensor.dyn_sell_price') | float(0) %}
+          {% set soc = states('sensor.ps_battery_soc') | float(50) %}
+          {% set reserve = states('input_number.dyn_reserve_soc') | float(35) %}
+          {% set wear = states('input_number.ps_wear_cost') | float(2) %}
+          {% set buy12 = state_attr('sensor.dyn_price_outlook', 'buy_12h') or [buy] %}
+          {% set winter = is_state('input_boolean.ps_winter_mode', 'on') %}
+          {% set h = now().hour %}
+          {% set night = h >= 22 or h < 7 %}
+          {% set charge = buy <= states('sensor.dyn_charge_threshold') | float(-999)
+                          and (buy / 0.9 + wear < buy12 | max or soc < reserve) %}
+          {# Winter: always fill to the peak-shaving night target, and never export #}
+          {% set charge = charge or (winter and night and soc < states('sensor.ps_night_target_soc') | float(100) - 1) %}
+          {% set discharge = (not winter)
+                             and sell >= states('sensor.dyn_export_threshold') | float(999)
+                             and sell > states('sensor.dyn_refill_cost') | float(999) + wear
+                             and soc > reserve + 10 %}
+          {{ 'charge' if charge else ('discharge' if discharge else 'self_use') }}
+        attributes:
+          buy_now: "{{ states('sensor.dyn_buy_price') }}"
+          sell_now: "{{ states('sensor.dyn_sell_price') }}"
+          charge_below: "{{ states('sensor.dyn_charge_threshold') }}"
+          export_above: "{{ states('sensor.dyn_export_threshold') }}"
+          refill_cost: "{{ states('sensor.dyn_refill_cost') }}"
+          target_soc: "{{ state_attr('sensor.dyn_charge_threshold', 'target_soc') }}"
+          curtail: "{{ states('sensor.dyn_sell_price') | float(0) < 0 }}"
+
+automation:
+  # Apply the plan to the inverter (only when control is switched on)
+  - id: dyn_apply_plan
+    alias: "Dynamic tariff – apply battery plan"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.dyn_battery_plan
+        id: change
+      - trigger: time_pattern
+        minutes: 0
+        seconds: 20
+        id: renew
+      - trigger: time_pattern
+        minutes: "/2"
+        id: tick
+      - trigger: state
+        entity_id: input_boolean.dyn_enabled
+        to: "on"
+        id: change
+    conditions:
+      - condition: state
+        entity_id: input_boolean.dyn_enabled
+        state: "on"
+    actions:
+      - variables:
+          plan: "{{ states('sensor.dyn_battery_plan') }}"
+          limit: "{{ states('input_number.ps_import_limit') | float(2.3) }}"
+          proj: "{{ states('sensor.ps_quarter_projected') | float(0) }}"
+          want: "{{ states('sensor.ps_desired_charge_current') | int(0) }}"
+          have: "{{ states('sensor.ps_charge_current_setting') | int(0) }}"
+          tou_on: "{{ is_state('binary_sensor.ps_time_of_use_on', 'on') }}"
+          fresh: "{{ trigger.id in ['change', 'renew'] }}"
+      - choose:
+          - conditions: "{{ plan == 'charge' }}"
+            sequence:
+              - choose:
+                  # House load too high: stop charging to protect the capacity peak
+                  - conditions: "{{ tou_on and (proj > limit + 0.1 or want < 10) }}"
+                    sequence:
+                      - action: script.ps_inverter
+                        data: { command: self_use }
+                  # Start, resume, or renew the hourly charge slot
+                  - conditions: "{{ want >= 15 and proj < limit - 0.2 and (fresh or not tou_on) }}"
+                    sequence:
+                      - action: script.ps_inverter
+                        data: { command: charge_now, amps: "{{ want }}" }
+                  # Follow house load
+                  - conditions: "{{ tou_on and (want - have) | abs >= 10 }}"
+                    sequence:
+                      - action: script.ps_inverter
+                        data: { command: current, amps: "{{ want }}" }
+          - conditions: "{{ plan == 'discharge' and (fresh or not tou_on) }}"
+            sequence:
+              - action: script.ps_inverter
+                data:
+                  command: discharge_now
+                  amps: "{{ states('input_number.dyn_export_current') | int(90) }}"
+          - conditions: "{{ plan == 'self_use' and tou_on }}"
+            sequence:
+              - action: script.ps_inverter
+                data: { command: self_use }
+
+  - id: dyn_switch_off
+    alias: "Dynamic tariff – back to self-use when switched off"
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.dyn_enabled
+        to: "off"
+    actions:
+      - action: script.ps_inverter
+        data: { command: self_use }
+      - if: "{{ is_state('input_boolean.dyn_curtail_enabled', 'on') }}"
+        then:
+          - action: number.set_value
+            # set by the Battery Playbook app
+            target: { entity_id: @@export_limit@@ }
+            data: { value: "{{ states('input_number.dyn_export_limit_normal') | int(6000) }}" }
+
+  # Optional: block export while the export price is negative
+  - id: dyn_curtail_negative
+    alias: "Dynamic tariff – block export at negative prices"
+    triggers:
+      - trigger: template
+        value_template: "{{ states('sensor.dyn_sell_price') | float(0) < 0 }}"
+      - trigger: template
+        value_template: "{{ states('sensor.dyn_sell_price') | float(0) >= 0 }}"
+      - trigger: state
+        entity_id: input_boolean.dyn_curtail_enabled
+    conditions:
+      - condition: state
+        entity_id: input_boolean.dyn_enabled
+        state: "on"
+    actions:
+      - action: number.set_value
+        # set by the Battery Playbook app
+        # the Solis Modbus integration; enable it first. If there is none,
+        # leave "block export at negative prices" off.
+        target: { entity_id: @@export_limit@@ }
+        data:
+          value: >
+            {{ 0 if is_state('input_boolean.dyn_curtail_enabled', 'on')
+                     and states('sensor.dyn_sell_price') | float(0) < 0
+               else states('input_number.dyn_export_limit_normal') | int(6000) }}

@@ -1,0 +1,69 @@
+name: Battery Playbook
+version: "1.0.0"
+slug: battery_playbook
+description: Peak shaving, dynamic-tariff rules and contract alerts for a Solis hybrid with a home battery
+url: https://github.com/Azer1652/hassSolarBattery
+arch:
+  - aarch64
+  - amd64
+  - armv7
+init: false
+startup: once
+boot: auto
+homeassistant_api: true
+map:
+  - type: homeassistant_config
+    read_only: false
+options:
+  install_peak_shaving: true
+  install_dynamic_tariff: true
+  install_contract_watch: true
+  slot_entities: time_charging
+  import_limit_kw: 2.3
+  night_margin_pct: 30
+  night_window_start: "22:00"
+  night_window_end: "07:00"
+  grid_fees_c_kwh: 11.96
+  capacity_eur_kw_year: 52.37
+  fixed_day_rate: 18.59
+  fixed_night_rate: 15.22
+  auto_configure_packages: true
+  restart_home_assistant: true
+  remove_packages: false
+schema:
+  install_peak_shaving: bool
+  install_dynamic_tariff: bool
+  install_contract_watch: bool
+  slot_entities: list(time_charging|grid_time_of_use)
+  import_limit_kw: float(1.5,5)
+  night_margin_pct: int(0,60)
+  night_window_start: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
+  night_window_end: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
+  grid_fees_c_kwh: float(0,40)
+  capacity_eur_kw_year: float(0,200)
+  fixed_day_rate: float(0,80)
+  fixed_night_rate: float(0,80)
+  auto_configure_packages: bool
+  restart_home_assistant: bool
+  remove_packages: bool
+  grid_import_power: str?
+  grid_export_power: str?
+  house_load_power: str?
+  battery_soc: str?
+  battery_voltage: str?
+  pv_power: str?
+  battery_discharge_power: str?
+  tou_switch: str?
+  grid_charge_switch: str?
+  charge_current: str?
+  discharge_current: str?
+  charge_start: str?
+  charge_end: str?
+  discharge_start: str?
+  discharge_end: str?
+  export_limit: str?
+  forecast_today: str?
+  forecast_today_remaining: str?
+  forecast_tomorrow: str?
+  entsoe_price: str?
+  notify_service: str?
