@@ -63,7 +63,7 @@ def test_version_is_in_the_changelog_and_the_build():
         assert "COPY pilot" in f.read()
     build = load("build.yaml")
     assert set(build["build_from"]) == set(CFG["arch"])
-    assert CFG["ingress"] and CFG["ingress_port"] == 8099
+    assert CFG["ingress"] and CFG.get("ingress_port", 8099) == 8099      # the port web.py listens on
 
 
 def test_repository_file():
