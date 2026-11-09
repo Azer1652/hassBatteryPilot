@@ -43,6 +43,9 @@ MIN_CHARGE_KW = 0.5
 # Cost per hour of charge or discharge instead of self-use: keeps the plan from switching the
 # inverter for gains of a cent or two (forecast errors are larger than that).
 ACTION_COST_C_PER_H = 2.0
+# Grid charging is planned this far under the import limit: the controller follows the house
+# load in 5 A steps and pauses on quarter-hour spikes, so it cannot charge right up to the limit.
+CHARGE_HEADROOM_KW = 0.3
 
 
 @dataclass
@@ -176,7 +179,10 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
             best_d = ds
             best = table[ds][0] + nxt[s + ds]
             act = ACTION_COST_C_PER_H * sl.hours
+            cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
             for d in range(max(ds, 0) + cmin, hi + 1):         # charge from the grid
+                if table[d][1] > cap_kwh + 1e-9:
+                    break                                      # more charge only imports more
                 v = table[d][0] + nxt[s + d] + act
                 if v < best - 1e-9:
                     best, best_d = v, d
@@ -313,7 +319,9 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         idx = max((i for i, s in enumerate(slots) if s.end <= we + timedelta(seconds=1)), default=None)
         info = {"window_start": ws.isoformat(), "window_end": we.isoformat(), "solar_kwh": round(solar, 1),
                 "need_kwh": need_kwh, "soc": soc_needed, "winter": is_winter}
-        known = forecast_until is None or de <= forecast_until + timedelta(hours=1)
+        # Forecasts list daylight hours only, so a day counts as forecast once the forecast
+        # reaches past its late morning.
+        known = forecast_until is None or forecast_until >= we + timedelta(hours=4)
         info["forecast"] = known
         target_info.append(info)
         if len(target_info) == 1:
