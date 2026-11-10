@@ -19,7 +19,7 @@ in `build.yaml`). Do not add pip dependencies to the image.
 
 ```bash
 pip install -r requirements-dev.txt          # aiohttp, pytest, pytest-asyncio, pytest-aiohttp, pyyaml
-pytest -q                                    # whole suite (~5 s)
+pytest -q                                    # whole suite (~50 s)
 pytest tests/test_planner.py -k winter       # one test or group
 ruff check .                                 # lint (config in ruff.toml)
 docker build battery_pilot -t battery-pilot --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
@@ -57,8 +57,14 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 - `simulate.step()` is the shared energy-balance model (plan replay, night target, tests).
   `controller` must stay consistent with it: charging is paced to the step's SOC, follows house load
   in 5 A steps, pauses when the quarter-hour projection exceeds the limit.
-- `solis.py` sets slot 1 to the current clock hour only (charge or discharge), so commands expire by
-  themselves if the app stops; `controller` renews them each hour.
+- `solis.py` sets slot 1 to the current clock hour only (charge or discharge); `controller` renews
+  them each hour. The Solis repeats slots daily, so `App` records what it left on the inverter
+  (`/data/inverter.json`) and returns it to self-use at the next start; `Solis.mode` is `failed`
+  after a failed command (treated as possibly active). `tick()` stops a charge/discharge after
+  `BLIND_S` without SOC/import (or a frozen SOC), keeps helper states through short read failures,
+  and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
+- Steadiness: `optimize(first_action=...)` charges `SWITCH_COST_C` for changing what the previous
+  plan is still doing now (`planner.sticky_action`; a finished step is not sticky).
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. The replay, like the live plan, blocks export at negative sell
@@ -72,12 +78,15 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   (the replan at the end of `nightly()`) and the plan at the start of each clock hour; `nightly()`
   closes yesterday into `/data/history/YYYY-MM-DD.json` (60 days) with the measured quarters
   (`QuarterRecord.mode` = inverter mode). Served by `/api/history` and `/api/history/{day}`.
-- State lives in `/data/state.json` (`App.save_state`/`load_state`).
+- State lives in `/data/state.json` (`App.save_state`/`load_state`, fsynced; a damaged file is kept as
+  `state.json.bad` and the app starts fresh).
 
 ## Tests
 
-`tests/fake_ha.py` is an in-memory HA with a house/battery/Solis physics model (`advance()`);
-`tests/test_app.py` runs the whole app through simulated nights with it. Planner/controller tests
+`tests/fake_ha.py` is an in-memory HA with a house/battery/Solis physics model (`advance()`;
+`override` shows an entity as unavailable or frozen, `fail` makes service calls raise);
+`tests/test_app.py`, `test_e2e.py`, `test_safety.py`, `test_steady.py` and `test_robust.py` run
+the whole app through simulated time with it. Planner/controller tests
 include regressions for the old playbook bugs (overcharge above target, night drain, shade collapse).
 `tools/yearsim.py` is a synthetic year (shade, winter dip, peaks, seasonal and negative prices) replayed
 with the app's own `replay_day`; `python tools/yearsim.py [--days N --winter-mode peaks_only]` prints a

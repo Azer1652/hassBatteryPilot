@@ -80,8 +80,9 @@ Home Assistant once and uninstall the Battery Playbook app.
 | Negative sell price | With **Battery Pilot block negative export** on and an export-limit entity, export is set to 0. |
 | Quarter-hour heading over the limit | Charging pauses; the battery helps the house. You get a phone warning when a peak is coming (above the higher limit while the plan pays for one). |
 
-Charge and discharge commands only cover the current clock hour. If Battery Pilot or
-Home Assistant stops, the inverter returns to self-use within the hour.
+Charge and discharge commands only cover the current clock hour, and Battery Pilot puts
+the inverter back in self-use when it stops, when its measurements are lost and when
+*Battery Pilot control* is switched off. See *When something goes wrong* below.
 
 ## The comparison
 
@@ -209,7 +210,7 @@ entities match, the one with `solis` in its name wins.
 | Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only. |
 | Renew | At every new clock hour while still charging or exporting. | The same as Charge / Discharge for the new hour. |
 | Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, or the app stops. | *Time of use* off. Everything else is left as it is. |
-| Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to *Normal export limit* when the price is positive again. Battery Pilot only ever undoes its own 0 W, so a zero-export installation keeps its own setting. |
+| Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to the value it had before (at most *Normal export limit*) when the price is positive again. An installation already at 0 W (zero export) is left alone. |
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
 hour, never more than keeps grid import under the import limit with the current house
@@ -220,8 +221,27 @@ holds at 10 A (at most 2 % above target) once the target is reached before the h
 Exports never go below *Battery reserve for export*, except where the plan sells below it
 at an extreme price.
 
-Because every command covers the current clock hour only, the inverter returns to
-self-use by itself within the hour if Battery Pilot or Home Assistant stops.
+### When something goes wrong
+
+- **Measurements lost:** without the battery SOC or grid import for a minute (or a SOC
+  that does not move for 30 minutes while charging or discharging), a charge or
+  discharge goes back to self-use until the readings return. A missing house-load reading
+  alone is estimated from the grid, solar and the charge current, so it doesn't stop a
+  night charge.
+- **A command fails:** it is sent again on the next tick; after three failures in a row
+  the page shows the problem. With *Battery Pilot control* off, the inverter is put back
+  in self-use.
+- **Battery Pilot stops:** on a normal stop it puts the inverter in self-use. A command
+  covers the current clock hour, but the Solis repeats its time-of-use slot **every
+  day**, so after a crash or power cut the Supervisor watchdog restarts the app and it
+  puts the inverter back in self-use (it records what it left on the inverter in
+  `/data/inverter.json`).
+- **Someone else changes the inverter:** while *Battery Pilot control* is on, the
+  time-of-use switch is read back every tick and corrected if something else changed it.
+  With control off, your own settings are never touched.
+- **The forecast or prices are unavailable:** it keeps planning with the last solar
+  forecast and prices it received. Quarter-hours without a market price are priced in
+  the comparison with the price of the day before (marked † on the page).
 
 ### In Home Assistant
 
@@ -233,8 +253,9 @@ self-use by itself within the hour if Battery Pilot or Home Assistant stops.
 - **Notifications** in HA, and on your phone through the Companion app:
   - capacity peak warning: the quarter-hour heads more than 0.3 kW over the limit for
     2 minutes; at most once per quarter-hour;
-  - monthly verdict: on the 1st at 09:00;
-  - fixed price ending: 42, 14 and 3 days before;
+  - monthly verdict: on the 1st at 09:00 (or the first day after, if the app was not
+    running);
+  - fixed price ending: 42, 14 and 3 days before (or the first day after);
   - market crossing your break-even: the 30-day average moves below your night rate or
     above your day rate.
 - **Files:** none, except once when taking over from Battery Playbook. It removes the
@@ -242,7 +263,9 @@ self-use by itself within the hour if Battery Pilot or Home Assistant stops.
   the app's own storage), switches off the old automations, and reloads HA's YAML.
 - **Its own storage** (`/data/state.json`): what it learned (shade, consumption, peaks),
   the comparison history and the last days of prices and measurements. In
-  `/data/history`, one file per day for the last 60 days of planned vs actual.
+  `/data/history`, one file per day for the last 60 days of planned vs actual;
+  `/data/inverter.json`, what it left on the inverter. A damaged `state.json` is kept as
+  `state.json.bad` and Battery Pilot starts fresh.
 
 ## All settings
 

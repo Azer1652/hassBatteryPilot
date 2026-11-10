@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.3.0
+
+Safety and reliability, from a new set of tests that run whole days and failures
+through the app:
+
+- **Lost or frozen measurements stop a charge or discharge.** Without the battery SOC
+  or grid import for a minute (or a SOC that does not move for 30 minutes while charging
+  or discharging), the inverter goes back to self-use until the readings return. Before,
+  it kept going until the end of the hour, with no peak protection. A missing
+  house-load reading alone no longer stops a night charge.
+- **The inverter is never left charging.** The Solis repeats its time-of-use slot every
+  day: after a crash or power cut the app (now restarted by the Supervisor watchdog) puts
+  it back in self-use, and a failed command no longer leaves it unattended when control
+  is switched off. The time-of-use switch is read back and corrected if something else
+  changed it while control is on.
+- A single failed read of the control switch no longer interrupts a charge.
+- **Zero-export installations stay at zero export** through a negative-price block; the
+  export limit found before a block is restored, not the setting.
+- **Steadier inverter commands:** the plan no longer switches between discharge and
+  self-use several times an hour, and a rising house load lowers the charge current
+  instead of pausing and restarting the charge.
+- A boost above the import limit is announced once, and its higher limit only applies to
+  the boosted hours.
+- **The comparison is fair when price data is missing:** such quarter-hours are priced
+  with the day before on both contracts (they made dynamic look cheaper), and marked.
+- A solar forecast outage keeps the last forecast instead of planning a winter night.
+- A slow Home Assistant no longer holds up the 10-second control loop.
+- The monthly verdict and renewal reminders catch up after a day the app wasn't running.
+- A damaged `state.json` no longer stops the app; a broken settings file gives a clear
+  message. The first plan after a start uses the real SOC. Price times without a time
+  zone are read in HA's time zone.
+
 ## 2.2.0
 
 - **Price spikes earn money.** At a very low or very high price the battery now charges
