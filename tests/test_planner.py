@@ -428,6 +428,28 @@ def test_battery_is_filled_completely_when_selling_it_later_pays(factor):
         assert all(s.action != "charge" for s in steps)                 # losses and wear eat the spread
 
 
+@pytest.mark.parametrize("base,evening,pays", [(0, 250, True), (100, 130, False)])
+def test_battery_is_charged_only_for_what_the_house_uses_in_the_dear_hours(base, evening, pays):
+    """Exporting earns nothing here, so stored energy is only worth what it saves the house. It is
+    bought cheaply just before the dear evening, as much as the house uses then and no more, when
+    the price difference beats losses and wear."""
+    dyn = DynamicTariff(Options())
+    market = [base] * 17 + [evening] * 5 + [base] * 2
+    steps = optimize(B, hourly([dyn.buy(None, m) for m in market], [-1.0] * 24, load=0.5), soc0=B.min_soc,
+                     terminal_c_kwh=0)
+    dear = steps[17:22]
+    assert all(s.action != "discharge" for s in steps)                   # nothing is sold
+    if not pays:                                    # 23.8 c now against 27.1 c later: losses and wear eat it
+        assert all(s.action != "charge" for s in steps)
+        return
+    need = sum(s.load_kwh for s in dear) / B.eta_d / (B.capacity_kwh / 100)   # SOC points the house uses
+    assert any(s.action == "charge" for s in steps[:17]) and all(s.action != "charge" for s in dear)
+    assert dear[0].soc_start == pytest.approx(B.min_soc + need, abs=3)   # what the evening needs...
+    assert max(s.soc_end for s in steps) <= B.min_soc + need + 3         # ...and no more (it is not filled up)
+    assert dear[-1].soc_end <= B.min_soc + 1                             # used up by the end of the dear hours
+    assert sum(s.import_kwh for s in dear) < 0.25                        # the house hardly buys at the dear price
+
+
 # ---------------------------------------------------------------- price spikes and the capacity tariff
 MARCH = datetime(2026, 3, 14, tzinfo=BXL)
 
