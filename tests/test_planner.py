@@ -10,6 +10,7 @@ from pilot.config import Options
 from pilot.planner import Slot, make_plan, night_target, optimize
 from pilot.prices import PriceSlot
 from pilot.simulate import Battery, step
+from pilot.solar import PvForecast, ShadeModel
 from pilot.tariffs import DynamicTariff, FixedTariff
 
 BXL = ZoneInfo("Europe/Brussels")
@@ -54,6 +55,13 @@ def test_charging_follows_house_load_under_the_import_limit():
 def test_discharge_stops_at_reserve():
     r = step(B, 37, "discharge", 0, load_kwh=0.2, pv_kwh=0, hours=1)
     assert r.soc == pytest.approx(B.reserve_soc)
+
+
+def test_a_plan_step_can_charge_above_the_limit_and_sell_below_the_reserve():
+    r = step(B, 30, "charge", 90, load_kwh=1.0, pv_kwh=0, hours=1, limit_kw=3.5)
+    assert r.import_kwh == pytest.approx(3.5)                         # follows the step's limit, not 2.3
+    r = step(B, 37, "discharge", 0, load_kwh=0.2, pv_kwh=0, hours=1, reserve=B.min_soc)
+    assert r.soc == pytest.approx(B.min_soc)
 
 
 # ---------------------------------------------------------------- optimizer
@@ -248,3 +256,253 @@ def test_a_short_first_slot_is_merged_only_at_the_same_price():
     assert plan.steps[0].start == at(22, 55) and plan.steps[0].hours == pytest.approx(65 / 60)   # night + night
     plan = make_plan(at(21, 55), BXL, o, FixedTariff(o), [], _flat_load(0.5), fc, soc=30, market_avg=90)
     assert plan.steps[0].hours == pytest.approx(5 / 60)                                          # day, then night
+
+
+# ---------------------------------------------------------------- selling before the sun
+TOMORROW = datetime(2026, 6, 15, tzinfo=BXL)
+
+
+def _shaded_forecast(day_kwh, last=20, month=6):
+    """Raw sine forecast from 06:00 to `last` on 14-16 June, with trees shading the morning (learned)."""
+    raw = {}
+    for d in (14, 15, 16):
+        for h in range(6, last):
+            raw[datetime(2026, month, d, h, tzinfo=BXL).astimezone(timezone.utc)] = math.sin(math.pi * (h + 0.5 - 6) / (last - 6))
+    scale = day_kwh / sum(v for t, v in raw.items() if t.astimezone(BXL).day == 15)
+    shade = ShadeModel()
+    for h in range(6, 11):
+        for _ in range(60):
+            shade.learn(month, h, 0.25, 1.0)
+    return PvForecast({t: v * scale for t, v in raw.items()}, shade, BXL)
+
+
+def _prices(fn, minutes=60, start=datetime(2026, 6, 14, tzinfo=BXL)):
+    out = []
+    for k in range(72 * 60 // minutes):
+        t = start + timedelta(minutes=minutes * k)
+        out.append(PriceSlot(t.astimezone(timezone.utc), (t + timedelta(minutes=minutes)).astimezone(timezone.utc), fn(t)))
+    return out
+
+
+def _day(evening, morning=150, midday=20, other=95):
+    """Hourly market prices (EUR/MWh): evening 18-22 h, morning 6-9 h, cheap midday sun 11-17 h."""
+    return lambda t: evening if 18 <= t.hour < 22 else morning if 6 <= t.hour < 9 else midday if 11 <= t.hour < 17 else other
+
+
+def _sunny_plan(day_kwh=35, evening=210, last=20, prices=None, minutes=60, **opts):
+    """17:00 with the battery at 95 % and a sunny day ahead; returns (options, forecast, plan, sunrise index).
+    The sunrise is the first step tomorrow where the shade-corrected solar covers the house."""
+    o = Options(**opts)
+    pv = _shaded_forecast(day_kwh, last)
+    now = datetime(2026, 6, 14, 17, 0, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, DynamicTariff(o), _prices(prices or _day(evening), minutes), _flat_load(0.45),
+                     pv.kwh, soc=95)
+    sun = next(i for i, s in enumerate(plan.steps) if s.start >= TOMORROW and s.pv_kwh >= s.load_kwh)
+    return o, pv, plan, sun
+
+
+@pytest.mark.parametrize("case", ["sunny", "high reserve", "evening beats the night price"])
+def test_battery_is_sold_down_before_the_shaded_sunrise(case):
+    """Tomorrow's sun fills the battery anyway: what the house does not need until the sun covers
+    it (shade-corrected) is sold beforehand, at the best prices, as far as the settings allow."""
+    opts = {"battery_reserve_soc": 60} if case == "high reserve" else {}
+    o, pv, plan, i = _sunny_plan(evening=330 if case == "evening beats the night price" else 210, **opts)
+    steps, sun = plan.steps, plan.steps[i]
+    before = steps[:i]
+    raw_sun = next(s for s in steps if s.start >= TOMORROW
+                   and pv.kwh(s.start, s.start + timedelta(hours=s.hours), corrected=False) >= s.load_kwh)
+    assert sun.start > raw_sun.start                          # the trees delay the moment the sun takes over
+    sold = [s for s in before if s.action == "discharge"]
+    assert sold and {s.sell for s in sold} == {max(s.sell for s in before)}   # only in the best-paid hours
+    assert min(s.soc_end for s in sold) >= o.battery_reserve_soc - 1e-9       # never below the reserve
+    assert all(s.reserve is None for s in before)                             # (no extreme prices tonight)
+    assert max(s.soc_end for s in steps[i:] if s.start < TOMORROW + timedelta(hours=17)) >= 99   # sun refills it
+    bought = sum(s.import_kwh for s in before)
+    if case == "sunny":
+        assert sun.soc_start <= o.battery_min_soc + 2                        # nothing left that the sun replaces
+        assert bought < 0.25                                                 # the house was covered until then
+    elif case == "high reserve":
+        b = Battery.from_options(o)
+        last = max(j for j, s in enumerate(before) if s.action == "discharge")
+        house = sum(max(s.load_kwh - s.pv_kwh, 0) / b.eta_d for s in steps[last + 1:i]) / (b.capacity_kwh / 100)
+        assert min(s.soc_end for s in sold) == pytest.approx(60, abs=1)       # sold down to the reserve...
+        assert sun.soc_start == pytest.approx(max(o.battery_min_soc, 60 - house), abs=3)   # ...the house used the rest
+        assert bought < 0.25
+    else:
+        b = Battery.from_options(o)
+        night_buy = max(s.buy for s in before if s.start.astimezone(BXL).hour < 6)
+        assert max(s.sell for s in before) * b.eta_d - b.wear_c_kwh > night_buy   # selling beats buying back
+        assert min(s.soc_end for s in sold) == pytest.approx(o.battery_reserve_soc, abs=1)
+        assert bought > 0.5                                  # so the house buys its night energy instead
+
+
+@pytest.mark.parametrize("day_kwh", [12, 25])
+def test_battery_is_kept_when_selling_early_does_not_pay(day_kwh):
+    """12 kWh: the sun will not refill it. 25 kWh with sun until 20 h: the battery only fills late,
+    and the solar it would push out sells tomorrow evening at the same price, without battery losses."""
+    o, _, plan, i = _sunny_plan(day_kwh=day_kwh)
+    sun = plan.steps[i]
+    if day_kwh == 12:
+        assert all(s.action != "discharge" for s in plan.steps[:i])
+        assert sun.soc_start > 50
+    else:
+        assert sun.soc_start > o.battery_min_soc + 5
+        evening = [s for s in plan.steps if TOMORROW + timedelta(hours=18) <= s.start < TOMORROW + timedelta(hours=20)]
+        assert sum(s.export_kwh for s in evening) > 0.2
+
+
+def _evening_peak(t):
+    return {18: 150, 19: 150, 20: 300, 21: 150}.get(t.hour, 20 if 11 <= t.hour < 17 else 95)
+
+
+def _half_hour_peak(t):
+    h = t.hour + t.minute / 60
+    return (300 if 20.5 <= h < 21 else 150) if 18 <= h < 22 else 20 if 11 <= h < 17 else 95
+
+
+def _morning_peak(t):
+    if t.day == 15 and t.hour in (7, 8):
+        return 320
+    return 150 if 18 <= t.hour < 22 else 20 if 11 <= t.hour < 17 else 95
+
+
+@pytest.mark.parametrize("prices,minutes,best", [(_evening_peak, 60, [(14, 20)]),
+                                                 (_half_hour_peak, 15, [(14, 20.5), (14, 20.75)]),
+                                                 (_morning_peak, 60, [(15, 7), (15, 8)])])
+def test_export_waits_for_the_best_prices(prices, minutes, best):
+    """Not everything at the first good price: the best-paid slots get full power first."""
+    o, _, plan, i = _sunny_plan(day_kwh=25, prices=prices, minutes=minutes)
+    b = Battery.from_options(o)
+    full = int(b.max_discharge_kw * minutes / 60 / (b.capacity_kwh / 100)) - 1
+    at = {(s.start.astimezone(BXL).day, s.start.astimezone(BXL).hour + s.start.astimezone(BXL).minute / 60): s
+          for s in plan.steps}
+    top = [at[k] for k in best]
+    for s in top:
+        assert s.action == "discharge" and s.soc_start - s.soc_end >= full, s
+    others = [s for s in plan.steps[:i] if s.action == "discharge" and s not in top]
+    assert all(s.sell < top[0].sell for s in others)
+    if prices is _morning_peak:                          # kept overnight for the better morning price
+        assert not any(s.action == "discharge" for s in plan.steps if s.start < TOMORROW)
+
+
+@pytest.mark.parametrize("limit,early", [(6.0, False), (2.5, True)])
+def test_fixed_sells_early_only_when_tomorrows_surplus_would_be_curtailed(limit, early):
+    """A fixed contract pays the same for export at every hour, so selling early only loses
+    to the battery; unless tomorrow's surplus is more than the export limit lets out."""
+    o = Options(export_limit_kw=limit)
+    now = datetime(2026, 6, 14, 17, 0, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.45), _shaded_forecast(40).kwh, soc=95, market_avg=90)
+    sun = next(s.start for s in plan.steps if s.start >= TOMORROW and s.pv_kwh >= s.load_kwh + 2.0)
+    assert any(s.action == "discharge" and s.start < sun for s in plan.steps) is early
+
+
+# ---------------------------------------------------------------- buying to sell later
+def _arbitrage(evening_market):
+    """Midnight, battery at the reserve, no house load: 9 cheap night hours and an evening price;
+    nothing else makes stored energy worth anything (no value for energy left at the end)."""
+    dyn = DynamicTariff(Options())
+    market = [0] * 9 + [120] * 9 + [evening_market] * 4 + [120] * 2
+    buy = [dyn.buy(None, m) for m in market]
+    sell = [dyn.sell(None, m) for m in market]
+    return optimize(B, hourly(buy, sell, load=0.0), soc0=B.reserve_soc, terminal_c_kwh=0)
+
+
+def _break_even_market():
+    """Evening market price at which a kWh bought at the cheap price and sold in the evening breaks
+    even after charging and discharging losses and battery wear."""
+    dyn = DynamicTariff(Options())
+    per_dc_kwh = dyn.buy(None, 0) / B.eta_c + B.wear_c_kwh          # bought, stored, and worn
+    sell = per_dc_kwh / B.eta_d                                        # what the evening must pay per kWh sold
+    return (sell - dyn.sell(None, 0)) / Options().dynamic_sell_mult
+
+
+@pytest.mark.parametrize("factor", [1.3, 0.8])
+def test_battery_is_filled_completely_when_selling_it_later_pays(factor):
+    steps = _arbitrage(_break_even_market() * factor)
+    if factor > 1:
+        assert max(s.soc_end for s in steps[:9]) >= 99                  # full before the evening
+        assert all(s.import_kwh / s.hours <= B.import_limit_kw for s in steps)   # no extra capacity peak for it
+        assert sum(s.export_kwh for s in steps[18:22]) > 0.95 * B.kwh(100 - B.reserve_soc) * B.eta_d   # sold
+        assert steps[21].soc_end <= B.reserve_soc + 1
+    else:
+        assert all(s.action != "charge" for s in steps)                 # losses and wear eat the spread
+
+
+# ---------------------------------------------------------------- price spikes and the capacity tariff
+MARCH = datetime(2026, 3, 14, tzinfo=BXL)
+
+
+def _spike_plan(prices, soc=30, at=10, month_peak_kw=0.0, **opts):
+    """A dull March day (winter: no export normally), no solar; market prices from `prices(local time)`."""
+    o = Options(**opts)
+    now = datetime(2026, 3, 14, at, 0, tzinfo=BXL).astimezone(timezone.utc)
+    return o, make_plan(now, BXL, o, DynamicTariff(o), _prices(prices, start=MARCH), _flat_load(0.45),
+                        lambda a, z: 0.0, soc=soc, month_peak_kw=month_peak_kw)
+
+
+def _hour(plan, h):
+    return next(s for s in plan.steps if s.start.astimezone(BXL).hour == h and s.start.astimezone(BXL).day == 14)
+
+
+def _full_power_kw(o, house=0.45):
+    b = Battery.from_options(o)
+    return house + b.max_charge_kw / b.eta_c
+
+
+def test_negative_price_charges_at_full_power_when_the_month_peak_is_already_higher():
+    """This month already has a 3.6 kW quarter-hour: charging up to it costs nothing extra."""
+    o, plan = _spike_plan(lambda t: -200 if (t.day == 14 and t.hour in (12, 13)) else 100, month_peak_kw=3.6)
+    for h in (12, 13):
+        assert _hour(plan, h).import_kwh == pytest.approx(_full_power_kw(o), abs=0.05)
+    assert plan.boost and plan.boost["peak_cost_eur"] == 0
+    assert max(s.import_kwh / s.hours for s in plan.steps) <= 3.6
+
+
+def test_negative_price_stays_under_the_free_peak_when_crossing_costs_more():
+    """-200 EUR/MWh pays about 0.2 EUR/kWh: not enough for a new 3.5 kW peak (about 4 EUR)."""
+    o, plan = _spike_plan(lambda t: -200 if (t.day == 14 and t.hour in (12, 13)) else 100, month_peak_kw=1.8)
+    assert plan.boost is None
+    assert _hour(plan, 12).action == "charge"
+    assert max(s.import_kwh / s.hours for s in plan.steps) <= o.capacity_min_kw + 1e-9
+
+
+def test_extreme_negative_price_charges_as_fast_as_possible_above_the_limit():
+    o, plan = _spike_plan(lambda t: -8000 if (t.day == 14 and t.hour == 13) else 100)
+    assert _hour(plan, 13).import_kwh == pytest.approx(_full_power_kw(o), abs=0.05)
+    assert plan.boost and plan.boost["gain_eur"] > plan.boost["peak_cost_eur"] > 0
+
+
+def test_the_higher_peak_is_paid_once_however_often_it_is_used():
+    o, plan = _spike_plan(lambda t: -8000 if (t.day == 14 and t.hour in (11, 15)) else 100, soc=15)
+    for h in (11, 15):
+        assert _hour(plan, h).import_kwh > o.import_limit_kw + 0.5
+    once = (plan.boost["limit_kw"] - o.capacity_min_kw) * o.capacity_tariff_eur_kw_year / 12
+    assert plan.boost["peak_cost_eur"] == pytest.approx(once, abs=0.01)
+
+
+def test_before_an_extreme_price_the_battery_is_charged_as_fast_as_possible_and_sold_below_the_reserve():
+    o, plan = _spike_plan(lambda t: 8000 if (t.day == 14 and t.hour in (12, 13)) else 100, soc=12, at=11)
+    assert plan.winter                                                   # export is allowed anyway
+    assert _hour(plan, 11).import_kwh == pytest.approx(_full_power_kw(o), abs=0.05)
+    spike = [_hour(plan, h) for h in (12, 13)]                           # (either hour pays the same)
+    assert sum(s.import_kwh for s in spike) == 0                         # the house is not bought for at 8000
+    assert sum(s.export_kwh for s in spike) > 1.5                        # the rest is sold
+    assert spike[-1].soc_end == pytest.approx(o.battery_min_soc, abs=1)  # sold below the 35 % reserve
+    assert any(s.reserve == o.battery_min_soc for s in spike)            # and the step tells the controller
+
+
+def test_without_a_capacity_tariff_the_import_limit_is_never_crossed():
+    """Then the import limit is the user's own limit (e.g. a fuse), not a cost."""
+    o, plan = _spike_plan(lambda t: 8000 if (t.day == 14 and t.hour in (12, 13)) else 100, soc=12, at=11,
+                          capacity_tariff_eur_kw_year=0)
+    assert plan.boost is None
+    assert all(s.import_kwh / s.hours <= o.import_limit_kw for s in plan.steps)
+
+
+def test_winter_exports_only_when_buying_back_later_costs_less():
+    """300 EUR/MWh in the evening is not enough on a dull day: the house would buy it back at
+    least as dear. An extreme price is."""
+    _, plan = _spike_plan(lambda t: 300 if 18 <= t.hour < 22 else 150 if 6 <= t.hour < 9 else 95, soc=90)
+    assert plan.winter and all(s.action != "discharge" for s in plan.steps)
+    _, plan = _spike_plan(lambda t: 4000 if (t.day == 14 and t.hour == 19) else 95, soc=90)
+    assert plan.winter and _hour(plan, 19).action == "discharge"

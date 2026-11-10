@@ -53,7 +53,7 @@ class Options:
     weekend_is_night: bool = True
     # grid
     import_limit_kw: float = 2.3
-    export_limit_kw: float = 6.0
+    export_limit_kw: float = 5.0
     capacity_tariff_eur_kw_year: float = 52.37
     capacity_min_kw: float = 2.5
     # battery

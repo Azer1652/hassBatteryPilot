@@ -55,10 +55,10 @@ configuration:
     description: "On in Flanders: the night rate applies all weekend."
   import_limit_kw:
     name: "Grid import limit (kW)"
-    description: "Highest quarter-hour average import Battery Pilot aims for (capacity tariff). Grid charging stays under it."
+    description: "Highest quarter-hour average import Battery Pilot aims for (capacity tariff). Grid charging stays under it, unless a price pays more than the higher capacity peak costs."
   export_limit_kw:
     name: "Normal export limit (kW)"
-    description: "Your inverter's export limit, restored after export was blocked at a negative price."
+    description: "The most your installation may export (Fluvius: 5 kW on a single-phase connection). The plan never counts on more, and it is restored after export was blocked at a negative price."
   capacity_tariff_eur_kw_year:
     name: "Capacity tariff (EUR per kW per year, incl. VAT)"
     description: "Fluvius 2026: about 52 EUR. Set 0 if your grid has no capacity tariff."
@@ -73,7 +73,7 @@ configuration:
     description: "The inverter's own discharge floor; the battery is never planned below it."
   battery_reserve_soc:
     name: "Battery reserve for export (%)"
-    description: "Battery Pilot never exports battery energy below this SOC; the house can still use the battery down to the minimum."
+    description: "Battery Pilot does not export battery energy below this SOC, except at a price so high that buying it back later still pays; the house can still use the battery down to the minimum."
   battery_voltage:
     name: "Battery nominal voltage (V)"
     description: "Used to turn amps into kW when there is no voltage sensor."
@@ -94,7 +94,7 @@ configuration:
     description: "Extra SOC on top of what the day needs on winter days. Raise it if the battery runs empty before night on cloudy days."
   winter_solar_threshold_kwh:
     name: "Winter day when solar is below (kWh)"
-    description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day and no battery energy is exported."
+    description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day and no battery energy is exported (except at a price so high that buying it back later costs less)."
   winter_mode:
     name: "Winter strategy"
     description: "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin), no export. peaks_only: keep only enough for your usual quarter-hour peaks (cheaper when night power is not much cheaper than day power)."

@@ -16,17 +16,27 @@ forecasts, and adds the peak-shaving rule from the original playbook: on a
 winter day (corrected solar forecast below the threshold) the battery must be
 at the night target SOC when the night window ends, so it can carry the
 house through the day and keep the quarter-hour peaks low. In winter the
-battery never exports. Under a fixed day/night contract buying at night to
+battery does not export (except in extreme slots, below). Under a fixed day/night contract buying at night to
 sell or use by day does not pay (losses + wear exceed the spread), so the plan
 only grid-charges for that winter target. Under a dynamic contract it also
 charges in cheap hours and exports in expensive ones when the spread pays.
+
+Two rules give way when the money clearly outweighs them:
+
+* the import limit: a second plan may charge above it when what it earns beats
+  the higher capacity peak, priced the Fluvius way (the month's highest
+  quarter-hour, at least the billed minimum, counts once in the 12-month
+  average);
+* the winter no-export rule and the battery reserve: in "extreme" slots, where
+  selling pays even if the energy must be bought back at the dearest later
+  price, the battery may be sold down to its minimum.
 """
 from __future__ import annotations
 
 import math
 import statistics
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -52,6 +62,12 @@ CHARGE_HEADROOM_KW = 0.3
 # miss costs the full amount; this is how much the plan pays to avoid the risk on one day.
 PEAK_RISK = 0.5
 PEAK_MARGIN = 1.3   # real peaks vary around the learned typical one
+# Charging above the import limit: tried in steps of this size, and only adopted when it beats the
+# normal plan by this much after the capacity cost (forecasts and prices are not exact).
+BOOST_STEP_KW = 0.5
+BOOST_MIN_GAIN_C = 25.0
+# A slot is "extreme" when selling a stored kWh beats buying it back at the dearest later price by this.
+EXTREME_MARGIN_C = 1.0
 
 
 @dataclass
@@ -83,7 +99,10 @@ class Step:
     pv_kwh: float
     buy: float
     sell: float
-    cost_c: float
+    cost_c: float                    # incl. capacity_c
+    capacity_c: float = 0.0          # the part of cost_c for import above the import limit
+    limit_kw: float | None = None    # import level charging may follow (None: the import limit setting)
+    reserve: float | None = None     # export floor (None: the battery reserve setting)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -99,6 +118,7 @@ class Plan:
     targets: list[dict] = field(default_factory=list)   # [{"at": iso, "soc": n, "solar_kwh": x}]
     winter: bool = False
     allow_export: bool = True
+    boost: dict | None = None        # charging above the import limit: {limit_kw, from, to, peak_cost_eur, gain_eur}
 
     @property
     def now(self) -> Step | None:
@@ -112,7 +132,7 @@ class Plan:
 
     def to_json(self) -> dict:
         return {"created": self.created.isoformat(), "contract": self.contract, "winter": self.winter,
-                "allow_export": self.allow_export, "targets": self.targets,
+                "allow_export": self.allow_export, "targets": self.targets, "boost": self.boost,
                 "steps": [s.to_json() for s in self.steps],
                 "cost_eur": round(sum(s.cost_c for s in self.steps) / 100, 2)}
 
@@ -134,10 +154,11 @@ def _slot_costs(b: Battery, s: Slot, e: float, dmin: int, dmax: int, curtail_neg
         if curtail_negative and s.sell < 0:
             exp = 0.0
         cost = imp * s.buy - revenue + dis * b.wear_c_kwh
+        cap = 0.0
         over = imp / s.hours - b.import_limit_kw
         if over > 1e-9:
-            cost += over * b.capacity_c_per_kw_month
-        out[d] = (cost, imp, exp)
+            cap = over * b.capacity_c_per_kw_month
+        out[d] = (cost + cap, imp, exp, cap)
     return out
 
 
@@ -150,8 +171,11 @@ def _self_delta(b: Battery, s: Slot, e: float) -> float:
 
 def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, float] | None = None,
              allow_export: bool = True, curtail_negative: bool = False,
-             terminal_c_kwh: float = 0.0) -> list[Step]:
-    """Cheapest sequence of actions. `targets[i]` = minimum SOC at the end of slot i."""
+             terminal_c_kwh: float = 0.0, extreme: frozenset[int] = frozenset()) -> list[Step]:
+    """Cheapest sequence of actions. `targets[i]` = minimum SOC at the end of slot i.
+
+    In the `extreme` slots the battery may be exported even when `allow_export` is False,
+    and down to its minimum instead of the reserve."""
     if not slots:
         return []
     targets = targets or {}
@@ -200,8 +224,9 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
                 v = table[d][0] + nxt[s + d] + act + risk
                 if v < best - 1e-9:
                     best, best_d = v, d
-            if allow_export:
-                for d in range(max(lo, sres - s), min(ds, 0)):  # discharge / export, not below reserve
+            if allow_export or t in extreme:
+                floor = smin if t in extreme else sres
+                for d in range(max(lo, floor - s), min(ds, 0)):  # discharge / export, not below the floor
                     v = table[d][0] + nxt[s + d] + act + risk
                     if v < best - 1e-9:
                         best, best_d = v, d
@@ -217,9 +242,10 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         hi = min(100 - s, int(b.max_charge_kw * sl.hours / e + 1e-9))
         ds = int(round(min(max(_self_delta(b, sl, e), lo), hi)))
         action = "self_use" if d == ds else ("charge" if d > ds else "discharge")
-        cost, imp, exp = costs[t][d]
+        cost, imp, exp, cap = costs[t][d]
+        reserve = b.min_soc if (action == "discharge" and t in extreme and s + d < b.reserve_soc) else None
         steps.append(Step(sl.start, sl.hours, action, s, s + d, imp, exp, sl.load_kwh, sl.pv_kwh,
-                          sl.buy, sl.sell, cost))
+                          sl.buy, sl.sell, cost, cap, None, reserve))
         s += d
     return steps
 
@@ -302,8 +328,10 @@ def night_target(b: Battery, o: Options, day: list[tuple[float, float, float]]) 
 def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slots: list[PriceSlot],
               load_kwh: LoadFn, pv_kwh: PvFn, soc: float, market_avg: float | None = None,
               curtail_negative: bool = False, horizon_h: int = 36,
-              forecast_until: datetime | None = None, peak_kw: LoadFn | None = None) -> Plan:
-    """`forecast_until`: end of the solar forecast; nights after it get no winter target."""
+              forecast_until: datetime | None = None, peak_kw: LoadFn | None = None,
+              month_peak_kw: float = 0.0) -> Plan:
+    """`forecast_until`: end of the solar forecast; nights after it get no winter target.
+    `month_peak_kw`: the highest quarter-hour import so far this month (for the capacity cost)."""
     b = Battery.from_options(o)
     end = now + timedelta(hours=horizon_h)
     minutes = 60
@@ -371,8 +399,105 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
     buys = [s.buy for s in slots] or [0.0]
     terminal = max(min(statistics.median(buys), statistics.fmean(buys)) * b.eta_d - b.wear_c_kwh, 0.0)
     allow_export = not (winter and o.winter_mode == "full_day")
-    steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal)
-    return Plan(steps, now, tariff.kind, target_info, winter, allow_export)
+    extreme = extreme_slots(b, slots)
+    steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal, extreme)
+    boost = None
+    if o.capacity_tariff_eur_kw_year > 0 and steps:
+        steps, boost = _boost(b, o, slots, soc, targets, allow_export, curtail_negative, terminal, extreme,
+                              steps, now, tz, month_peak_kw)
+    return Plan(steps, now, tariff.kind, target_info, winter, allow_export, boost)
+
+
+def extreme_slots(b: Battery, slots: list[Slot]) -> frozenset[int]:
+    """Slots where selling a stored kWh pays even if it has to be bought back at the dearest later price."""
+    out = set()
+    overall = max(s.buy for s in slots) if slots else 0.0
+    later = None
+    for t in range(len(slots) - 1, -1, -1):
+        ref = later if later is not None else overall
+        if slots[t].sell * b.eta_d - b.wear_c_kwh > ref / b.eta_c + EXTREME_MARGIN_C:
+            out.add(t)
+        later = slots[t].buy if later is None else max(later, slots[t].buy)
+    return frozenset(out)
+
+
+# ---------------------------------------------------------------- above the import limit
+def _peak_cost_c(b: Battery, steps: list[Step], tz: ZoneInfo, month_now: str, free_now: float,
+                 free_later: float) -> float:
+    """Capacity cost of a plan, the way it is billed: per month, the highest quarter-hour above what
+    that month already costs (charging may run up to the limit the controller follows)."""
+    peaks: dict[str, float] = {}
+    for s in steps:
+        kw = s.import_kwh / s.hours
+        if s.action == "charge":
+            kw = max(kw, s.limit_kw if s.limit_kw is not None else b.import_limit_kw)
+        key = s.start.astimezone(tz).strftime("%Y-%m")
+        peaks[key] = max(peaks.get(key, 0.0), kw)
+    return sum(max(kw - (free_now if key == month_now else free_later), 0.0)
+               for key, kw in peaks.items()) * b.capacity_c_per_kw_month
+
+
+def _money_c(b: Battery, steps: list[Step], terminal_c_kwh: float) -> float:
+    """What a plan costs in money, without the capacity cost: energy, wear, minus the energy left."""
+    left = max(steps[-1].soc_end - b.min_soc, 0.0) * b.capacity_kwh / 100
+    return sum(s.cost_c - s.capacity_c for s in steps) - terminal_c_kwh * left
+
+
+def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict, allow_export: bool,
+           curtail_negative: bool, terminal: float, extreme: frozenset[int], normal: list[Step],
+           now: datetime, tz: ZoneInfo, month_peak_kw: float) -> tuple[list[Step], dict | None]:
+    """Try charging above the import limit; keep it only when it beats the normal plan after the capacity cost."""
+    free_now = max(month_peak_kw, o.capacity_min_kw)
+    free_later = o.capacity_min_kw
+    month_now = now.astimezone(tz).strftime("%Y-%m")
+    rate = b.capacity_c_per_kw_month
+    limit = b.import_limit_kw
+    top = b.max_charge_kw / b.eta_c + max(s.load_kwh / s.hours for s in slots) + CHARGE_HEADROOM_KW
+    levels = {round(limit + BOOST_STEP_KW * k, 3) for k in range(1, int((top - limit) / BOOST_STEP_KW) + 2)}
+    if free_now > limit + 0.05:
+        levels.add(round(free_now, 3))
+    # Upper bound of what one more kWh charged in a slot can be worth later (sold, or not bought).
+    best = max(max(s.buy for s in slots), max(s.sell for s in slots), terminal / b.eta_d)
+    worth = b.eta_c * b.eta_d * best - b.eta_c * b.wear_c_kwh
+    # Full charging power in the slots where it is worth most: as fast as the battery can.
+    for s in sorted(slots, key=lambda s: s.buy)[:3]:
+        full = s.load_kwh / s.hours + b.max_charge_kw / b.eta_c + CHARGE_HEADROOM_KW
+        if full > limit + 0.05:
+            levels.add(round(full, 2))
+    hours = sorted(((worth - s.buy, s.hours) for s in slots if worth - s.buy > 0), reverse=True)
+    room_kwh = b.capacity_kwh / b.eta_c
+
+    score_normal = _money_c(b, normal, terminal) + _peak_cost_c(b, normal, tz, month_now, free_now, free_later)
+    best_plan, best_score, best_level = normal, score_normal, None
+    for level in sorted(levels) if hours else []:
+        extra_kw = min(level - limit, b.max_charge_kw / b.eta_c)
+        bound, left = 0.0, room_kwh
+        for g, h in hours:
+            e = min(extra_kw * h, left)
+            bound, left = bound + g * e, left - e
+            if left <= 0:
+                break
+        if bound - max(level - free_now, 0.0) * rate < BOOST_MIN_GAIN_C:
+            continue
+        steps = optimize(replace(b, import_limit_kw=level), slots, soc, targets, allow_export, curtail_negative,
+                         terminal, extreme)
+        for st in steps:
+            st.limit_kw = level
+        score = _money_c(b, steps, terminal) + _peak_cost_c(b, steps, tz, month_now, free_now, free_later)
+        if score < best_score - 1e-9:
+            best_plan, best_score, best_level = steps, score, level
+    if best_level is None or best_score > score_normal - BOOST_MIN_GAIN_C:
+        return normal, None
+    cap = limit - CHARGE_HEADROOM_KW
+    boosted = [s for s in best_plan if s.action == "charge" and s.import_kwh / s.hours > cap + 0.05]
+    if not boosted:
+        return normal, None
+    peak_cost = (_peak_cost_c(b, best_plan, tz, month_now, free_now, free_later)
+                 - _peak_cost_c(b, normal, tz, month_now, free_now, free_later))
+    gain = score_normal - best_score + peak_cost
+    return best_plan, {"limit_kw": best_level, "from": boosted[0].start.isoformat(),
+                       "to": (boosted[-1].start + timedelta(hours=boosted[-1].hours)).isoformat(),
+                       "peak_cost_eur": round(peak_cost / 100, 2), "gain_eur": round(gain / 100, 2)}
 
 
 def in_night_window(t_local: datetime, o: Options) -> bool:
@@ -381,4 +506,4 @@ def in_night_window(t_local: datetime, o: Options) -> bool:
 
 
 __all__ = ["Slot", "Step", "Plan", "optimize", "make_plan", "night_target", "night_windows",
-           "slot_grid", "market_at", "is_night", "in_night_window"]
+           "slot_grid", "market_at", "is_night", "in_night_window", "extreme_slots"]

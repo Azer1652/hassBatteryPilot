@@ -82,6 +82,7 @@ class App:
         self.curtail_on = False
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
         self.peak_warned = ""
+        self.boost_seen = ""              # the boost window last announced in the events
         self.over_since: datetime | None = None
         self.events: list[dict] = []
         self._modes: dict[str, int] = {}  # inverter mode per tick in the current quarter
@@ -300,14 +301,16 @@ class App:
             self.event(f"Setting the export limit failed: {e}", logging.ERROR)
 
     async def _peak_warning(self, now: datetime, projection: float):
-        if projection > self.o.import_limit_kw + 0.3:
+        step = self.plan.step_at(now) if self.plan else None
+        limit = step.limit_kw if step and step.limit_kw is not None else self.o.import_limit_kw   # a planned boost
+        if projection > limit + 0.3:
             self.over_since = self.over_since or now
             q = self.meter.current.isoformat() if self.meter.current else ""
             if now - self.over_since >= timedelta(minutes=2) and self.peak_warned != q:
                 self.peak_warned = q
                 r = self.readings
                 await self.alert("Capacity peak warning",
-                                 f"This quarter-hour is heading for {projection:.2f} kW (limit {self.o.import_limit_kw:g} kW;"
+                                 f"This quarter-hour is heading for {projection:.2f} kW (limit {limit:g} kW;"
                                  f" battery {r.soc:.0f} %, house {r.load_kw:.2f} kW).", key=None, phone=True)
         else:
             self.over_since = None
@@ -393,8 +396,18 @@ class App:
         self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
-                              peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz))
+                              peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz),
+                              month_peak_kw=self.peaks.month_peak(now, self.tz))
         self._log_plan(now)
+        boost = self.plan.boost
+        if boost and boost["from"] != self.boost_seen:
+            self.boost_seen = boost["from"]
+            a = datetime.fromisoformat(boost["from"]).astimezone(self.tz)
+            z = datetime.fromisoformat(boost["to"]).astimezone(self.tz)
+            why = (f"it earns about €{boost['gain_eur']:.2f}, more than the €{boost['peak_cost_eur']:.2f} the higher "
+                   "capacity peak costs" if boost["peak_cost_eur"] > 0 else
+                   f"this month already has a peak that high, so it costs nothing extra (earns about €{boost['gain_eur']:.2f})")
+            self.event(f"Plan: charging above the import limit, up to {boost['limit_kw']:g} kW, {a:%H:%M}–{z:%H:%M}: {why}.")
 
     def _log_plan(self, now: datetime):
         """Keep what this plan predicts: for the day (the first plan after the nightly learning)
@@ -453,10 +466,11 @@ class App:
             if self.price_slots or self.o.contract == "fixed":
                 # The replay is CPU work: run it in a thread on copies, apply the results here.
                 soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
+                peak0 = {k: self.comparison.month(y.strftime("%Y-%m"))["replay"][k]["peak_kw"] for k in KINDS}
                 block = self.blocks_negative_export
                 results = await asyncio.get_running_loop().run_in_executor(
                     None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive),
-                    soc0, block)
+                    soc0, block, peak0)
                 self._apply_replay(y, results, block)
             self.comparison.prune()
         # Plan again with what was just learned; this plan is also the day-ahead prediction.
@@ -474,7 +488,7 @@ class App:
             self.event(f"Storing the history of {day} failed: {e}", logging.WARNING)
 
     def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict,
-                block_negative: bool = False):
+                block_negative: bool = False, peak0: dict | None = None):
         archive = {datetime.fromisoformat(k): v for k, v in forecast_archive.items()}
         pv_fc = PvForecast(archive, self.shade, self.tz)
         avg = self.market_avg_month(start)
@@ -486,7 +500,7 @@ class App:
             if s0 is None:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
             res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
-                             block_negative=block_negative)
+                             block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0))
             if res is None:
                 return None
             results[kind] = res
@@ -591,6 +605,7 @@ class App:
             "soc_target": round(step.soc_end, 1) if step else None,
             "reason": self.decision.reason, "winter": p.winter if p else None,
             "plan_cost_eur": p.to_json()["cost_eur"] if p else None,
+            "boost_kw": p.boost["limit_kw"] if p and p.boost else None,
             "next_hours": [{"start": s.start.astimezone(self.tz).strftime("%H:%M"), "action": s.action,
                             "soc": round(s.soc_end)} for s in (p.steps if p else [])
                            if s.start < now + timedelta(hours=24)][:96],

@@ -31,7 +31,7 @@ class Battery:
     eta_d: float = 0.9 ** 0.5
     wear_c_kwh: float = 2.0
     import_limit_kw: float = 2.3
-    export_limit_kw: float = 6.0
+    export_limit_kw: float = 5.0
     capacity_c_per_kw_month: float = 52.37 / 12 * 100
 
     @classmethod
@@ -55,8 +55,12 @@ class StepResult:
 
 
 def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float, pv_kwh: float,
-         hours: float, curtail: bool = False, slot_left_h: float | None = None) -> StepResult:
+         hours: float, curtail: bool = False, slot_left_h: float | None = None,
+         limit_kw: float | None = None, reserve: float | None = None) -> StepResult:
     """One step of `hours` with this command. `curtail`: export is blocked (sell price < 0).
+
+    `limit_kw` / `reserve`: the plan step's import level for charging and export floor, when
+    the plan crosses the import limit or sells below the reserve (default: the settings).
 
     `slot_left_h`: time left in the plan slot including this step. Charging is then paced
     to reach the target at the end of the slot, as the controller does, and held at the
@@ -69,7 +73,9 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
     charge_dc = discharge_dc = 0.0
 
     # Charge power that keeps grid import at the limit, never above the battery maximum.
-    follow_kw = min(b.max_charge_kw / b.eta_c, max(b.import_limit_kw - net / hours, 0.0))
+    limit = b.import_limit_kw if limit_kw is None else limit_kw
+    floor_soc = b.reserve_soc if reserve is None else reserve
+    follow_kw = min(b.max_charge_kw / b.eta_c, max(limit - net / hours, 0.0))
     stop = target_soc + (HOLD_OVER if slot_left_h else 0.0)
     charging = action == "charge" and soc < stop and follow_kw * b.eta_c >= MIN_CHARGE_DC_KW
     if charging:
@@ -80,8 +86,8 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
         charge_dc = min(follow_kw * hours * b.eta_c, want, b.kwh(stop - soc), room)
         if net < 0:   # solar surplus goes in anyway, as in self-use
             charge_dc = max(charge_dc, min(-net * b.eta_c, room, b.max_charge_kw * hours))
-    elif action == "discharge" and soc > max(target_soc, b.reserve_soc):
-        floor = max(target_soc, b.reserve_soc)
+    elif action == "discharge" and soc > max(target_soc, floor_soc):
+        floor = max(target_soc, floor_soc)
         discharge_dc = min(b.max_discharge_kw * hours, b.kwh(soc - floor))
         if net > 0:   # the house deficit also comes out of the battery, down to the minimum
             discharge_dc = max(discharge_dc, min(net / b.eta_d, avail, b.max_discharge_kw * hours))

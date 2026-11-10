@@ -87,3 +87,24 @@ def test_discharge_respects_the_reserve():
 def test_no_plan_means_self_use():
     assert decide(None, rd(), OPTS, "charge", "01:00:00", 30, True).command == "self_use"
     assert decide(None, rd(), OPTS, "self_use", "", 0, True).command == "none"
+
+
+def test_a_paid_for_higher_peak_is_followed_instead_of_the_limit():
+    """The plan decided a price pays for a higher capacity peak: charge up to that, pause above it."""
+    boost = step("charge", 90)
+    boost.limit_kw = 3.45
+    d = decide(boost, rd(load=0.5), OPTS, "self_use", "", 0, True)
+    assert d.command == "charge" and d.amps == 50              # (3.45 - 0.5) kW is more than the 50 A maximum
+    assert follow_amps(rd(load=1.2), OPTS, 3.45) == 40         # (3.45 - 1.2) / 51.2 / 1.03 = 42.7 A
+    d = decide(boost, rd(load=2.0, imp=3.0, proj=3.0), OPTS, "charge", "01:00:00", 50, True)
+    assert d.command != "self_use"                             # 3.0 kW is fine under 3.45
+    d = decide(boost, rd(load=3.3, imp=3.7, proj=3.7), OPTS, "charge", "01:00:00", 50, True)
+    assert d.command == "self_use" and "house load too high" in d.reason
+
+
+def test_an_extreme_price_step_discharges_below_the_reserve():
+    s = step("discharge", 10)
+    s.reserve = 10
+    d = decide(s, rd(soc=30), OPTS, "self_use", "", 0, True)
+    assert d.command == "discharge" and "10" in d.reason
+    assert decide(step("discharge", 10), rd(soc=30), OPTS, "self_use", "", 0, True).command == "none"   # normally not

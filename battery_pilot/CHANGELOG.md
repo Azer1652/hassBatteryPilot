@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.2.0
+
+- **Price spikes earn money.** At a very low or very high price the battery now charges
+  above the import limit, as fast as it takes, when that earns more than the higher
+  capacity peak costs. The cost is worked out the way Fluvius bills it: the month's
+  highest quarter-hour, at least the 2.5 kW minimum, counts once in the 12-month average.
+  A peak this month already has costs nothing extra. Without a capacity tariff the import
+  limit is never crossed.
+- At a price so high that buying the energy back later costs less, the battery is sold
+  below the reserve, down to its minimum, and also on a dull winter day (which otherwise
+  still never exports).
+- The plan card says when the plan does either, and why. A planned higher peak no longer
+  triggers the peak warning; the plan sensor has a `boost_kw` attribute.
+- The nightly fixed-vs-dynamic replay does the same, so the comparison counts these gains
+  and the higher peaks.
+- *Normal export limit* now defaults to 5 kW, the Fluvius limit for a single-phase
+  connection. **An existing installation keeps its saved value: check it on the
+  Configuration tab**, because it is what Battery Pilot restores on the inverter after
+  blocking export at a negative price.
+- Tests confirm that the battery is sold down before a sunny day that fills it anyway,
+  in the best-paid hours, keeping what the house needs until the shade-corrected sun covers
+  it.
+
 ## 2.1.0
 
 - **Planned vs actual.** A new card on the page shows, day by day, what the plan

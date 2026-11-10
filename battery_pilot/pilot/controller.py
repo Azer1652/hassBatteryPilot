@@ -4,11 +4,13 @@ Pure function, so every rule can be tested without Home Assistant:
 
 * charge    - grid-charge towards the step's SOC, spread over the rest of the
               slot, never above the current that keeps grid import at the
-              import limit (house load is followed live); pause when the
+              import limit, or at the step's higher limit when the plan pays for
+              a higher peak (house load is followed live); pause when the
               quarter-hour heads over the limit (the old playbook's rule);
               once the SOC is reached, hold at the minimum current until the
               slot ends (at most HOLD_OVER points above the target);
-* discharge - discharge towards the step's SOC, never below the reserve;
+* discharge - discharge towards the step's SOC, never below the reserve (or the
+              step's own floor, when the plan sells below it at an extreme price);
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -49,10 +51,11 @@ class Decision:
     reason: str = ""
 
 
-def follow_amps(r: Readings, o: Options) -> int:
+def follow_amps(r: Readings, o: Options, limit_kw: float | None = None) -> int:
     """Charge current that keeps grid import at the limit with the current house load."""
     v = r.voltage if r.voltage > 40 else o.battery_voltage
-    a = (o.import_limit_kw - r.load_kw + r.pv_kw) * 1000 / v / AC_DC
+    limit = o.import_limit_kw if limit_kw is None else limit_kw
+    a = (limit - r.load_kw + r.pv_kw) * 1000 / v / AC_DC
     return int(max(min((a // STEP_A) * STEP_A, o.max_charge_current_a), 0))
 
 
@@ -80,27 +83,30 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
             return Decision("self_use", reason="no plan")
         return Decision("none", reason="no plan")
 
+    # The plan may charge above the import limit (when that pays) or sell below the reserve
+    # (at an extreme price); the step says so.
+    limit = step.limit_kw if step.limit_kw is not None else o.import_limit_kw
     if step.action == "charge" and r.soc < step.soc_end + HOLD_OVER:
-        follow = follow_amps(r, o)
+        follow = follow_amps(r, o, limit)
         # Paced to reach the target at the end of the slot; once there, held at the minimum
         # current so the battery does not drain again before the slot ends.
         paced = paced_amps(step, r, o, up=True) if r.soc < step.soc_end else MIN_A
         want = min(follow, paced)
         if mode == "charge":
-            if r.projection_kw > o.import_limit_kw + 0.1 or follow < MIN_A:
+            if r.projection_kw > limit + 0.1 or follow < MIN_A:
                 return Decision("self_use", reason="house load too high: battery helps instead")
             if slot_hour != hour:
                 return Decision("charge", want, "renew the hourly charge slot")
             if abs(want - amps_now) >= 10:
                 return Decision("current", want, "follow house load")
             return Decision("none", reason="charging")
-        if follow >= START_A and r.projection_kw < o.import_limit_kw - 0.2:
+        if follow >= START_A and r.projection_kw < limit - 0.2:
             return Decision("charge", want, f"plan: charge to {step.soc_end:.0f} %")
         if mode != "self_use":
             return Decision("self_use", reason="waiting for room under the import limit")
         return Decision("none", reason="waiting for room under the import limit")
 
-    floor = max(step.soc_end, o.battery_reserve_soc)
+    floor = max(step.soc_end, step.reserve if step.reserve is not None else o.battery_reserve_soc)
     if step.action == "discharge" and r.soc > floor:
         want = paced_amps(step, r, o, up=False)
         if mode != "discharge" or slot_hour != hour:

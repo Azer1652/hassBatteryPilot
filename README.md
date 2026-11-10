@@ -23,6 +23,8 @@ level. The dull day ahead means the battery is filled by the end of the night.*
   forecast with it.
 - **Shows planned vs actual**, day by day: the battery level and solar the plan expected
   against what really happened.
+- **Earns from price spikes**: charges above the import limit, or sells below the reserve,
+  when that clearly pays more than the higher capacity peak or buying the energy back.
 - **Compares fixed and dynamic contracts** every month, on your measured usage and
   with the battery used the best way for each contract.
 - **Alerts your phone**: capacity peak warnings, a monthly verdict, reminders before

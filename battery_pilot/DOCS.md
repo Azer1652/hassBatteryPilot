@@ -20,7 +20,8 @@ What it does:
   so the battery can cover a cooking peak.
 - **Handles winter.** On a dull day ahead (corrected solar below the threshold), the
   battery is grid-charged during the night to carry the house through the day. In
-  winter no battery energy is exported.
+  winter no battery energy is exported, except at a price so high that buying it back
+  later costs less.
 - **Learns your tree shade.** It compares what your panels deliver with the forecast
   for every month and hour of the day. Low winter sun behind trees gets its own
   correction; summer noon keeps its own.
@@ -68,14 +69,16 @@ Home Assistant once and uninstall the Battery Playbook app.
 
 | Situation | What the battery does |
 | --- | --- |
-| Dull day ahead (winter), strategy `full_day` | Charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin, but never more than the night window can charge under the import limit. No battery export. |
+| Dull day ahead (winter), strategy `full_day` | Charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin, but never more than the night window can charge under the import limit. No battery export, except at a price so high that buying the energy back later costs less. |
 | Dull day ahead (winter), strategy `peaks_only` | Only enough charge to cover your usual quarter-hour peaks (cooking, kettle) under the import limit, plus whatever the prices make worth it. |
 | Any day | The battery keeps enough energy for the quarter-hour peaks Battery Pilot has learned for each weekday and hour, topping up shortly before if needed. |
 | Sunny day ahead | No grid charging: the sun fills the battery. |
+| Sunny day ahead that fills the battery anyway | What the house won't need before the sun covers it (shade-corrected) is sold beforehand, when the room is worth more than the sale. On a dynamic contract it sells in the best-paid hours or quarter-hours first, at full power, never below *Battery reserve for export*, and even buys the house's night energy back when the evening price beats it. On a fixed contract the injection price is the same every hour, so it only sells early when tomorrow's surplus would exceed the export limit. |
 | Fixed day/night contract | Buying at night to use by day does not pay after losses and wear, so it only grid-charges for the winter target. |
-| Dynamic contract | Also charges in cheap hours and exports in expensive ones, when the spread beats losses + wear. |
+| Dynamic contract | Also charges in cheap hours and exports in expensive ones, when the spread beats losses + wear, filling the battery completely when the sale pays for all of it. The best-paid slots get full power first. |
+| Price spike (very low or very high) | Charges above the import limit, as fast as the battery takes, when that earns more than the higher capacity peak costs, priced as Fluvius bills it: the month's highest quarter-hour (at least the billed minimum) counts once in the 12-month average, so a peak this month already has costs nothing extra. At a price so high that buying the energy back later costs less, it also sells below the reserve, down to the battery minimum, even in winter. The plan card says when and why. |
 | Negative sell price | With **Battery Pilot block negative export** on and an export-limit entity, export is set to 0. |
-| Quarter-hour heading over the limit | Charging pauses; the battery helps the house. You get a phone warning when a peak is coming. |
+| Quarter-hour heading over the limit | Charging pauses; the battery helps the house. You get a phone warning when a peak is coming (above the higher limit while the plan pays for one). |
 
 Charge and discharge commands only cover the current clock hour. If Battery Pilot or
 Home Assistant stops, the inverter returns to self-use within the hour.
@@ -201,7 +204,7 @@ entities match, the one with `solis` in its name wins.
 
 | Command | When | What it sets |
 | --- | --- | --- |
-| Charge | The plan says grid-charge in this slot and there is room under the import limit. | Charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–23:59 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
+| Charge | The plan says grid-charge in this slot and there is room under the import limit (or the higher limit the plan pays for at a price spike). | Charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–23:59 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
 | Discharge (export) | The plan says export in this slot. | Discharge slot 1 = the current clock hour, charge slot 1 = 00:00–00:00, discharge current, *time of use* on. |
 | Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only. |
 | Renew | At every new clock hour while still charging or exporting. | The same as Charge / Discharge for the new hour. |
@@ -210,10 +213,12 @@ entities match, the one with `solis` in its name wins.
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
 hour, never more than keeps grid import under the import limit with the current house
-load (in 5 A steps, never above *Maximum charge current*). Charging starts only with 15 A
-of room, pauses below 10 A or when the quarter-hour heads 0.1 kW over the limit, and
+load (in 5 A steps, never above *Maximum charge current*). At a price spike that pays for
+a higher capacity peak, the plan's higher limit is used instead. Charging starts only with
+15 A of room, pauses below 10 A or when the quarter-hour heads 0.1 kW over the limit, and
 holds at 10 A (at most 2 % above target) once the target is reached before the hour ends.
-Exports never go below *Battery reserve for export*.
+Exports never go below *Battery reserve for export*, except where the plan sells below it
+at an extreme price.
 
 Because every command covers the current clock hour only, the inverter returns to
 self-use by itself within the hour if Battery Pilot or Home Assistant stops.
@@ -279,10 +284,10 @@ The contract formulas in full (market prices in EUR/MWh):
 
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
-| Grid import limit | `import_limit_kw` | 2.3 kW | The quarter-hour average import Battery Pilot aims to stay under. Grid charging is planned 0.3 kW under it and pauses above it; the battery keeps energy for your usual peaks above it; warnings start 0.3 kW over it. |
-| Normal export limit | `export_limit_kw` | 6.0 kW | Highest export the plan counts on, and the value restored after a negative-price block. |
-| Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan and adds the capacity cost in the comparison. 0 if your grid has none. |
-| Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed. |
+| Grid import limit | `import_limit_kw` | 2.3 kW | The quarter-hour average import Battery Pilot aims to stay under. Grid charging is planned 0.3 kW under it and pauses above it; the battery keeps energy for your usual peaks above it; warnings start 0.3 kW over it. Crossed only at a price that earns more than the higher capacity peak costs (see *Price spike* under *How it decides*); with *Capacity tariff* 0 it is never crossed. |
+| Normal export limit | `export_limit_kw` | 5.0 kW | The most your installation may export (Fluvius allows 5 kW on a single-phase connection). The plan never counts on more, and it is the value restored after a negative-price block. |
+| Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
+| Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
 
 ### Battery
 
@@ -290,7 +295,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | --- | --- | --- | --- |
 | Battery capacity | `battery_capacity_kwh` | 16 kWh | Energy between 0 and 100 % SOC. |
 | Battery minimum SOC | `battery_min_soc` | 10 % | The inverter's own floor; never planned below. |
-| Battery reserve for export | `battery_reserve_soc` | 35 % | Battery energy is never exported below this; the house can still use the battery down to the minimum. |
+| Battery reserve for export | `battery_reserve_soc` | 35 % | Battery energy is not exported below this, except at a price so high that buying it back later costs less; the house can still use the battery down to the minimum. |
 | Battery nominal voltage | `battery_voltage` | 51.2 V | Amps ↔ kW when there is no voltage sensor (or it reads below 40 V). |
 | Maximum charge current | `max_charge_current_a` | 50 A | Highest charge current Battery Pilot sets. |
 | Maximum discharge current | `max_discharge_current_a` | 90 A | Highest discharge current when exporting. |
@@ -328,7 +333,7 @@ once Battery Pilot has learned your peaks (a week or two).
 
 | Entity | State | Main attributes |
 | --- | --- | --- |
-| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge` or `discharge` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `next_hours` (the next 24 hours) |
+| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge` or `discharge` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Shade-corrected solar forecast for today (kWh) | `forecast_kwh` (before correction) |
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |

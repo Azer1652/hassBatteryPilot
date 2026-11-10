@@ -47,7 +47,12 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   `CHARGE_HEADROOM_KW`), discharge/export (not below reserve). Costs: buy − sell, wear, penalty above
   the import limit, `ACTION_COST_C_PER_H`; terminal value for energy left. `make_plan()` adds the
   winter rule: when the next day's corrected solar < threshold, a soft target (`night_target()`) at
-  the end of the night window, and no export. These constants were tuned against observed
+  the end of the night window, and no export. Two rules give way to money: in `extreme_slots()`
+  (selling beats buying back at the dearest later price) export is allowed in winter and down to the
+  minimum (`Step.reserve`); `_boost()` re-plans with higher import limits and keeps one only when it
+  beats the normal plan after the capacity cost, priced once per month above
+  max(month peak so far, `capacity_min_kw`) (`Step.limit_kw`, `Plan.boost`). Controller, simulator
+  and replay follow those step fields. These constants were tuned against observed
   behaviour (see the planner tests); changing them changes behaviour on fixed contracts.
 - `simulate.step()` is the shared energy-balance model (plan replay, night target, tests).
   `controller` must stay consistent with it: charging is paced to the step's SOC, follows house load

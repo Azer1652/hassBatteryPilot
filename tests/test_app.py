@@ -264,7 +264,7 @@ async def test_export_blocked_at_negative_prices_and_restored(tmpdata):
     app2 = App(Options(contract="dynamic"), fake, data_dir=tmpdata, clock=lambda: fake.now)   # survives a restart
     assert await app2.setup()
     await run_until(app2, fake, utc(2026, 6, 14, 14, 5))
-    assert fake.s["number.solis_export_power_limit"]["state"] == "6000"
+    assert fake.s["number.solis_export_power_limit"]["state"] == "5000"
 
 
 @pytest.mark.parametrize("has_limit", [True, False])
@@ -369,3 +369,59 @@ async def test_history_api(tmpdata, aiohttp_client):
     outside = await aiohttp_client(make_web(app, {"172.30.32.2"}))   # only the ingress proxy may connect
     for path in ("/", "/api/status", "/api/history", "/api/history/2026-03-09"):
         assert (await outside.get(path)).status == 403, path
+
+
+def _march_prices(price_at):
+    day = datetime(2026, 3, 10, tzinfo=TZ)
+    return [{"time": (day + timedelta(hours=h)).isoformat(), "price": price_at(h % 24, h // 24)} for h in range(48)]
+
+
+async def test_a_higher_peak_this_month_is_used_for_free_and_announced(tmpdata):
+    """The month already has a 3.6 kW quarter-hour: at a negative price the plan charges up to it."""
+    prices = _march_prices(lambda h, d: -0.2 if d == 0 and h in (12, 13) else 0.1)
+    fake = FakeHA(utc(2026, 3, 10, 10, 0), soc=30, prices=prices)
+    app = App(Options(contract="dynamic"), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    assert app.plan.boost is None                               # nothing measured this month yet
+    app.peaks.months["2026-03"] = 3.6
+    app.replan()
+    boost = app.plan.boost
+    assert boost and app.o.import_limit_kw < boost["limit_kw"] <= 3.6 and boost["peak_cost_eur"] == 0
+    assert any(e["text"].startswith("Plan: charging above the import limit") for e in app.events)
+    await app.publish()
+    assert fake.published["sensor.battery_pilot_plan"]["attributes"]["boost_kw"] == boost["limit_kw"]
+
+
+async def test_no_peak_warning_while_charging_above_the_limit_on_purpose(tmpdata):
+    fake = FakeHA(utc(2026, 3, 10, 12, 0))
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    await app.tick()
+    alerts = lambda: [c for c in fake.calls if c[0] == "persistent_notification"   # noqa: E731
+                      and c[2].get("title") == "Capacity peak warning"]
+    for s in app.plan.steps:
+        s.limit_kw = 3.45
+    for minute in range(4):
+        await app._peak_warning(fake.now + timedelta(minutes=minute), 3.3)
+    assert not alerts()                                         # 3.3 kW is the peak the plan paid for
+    for minute in range(4, 8):
+        await app._peak_warning(fake.now + timedelta(minutes=minute), 3.9)
+    assert len(alerts()) == 1                                   # above it, the warning still comes
+
+
+async def test_nightly_replay_charges_above_the_limit_at_an_extreme_price(tmpdata):
+    day = datetime(2026, 3, 10, tzinfo=TZ)
+    start = day.astimezone(timezone.utc)
+    prices = _march_prices(lambda h, d: -8.0 if d == 0 and h == 13 else 0.1)
+    fake = FakeHA(start - timedelta(minutes=5), soc=30, prices=prices)
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    for q in range(96):
+        t = start + timedelta(minutes=15 * q)
+        app.records.append(QuarterRecord(t, {"import": 0.1, "export": 0.0, "load": 0.1, "pv": 0.0},
+                                         {"import": 1, "export": 1, "load": 1, "pv": 1}, 30))
+    fake.now = start + timedelta(days=1, minutes=30)
+    await app.nightly()
+    replay = app.comparison.months["2026-03"]["replay"]
+    assert replay["dynamic"]["peak_kw"] > Options().import_limit_kw + 0.5    # paid to take energy: worth a peak
+    assert replay["fixed"]["peak_kw"] <= Options().import_limit_kw + 0.1     # the fixed contract has no reason

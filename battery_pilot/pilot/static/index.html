@@ -198,7 +198,7 @@ function planChart(plan) {
     const a = new Date(s.start).getTime(), b = a + s.hours * 3600e3;
     const y = yp(Math.max(s.buy, 0)), y0 = yp(0);
     g += `<rect x="${x(a)}" y="${Math.min(y, y0)}" width="${Math.max(x(b) - x(a) - 0.5, 0.5)}" height="${Math.abs(y0 - y) || 1}"
-           fill="${col[s.action]}" opacity="0.85"><title>${hm(s.start)} ${s.action} · buy ${fmt(s.buy, 1)} c · sell ${fmt(s.sell, 1)} c · SOC → ${fmt(s.soc_end, 0)} %</title></rect>`;
+           fill="${col[s.action]}" opacity="0.85"><title>${hm(s.start)} ${s.action} · buy ${fmt(s.buy, 1)} c · sell ${fmt(s.sell, 1)} c · SOC → ${fmt(s.soc_end, 0)} %${stepNote(s)}</title></rect>`;
   }
   let path = "";
   steps.forEach((s, i) => {
@@ -216,6 +216,27 @@ function planChart(plan) {
   g += `<text x="${left - 4}" y="${top + 4}" text-anchor="end">${fmt(pmax, 0)}c</text><text x="${left - 4}" y="${yp(0)}" text-anchor="end">0</text>`;
   g += `<text x="${W - right + 4}" y="${ys(100) + 4}">100%</text><text x="${W - right + 4}" y="${ys(0)}">0%</text>`;
   return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Battery plan">${g}</svg>`;
+}
+
+let importLimit = Infinity;   // the import limit setting, from the status
+function stepNote(s) {
+  if (s.action === "charge" && s.limit_kw !== null && s.import_kwh / s.hours > importLimit - 0.25)
+    return ` · above the import limit (up to ${fmt(s.limit_kw, 2)} kW)`;
+  if (s.action === "discharge" && s.reserve !== null) return " · below the reserve: buying it back later costs less";
+  return "";
+}
+
+function planExtras(plan) {
+  // Sentences for a plan that crosses the import limit or sells below the reserve / in winter.
+  const out = [];
+  const b = plan && plan.boost;
+  if (b) out.push(`Charging above the import limit (up to ${fmt(b.limit_kw, 2)} kW), ${hm(b.from)}–${hm(b.to)}: ` + (b.peak_cost_eur > 0
+    ? `it earns about €${fmt(b.gain_eur, 2)}, more than the €${fmt(b.peak_cost_eur, 2)} the higher capacity peak costs.`
+    : `this month already has a peak that high, so it costs nothing extra and earns about €${fmt(b.gain_eur, 2)}.`));
+  const sale = plan && plan.steps.find((s) => s.action === "discharge" && (s.reserve !== null || !plan.allow_export));
+  if (sale) out.push(`At ${hm(sale.start)} the price is high enough to sell ${plan.allow_export ? "below the reserve" : "in winter"}: ` +
+    "buying the energy back later costs less.");
+  return out.join(" ");
 }
 
 function comparison(c) {
@@ -616,14 +637,16 @@ let render = function (s) {
     kpi("this quarter-hour", fmt(r.projection_kw, 2) + " kW"),
     kpi("buy / sell", `${fmt(pr.buy, 1)} / ${fmt(pr.sell, 1)} c`),
   ].join("");
+  importLimit = s.peaks.limit_kw;
   $("plan").innerHTML = planChart(s.plan);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
-  $("plannote").textContent = !t || t.forecast === false ? "" : !t.winter
+  const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`
     : t.applied === false
       ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery keeps enough for your usual peaks (winter strategy: peaks only).`
       : `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery is charged towards ${t.soc} % by the end of the night, ` +
-        `as far as the import limit allows. No export in winter.`;
+        `as far as the import limit allows. No export in winter, except at prices so high that buying back later costs less.`;
+  $("plannote").textContent = [note, planExtras(s.plan)].filter(Boolean).join(" ");
   comparison(s.comparison || {});
   $("solar").innerHTML = kpi("today, after shade", fmt(s.solar.today) + " kWh") + kpi("tomorrow, after shade", fmt(s.solar.tomorrow) + " kWh")
     + kpi("house, per day", fmt(s.load.daily_kwh) + " kWh");

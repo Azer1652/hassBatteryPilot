@@ -80,7 +80,7 @@ async def main(days: int, port: int, seconds: float | None):
     fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
-    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.1.0 · demo data")
+    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.2.0 · demo data")
     await app.setup()
     fill(app, res)
     print(f"Running the app for {LIVE_DAYS} days...", flush=True)

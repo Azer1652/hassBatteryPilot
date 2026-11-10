@@ -159,6 +159,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         pv_fc = PvForecast(fc, shade, TZ).kwh
         for kind in ("fixed", "dynamic"):
             res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h,
+                             month_peak_kw=m[kind]["peak_kw"],
                              block_negative=block_negative)
             soc[kind] = res["soc_end"]
             if kind == "fixed":

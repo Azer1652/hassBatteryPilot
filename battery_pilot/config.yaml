@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.1.0"
+version: "2.2.0"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -35,7 +35,7 @@ options:
   night_end: "07:00"
   weekend_is_night: true
   import_limit_kw: 2.3
-  export_limit_kw: 6.0
+  export_limit_kw: 5.0
   capacity_tariff_eur_kw_year: 52.37
   capacity_min_kw: 2.5
   battery_capacity_kwh: 16

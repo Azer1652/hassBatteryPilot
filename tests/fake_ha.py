@@ -46,7 +46,7 @@ class FakeHA:
             "switch.solis_allow_grid_to_charge_the_battery": st("off"),
             "number.solis_time_charging_charge_current": st(50, "A"),
             "number.solis_time_charging_discharge_current": st(50, "A"),
-            "number.solis_export_power_limit": st(6000, "W"),
+            "number.solis_export_power_limit": st(5000, "W"),
             "time.solis_time_charging_charge_start_slot_1": st("00:00:00"),
             "time.solis_time_charging_charge_end_slot_1": st("00:00:00"),
             "time.solis_time_charging_discharge_start_slot_1": st("00:00:00"),
