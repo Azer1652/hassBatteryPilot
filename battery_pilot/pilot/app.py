@@ -7,6 +7,7 @@ import logging
 import os
 import statistics
 from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 from . import history as H
@@ -40,6 +41,7 @@ FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging a
 CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
 TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
 CMD_PROBLEM = "The inverter does not accept commands"
+HEALTH_S = 600        # the main loop must have gone round this recently (it sleeps 300 s between setup tries)
 
 
 def write_json(path: str, obj) -> None:
@@ -114,6 +116,7 @@ class App:
         self._inverter_saved: dict | None = None
         self._forecast_out = False
         self._refresh_task: asyncio.Task | None = None
+        self.alive_at = monotonic()            # last round of the main loop (the Docker health check)
         self._last = {"refresh": None, "save": None, "publish": None}
 
     # ---------------------------------------------------------------- logging for the dashboard
@@ -938,8 +941,14 @@ class App:
             return True
         return False
 
+    def healthy(self) -> bool:
+        """For the Docker health check: the main loop is still going round (it may be waiting
+        for Home Assistant; a restart would not help then)."""
+        return monotonic() - self.alive_at < HEALTH_S
+
     async def run(self, stop: asyncio.Event):
         while not stop.is_set():
+            self.alive_at = monotonic()
             try:
                 if not self.ready:
                     if not await self.reach_ha():

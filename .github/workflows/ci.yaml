@@ -42,3 +42,16 @@ jobs:
           "import os, pilot.app, pilot.web, pilot.__main__;
           assert os.environ.get('SUPERVISOR_TOKEN') == 'ci', 'SUPERVISOR_TOKEN lost';
           assert os.environ.get('BP_VERSION') == 'ci', 'BP_VERSION lost'; print('ok')"
+      - name: The Docker health check passes inside the running image
+        # The app waits for Home Assistant (unreachable here) with its web server up: the image's own
+        # HEALTHCHECK command, read from the image, must succeed.
+        run: |
+          echo '{}' > "$RUNNER_TEMP/options.json"
+          docker run -d --name bp -e SUPERVISOR_TOKEN=ci -v "$RUNNER_TEMP/options.json:/data/options.json:ro" battery-pilot:ci
+          check="$(docker inspect --format '{{index .Config.Healthcheck.Test 1}}' battery-pilot:ci)"
+          for i in $(seq 1 60); do
+            if docker exec bp sh -c "$check"; then echo healthy; exit 0; fi
+            sleep 1
+          done
+          docker logs bp
+          exit 1

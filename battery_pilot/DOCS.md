@@ -233,9 +233,11 @@ at an extreme price.
   in self-use.
 - **Battery Pilot stops:** on a normal stop it puts the inverter in self-use. A command
   covers the current clock hour, but the Solis repeats its time-of-use slot **every
-  day**, so after a crash or power cut the Supervisor watchdog restarts the app and it
-  puts the inverter back in self-use (it records what it left on the inverter in
-  `/data/inverter.json`).
+  day**. After a power cut, or when Home Assistant restarts the app because it crashed or
+  stopped responding, it puts the inverter back in self-use when it starts (it records
+  what it left on the inverter in `/data/inverter.json`). Keep **Watchdog** switched on
+  (the app's Info tab): the app reports its health to Docker, and the watchdog restarts
+  it when that fails.
 - **Someone else changes the inverter:** while *Battery Pilot control* is on, the
   time-of-use switch is read back every tick and corrected if something else changed it.
   With control off, your own settings are never touched.

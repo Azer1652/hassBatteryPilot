@@ -63,6 +63,8 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   after a failed command (treated as possibly active). `tick()` stops a charge/discharge after
   `BLIND_S` without SOC/import (or a frozen SOC), keeps helper states through short read failures,
   and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
+  Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop stalls,
+  `App.healthy`); the add-on linter rejects the old `watchdog` key in `config.yaml`.
 - Steadiness: `optimize(first_action=...)` charges `SWITCH_COST_C` for changing what the previous
   plan is still doing now (`planner.sticky_action`; a finished step is not sticky).
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract

@@ -30,6 +30,13 @@ async def status(request: web.Request):
     return web.json_response(request.app[APP_KEY].status(), dumps=_dumps)
 
 
+async def health(request: web.Request):
+    """The Docker HEALTHCHECK: 503 when the main loop has stalled, so the Supervisor restarts the app."""
+    if request.app[APP_KEY].healthy():
+        return web.Response(text="ok")
+    raise web.HTTPServiceUnavailable(text="the main loop has stalled")
+
+
 async def history_index(request: web.Request):
     return web.json_response(request.app[APP_KEY].history_index(), dumps=_dumps)
 
@@ -57,6 +64,7 @@ def make_web(app, allowed_ips: set[str] | None = None) -> web.Application:
     w[ALLOWED_KEY] = allowed_ips
     w.router.add_get("/", index)
     w.router.add_get("/api/status", status)
+    w.router.add_get("/health", health)
     w.router.add_get("/api/history", history_index)
     w.router.add_get("/api/history/{day}", history_day)
     w.router.add_static("/static/", STATIC)

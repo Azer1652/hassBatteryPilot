@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.1
+
+- The app reports its health to Docker (a health check on its own web server that also
+  notices a stalled main loop), replacing the obsolete `watchdog` option. Keep
+  **Watchdog** switched on in the app's Info tab: Home Assistant then restarts Battery
+  Pilot when it crashes or stops responding, and it puts the inverter back in self-use.
+
 ## 2.3.0
 
 Safety and reliability, from a new set of tests that run whole days and failures

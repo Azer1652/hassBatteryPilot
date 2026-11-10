@@ -116,3 +116,14 @@ def test_the_home_assistant_config_folder_is_found(tmp_path, monkeypatch):
     (tmp_path / "configuration.yaml").write_text("homeassistant:\n")
     monkeypatch.setenv("BP_CONFIG_DIR", str(tmp_path))
     assert entry.config_dir() == str(tmp_path)
+
+
+async def test_the_health_check_reports_a_stalled_main_loop(tmpdata, aiohttp_client, monkeypatch):
+    """Docker's HEALTHCHECK calls /health; with Watchdog on, the Supervisor restarts an unhealthy app."""
+    from pilot import app as app_module
+    fake = FakeHA(utc(2026, 1, 14, 12, 0))
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    client = await aiohttp_client(make_web(app, {"127.0.0.1"}))   # the check runs inside the container
+    assert (await client.get("/health")).status == 200            # also while still waiting for HA
+    monkeypatch.setattr(app_module, "monotonic", lambda: app.alive_at + app_module.HEALTH_S + 1)
+    assert (await client.get("/health")).status == 503
