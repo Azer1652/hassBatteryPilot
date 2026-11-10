@@ -238,6 +238,11 @@ async def test_dashboard_status_is_complete(tmpdata):
     for k in ("plan", "prices", "solar", "load", "peaks", "comparison", "breakeven", "readings", "inverter"):
         assert k in s
     assert s["breakeven"] == {"night": 131, "day": 162}
+    # the shade tooltips tell a learned cell from one still at the default factor
+    app.shade.learn(1, 13, 0.3, 1.0)
+    kwh = app.status()["solar"]["shade_kwh"]
+    assert len(kwh) == 12 and all(len(row) == 24 for row in kwh)
+    assert kwh[0][13] == 1.0 and kwh[0][14] == 0.0
 
 
 async def test_zero_export_setting_is_left_alone(tmpdata):

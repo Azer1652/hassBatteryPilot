@@ -107,7 +107,8 @@ difference (negative means dynamic is cheaper).
 ![Contract comparison per month (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/comparison.png)
 
 The page also shows the shade Battery Pilot learned for every month and hour (dark =
-the forecast is too high, e.g. low winter sun behind trees) and your monthly peaks:
+the forecast is too high, e.g. low winter sun behind trees) and your monthly peaks. Tap or
+hover over a cell or a bar for its value:
 
 ![Learned shade and monthly peaks (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/shade-peaks.png)
 

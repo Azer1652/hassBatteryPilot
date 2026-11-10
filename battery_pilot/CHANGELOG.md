@@ -3,10 +3,15 @@
 ## 2.3.3
 
 - The charts on the page now work on a phone (the Home Assistant app has no hover). Tap
-  the 36-hour plan or a planned-vs-actual chart for the values at that moment, or slide a
-  finger sideways along it. The details stay until you tap elsewhere. The plan's tooltip
-  shows the time, what the battery does, the buy and sell price, the battery level, the
-  expected solar, house and grid energy, and the night target.
+  a chart for the values at that point, or slide a finger sideways along it. The details
+  stay until you tap elsewhere. This covers all of them:
+  - **The 36-hour plan:** the time, what the battery does, the buy and sell price, the
+    battery level, the expected solar, house and grid energy, and the night target.
+  - **Planned vs actual:** as before with the mouse, now also by tapping.
+  - **Solar and tree shade:** the month and hour, how much of the forecast the panels
+    deliver there and how much forecast energy that was learned from, or that nothing is
+    learned yet. The arrow keys move through months and hours.
+  - **Capacity peaks:** the month, its highest quarter-hour and the import limit.
 - The plan card explains its chart: the bar height is the buy price (left axis), and the
   circle on the battery line is the night target.
 
