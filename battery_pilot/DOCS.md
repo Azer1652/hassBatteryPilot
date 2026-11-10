@@ -7,7 +7,9 @@ sidebar.
 
 ![The Battery Pilot page: the 36-hour plan with a winter night charged to its target](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/plan.png)
 
-*Demo data. Blue: hours the battery is grid-charged. Green: the battery level.*
+*Demo data. Each bar is one hour or quarter-hour: its height is the price you pay per kWh
+(left axis), its colour what the battery does (blue: grid charge). Green: the battery level
+(right axis); the circle is the night target. Tap or hover over the chart for the details.*
 
 What it does:
 
@@ -127,8 +129,8 @@ In each chart, the top panel is the measured battery level (green) against the p
 one (dashed). The two strips under it show what the plan wanted (grid charge, discharge,
 self-use) and what the inverter did. The bottom panel is the solar the panels delivered
 per hour (bars) against the forecast after the shade correction and the raw forecast.
-Hover over a chart, or focus it and use the arrow keys, for the values at each moment; the
-table under the charts has every hour.
+Tap or hover over a chart (on a phone, slide a finger sideways along it), or focus it and
+use the arrow keys, for the values at each moment; the table under the charts has every hour.
 
 The list of recent days shows the solar forecast before and after shade against what was
 measured, and how many SOC points the battery was off on average. The line above it says

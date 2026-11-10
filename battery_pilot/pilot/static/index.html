@@ -58,16 +58,23 @@
   .nav span { min-width: 120px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
   .legend i.ln { width: 16px; height: 0; border-top: 2px solid; display: inline-block; }
   .legend i.ln.dash, .tip i.dash { border-top-style: dashed; }
+  .legend span[hidden] { display: none; }
+  .hint { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
   .hchart { position: relative; }
-  .hchart svg:focus { outline: 2px solid var(--charge); outline-offset: 2px; border-radius: 4px; }
+  .hchart svg { touch-action: pan-y pinch-zoom; cursor: crosshair; }
+  .hchart svg:focus { outline: none; }
+  .hchart svg:focus-visible { outline: 2px solid var(--charge); outline-offset: 2px; border-radius: 4px; }
   .hchart svg text.s { font-size: 9px; }
   .tip { position: absolute; top: 4px; pointer-events: none; background: var(--card); border: 1px solid var(--line);
          border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.5; white-space: nowrap; z-index: 2;
-         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); font-variant-numeric: tabular-nums; }
+         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); font-variant-numeric: tabular-nums; max-width: min(320px, 100%); }
   .tip b { font-weight: 600; }
   .tip .h { color: var(--muted); margin-top: 3px; }
+  .tip .n { white-space: normal; }
   .tip i { display: inline-block; width: 12px; border-top: 2px solid; vertical-align: middle; margin-right: 6px; }
   .tip i.bar { border-top-width: 6px; }
+  .legend i.ring, .tip i.ring { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--soc);
+         border-radius: 50%; vertical-align: middle; }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 10px 0 6px; }
   table.pick tbody tr { cursor: pointer; }
   table.pick tbody tr:hover, table.pick tbody tr:focus { background: var(--bg); outline: none; }
@@ -90,9 +97,11 @@
       <span><i class="sw" style="background:var(--charge)"></i>grid charge</span>
       <span><i class="sw" style="background:var(--discharge)"></i>discharge / export</span>
       <span><i class="sw" style="background:var(--self)"></i>self-use</span>
-      <span><i class="sw" style="background:var(--soc)"></i>battery SOC</span>
+      <span><i class="ln" style="border-color:var(--soc)"></i>battery SOC (right axis)</span>
+      <span id="plantarget" hidden><i class="ring"></i>night target</span>
     </div>
-    <div id="plan"></div>
+    <p class="hint">Bar height: the price you pay per kWh (left axis, c). Tap or hover over the chart for the details.</p>
+    <div class="hchart" id="plan"></div>
     <p class="muted" id="plannote"></p>
   </div>
 
@@ -182,41 +191,134 @@ function banner(s) {
   return `<div class="banner ok"><b>Active</b> on the ${esc(s.contract)} contract: ${esc(s.decision.reason)}.</div>`;
 }
 
-function planChart(plan) {
-  if (!plan || !plan.steps.length) return '<p class="muted">No plan yet.</p>';
-  const steps = plan.steps, W = Math.max($("plan").clientWidth, 300), H = W < 600 ? 200 : 260;
+// ---------------------------------------------------------------- chart tooltips
+// Each .hchart has one tooltip. It follows the mouse, a tap, a sideways finger drag (an upward or
+// downward one scrolls the page) or the arrow keys, and stays through the page's refresh every 30 s
+// until the pointer leaves or the user taps elsewhere: phones have no hover.
+const tipAt = {};   // chart id → {key, v}: what its tooltip shows
+document.addEventListener("pointerdown", (e) => {
+  for (const el of document.querySelectorAll(".hchart")) if (el.hideTip && !el.contains(e.target)) el.hideTip();
+});
+
+function chartTip(el, c) {
+  // c: key (a tooltip is shown again after a refresh only for the same key), W/left/right (plot area in svg units),
+  // value(f) → v at fraction f of the plot width, norm(v) → v to show or null, step(v, ±1 or ±Infinity) → v,
+  // x(v) → svg x of the crosshair, first() → v when focused by keyboard, html(v) → tooltip content
+  const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), xh = svg.querySelector(".xh");
+  let cur = null, touch = null;
+  const show = (v) => {
+    v = c.norm(v);
+    if (v === null) return;
+    cur = v;
+    tipAt[el.id] = {key: c.key, v};
+    tip.innerHTML = c.html(v);
+    tip.hidden = false;
+    tip.style.left = "0px";
+    const xs = c.x(v);
+    xh.setAttribute("x1", xs);
+    xh.setAttribute("x2", xs);
+    xh.setAttribute("visibility", "visible");
+    const scale = svg.getBoundingClientRect().width / c.W || 1, px = xs * scale, wTip = tip.offsetWidth;
+    tip.style.left = (px + 14 + wTip > el.clientWidth ? Math.max(px - 14 - wTip, 0) : px + 14) + "px";
+  };
+  const hide = () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); cur = null; delete tipAt[el.id]; };
+  const showAt = (e) => {
+    const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * c.W / r.width;
+    if (px >= c.left && px <= c.W - c.right) show(c.value((px - c.left) / (c.W - c.left - c.right)));
+    else if (e.pointerType === "mouse") hide();
+  };
+  el.hideTip = hide;
+  svg.addEventListener("pointerdown", (e) => { touch = e.pointerType === "touch" ? [e.clientX, e.clientY, false] : null; });
+  svg.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") {
+      if (!touch) return;
+      const dx = Math.abs(e.clientX - touch[0]), dy = Math.abs(e.clientY - touch[1]);
+      if (!touch[2] && !(dx > 8 && dx > dy)) return;
+      touch[2] = true;
+    }
+    showAt(e);
+  });
+  for (const t of ["pointerup", "pointercancel"]) svg.addEventListener(t, () => { touch = null; });
+  svg.addEventListener("click", showAt);
+  svg.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch") hide(); });
+  // Chrome also blurs the chart while a refresh replaces it: only a chart still on the page hides its tooltip.
+  svg.addEventListener("blur", () => setTimeout(() => { if (svg.isConnected && document.activeElement !== svg) hide(); }));
+  svg.addEventListener("focus", () => { if (cur === null) show(c.first()); });
+  svg.addEventListener("keydown", (e) => {
+    const d = {ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity}[e.key];
+    if (d !== undefined) { e.preventDefault(); show(c.step(cur ?? c.first(), d)); } else if (e.key === "Escape") hide();
+  });
+  const p = tipAt[el.id];
+  if (p && p.key === c.key) show(p.v);
+  if (cur === null) delete tipAt[el.id];
+}
+
+const ACTIONS = {charge: "grid charge", discharge: "discharge / export", self_use: "self-use"};
+
+function planChart(el, plan) {
+  if (!plan || !plan.steps.length) {
+    el.innerHTML = '<p class="muted">No plan yet.</p>';
+    el.hideTip = null;
+    $("plantarget").hidden = true;
+    return;
+  }
+  const steps = plan.steps, W = Math.max(el.clientWidth, 300), H = W < 600 ? 200 : 260;
   const top = 14, bottom = 26, left = 34, right = 38;
-  const t0 = new Date(steps[0].start).getTime();
-  const tEnd = new Date(steps[steps.length - 1].start).getTime() + steps[steps.length - 1].hours * 3600e3;
+  const span = steps.map((s) => { const a = new Date(s.start).getTime(); return [a, a + s.hours * 3600e3]; });
+  const t0 = span[0][0], tEnd = span[span.length - 1][1];
   const x = (t) => left + (t - t0) / (tEnd - t0) * (W - left - right);
   const prices = steps.map((s) => s.buy);
   const pmax = Math.max(1, ...prices), pmin = Math.min(0, ...prices);
   const yp = (p) => top + (pmax - p) / (pmax - pmin) * (H - top - bottom);
   const ys = (soc) => top + (100 - soc) / 100 * (H - top - bottom);
-  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self")};
+  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self")}, soc = css("--soc");
   let g = "";
-  for (const s of steps) {
-    const a = new Date(s.start).getTime(), b = a + s.hours * 3600e3;
-    const y = yp(Math.max(s.buy, 0)), y0 = yp(0);
-    g += `<rect x="${x(a)}" y="${Math.min(y, y0)}" width="${Math.max(x(b) - x(a) - 0.5, 0.5)}" height="${Math.abs(y0 - y) || 1}"
-           fill="${col[s.action]}" opacity="0.85"><title>${hm(s.start)} ${s.action} · buy ${fmt(s.buy, 1)} c · sell ${fmt(s.sell, 1)} c · SOC → ${fmt(s.soc_end, 0)} %${stepNote(s)}</title></rect>`;
-  }
-  let path = "";
   steps.forEach((s, i) => {
-    const a = new Date(s.start).getTime();
-    path += (i ? "L" : "M") + x(a) + "," + ys(s.soc_start) + " L" + x(a + s.hours * 3600e3) + "," + ys(s.soc_end) + " ";
+    const [a, b] = span[i], y = yp(Math.max(s.buy, 0)), y0 = yp(0);
+    g += `<rect x="${x(a)}" y="${Math.min(y, y0)}" width="${Math.max(x(b) - x(a) - 0.5, 0.5)}" height="${Math.abs(y0 - y) || 1}"
+           fill="${col[s.action]}" opacity="0.85"/>`;
   });
-  g += `<path d="${path}" fill="none" stroke="${css("--soc")}" stroke-width="2.2"/>`;
+  let path = "";
+  steps.forEach((s, i) => { path += (i ? "L" : "M") + x(span[i][0]) + "," + ys(s.soc_start) + " L" + x(span[i][1]) + "," + ys(s.soc_end) + " "; });
+  g += `<path d="${path}" fill="none" stroke="${soc}" stroke-width="2.2"/>`;
+  const marks = [];
   for (const t of plan.targets || []) {
     if (!(t.applied ?? t.winter)) continue;
-    const tx = x(new Date(t.window_end).getTime());
-    if (tx > left && tx < W - right) g += `<line x1="${tx}" x2="${tx}" y1="${ys(t.soc)}" y2="${ys(t.soc) + 0.1}" />
-      <circle cx="${tx}" cy="${ys(t.soc)}" r="4" fill="none" stroke="${css("--soc")}" stroke-width="2"><title>night target ${t.soc} %</title></circle>`;
+    const te = new Date(t.window_end).getTime(), tx = x(te);
+    if (tx > left && tx < W - right) {
+      marks.push({t: te, soc: t.soc});
+      g += `<circle cx="${tx}" cy="${ys(t.soc)}" r="4" fill="none" stroke="${soc}" stroke-width="2"/>`;
+    }
   }
+  $("plantarget").hidden = !marks.length;
   g += hourTicks(t0, tEnd, x, H - 8, W);
   g += `<text x="${left - 4}" y="${top + 4}" text-anchor="end">${fmt(pmax, 0)}c</text><text x="${left - 4}" y="${yp(0)}" text-anchor="end">0</text>`;
   g += `<text x="${W - right + 4}" y="${ys(100) + 4}">100%</text><text x="${W - right + 4}" y="${ys(0)}">0%</text>`;
-  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Battery plan">${g}</svg>`;
+  g += `<line class="xh" x1="0" x2="0" y1="${top}" y2="${H - bottom}" stroke="${css("--text")}" visibility="hidden"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" tabindex="0" role="img"
+      aria-label="Battery plan: the buy price as bars, coloured by what the battery does, and the battery level as a line. Use the arrow keys to read the values.">${g}</svg>
+    <div class="tip" hidden></div>`;
+  // The tooltip's value is a time (ms); it shows the step that contains it, and stays on that time across refreshes.
+  const at = (t) => { const i = span.findIndex(([a, b]) => t >= a && t < b); return i < 0 && t === tEnd ? span.length - 1 : i; };
+  chartTip(el, {key: "plan", W, left, right,
+    value: (f) => t0 + f * (tEnd - t0),
+    norm: (t) => { const i = at(t); return i < 0 ? null : span[i][0]; },
+    step: (t, d) => span[Math.max(0, Math.min(span.length - 1, Math.max(at(t), 0) + d))][0],
+    x: (t) => { const [a, b] = span[at(t)]; return x((a + b) / 2); },
+    first: () => t0,
+    html: (t) => {
+      const i = at(t), s = steps[i], [a, b] = span[i], note = stepNote(s);
+      let h = `<div><b>${hm(a)}–${hm(b)}</b></div>`;
+      h += `<div><i class="bar" style="border-color:${col[s.action]}"></i>${ACTIONS[s.action] || esc(s.action)}</div>`;
+      h += `<div>buy <b>${fmt(s.buy, 1)}</b> · sell <b>${fmt(s.sell, 1)}</b> c/kWh</div>`;
+      h += `<div><i style="border-color:${soc}"></i>battery <b>${fmt(s.soc_start, 0)} → ${fmt(s.soc_end, 0)} %</b></div>`;
+      for (const m of marks) if (m.t >= a && m.t <= b) h += `<div><i class="ring"></i>night target <b>${m.soc} %</b> at ${hm(m.t)}</div>`;
+      h += `<div class="h">expected, kWh</div>`;
+      h += `<div>solar <b>${fmt(s.pv_kwh, 2)}</b> · house <b>${fmt(s.load_kwh, 2)}</b></div>`;
+      h += `<div>grid in <b>${fmt(s.import_kwh, 2)}</b> · out <b>${fmt(s.export_kwh, 2)}</b></div>`;
+      if (note) h += `<div class="n h">${esc(note.replace(/^ · /, ""))}</div>`;
+      return h;
+    }});
 }
 
 let importLimit = Infinity;   // the import limit setting, from the status
@@ -453,52 +555,33 @@ function histChart(el, doc, kind) {
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" tabindex="0" role="img"
       aria-label="${name} versus the measured battery and solar. Use the arrow keys to read the values.">${g}</svg>
     <div class="tip" hidden></div>`;
-  hover(el, doc, kind, {W, left, right, xm, hrs});
+  chartTip(el, {key: doc.date, W, left, right,
+    value: (f) => f * doc.minutes,
+    norm: (m) => Math.max(0, Math.min(doc.minutes, Math.round(m / 15) * 15)),
+    step: (m, d) => m + d * 15,
+    x: xm,
+    first: () => doc.live ? doc.live.now : 12 * 60,
+    html: (q) => histTip(doc, kind, hrs, q)});
 }
 
-function hover(el, doc, kind, c) {
-  const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), xh = svg.querySelector(".xh");
+function histTip(doc, kind, hrs, q) {
+  // the tooltip at minute q (a quarter-hour)
   const at = (m) => new Date(new Date(doc.start).getTime() + m * 60e3).toISOString();
   const key = (cls, color) => `<i class="${cls}" style="border-color:${color}"></i>`;
   const row = (k, v, label) => `<div>${k}<b>${v}</b> ${esc(label)}</div>`;
-  let cur = null;
-  const show = (m) => {
-    const q = Math.max(0, Math.min(doc.minutes, Math.round(m / 15) * 15));
-    cur = q;
-    const h = c.hrs[Math.min(Math.floor(q / 60), c.hrs.length - 1)];
-    let meas = doc.measured.soc[q / 15];
-    if ((meas === null || meas === undefined) && doc.live && Math.abs(doc.live.now - q) < 15) meas = doc.live.soc;
-    const p = planAt(doc, kind, q), f = h[kind];
-    let t = `<div><b>${hm(at(q))}</b></div>`;
-    t += row(key("", css("--soc")), meas === null || meas === undefined ? "–" : fmt(meas, 0) + " %", "battery measured");
-    t += row(key("dash", css("--plan")), p ? fmt(p[0], 0) + " %" : "–", p ? p[1] : "planned");
-    t += `<div class="h">${hm(at(h.m))}–${hm(at(Math.min(h.m + 60, doc.minutes)))}</div>`;
-    t += row(key("bar", css("--pv")), fmt(h.pv, 2) + " kWh", "solar measured");
-    t += row(key("", css("--plan")), fmt(f && f.pv, 2) + " kWh", "forecast after shade");
-    t += row(key("", css("--muted")), fmt(f && f.pv_raw, 2) + " kWh", "forecast without shade");
-    t += `<div>${fmt(h.load, 2)} / ${fmt(f && f.load, 2)} kWh house measured / expected</div>`;
-    tip.innerHTML = t;
-    tip.hidden = false;
-    xh.setAttribute("x1", c.xm(q));
-    xh.setAttribute("x2", c.xm(q));
-    xh.setAttribute("visibility", "visible");
-    const scale = svg.getBoundingClientRect().width / c.W || 1, px = c.xm(q) * scale;
-    const wTip = tip.offsetWidth;
-    tip.style.left = (px + 14 + wTip > el.clientWidth ? Math.max(px - 14 - wTip, 0) : px + 14) + "px";
-  };
-  const hide = () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); };
-  svg.addEventListener("pointermove", (e) => {
-    const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * c.W / r.width;
-    if (px < c.left || px > c.W - c.right) return hide();
-    show((px - c.left) / (c.W - c.left - c.right) * doc.minutes);
-  });
-  svg.addEventListener("pointerleave", hide);
-  svg.addEventListener("blur", hide);
-  svg.addEventListener("focus", () => show(cur ?? (doc.live ? doc.live.now : 12 * 60)));
-  svg.addEventListener("keydown", (e) => {
-    const d = {ArrowLeft: -15, ArrowRight: 15, Home: -1e9, End: 1e9}[e.key];
-    if (d !== undefined) { e.preventDefault(); show((cur ?? 0) + d); } else if (e.key === "Escape") hide();
-  });
+  const h = hrs[Math.min(Math.floor(q / 60), hrs.length - 1)];
+  let meas = doc.measured.soc[q / 15];
+  if ((meas === null || meas === undefined) && doc.live && Math.abs(doc.live.now - q) < 15) meas = doc.live.soc;
+  const p = planAt(doc, kind, q), f = h[kind];
+  let t = `<div><b>${hm(at(q))}</b></div>`;
+  t += row(key("", css("--soc")), meas === null || meas === undefined ? "–" : fmt(meas, 0) + " %", "battery measured");
+  t += row(key("dash", css("--plan")), p ? fmt(p[0], 0) + " %" : "–", p ? p[1] : "planned");
+  t += `<div class="h">${hm(at(h.m))}–${hm(at(Math.min(h.m + 60, doc.minutes)))}</div>`;
+  t += row(key("bar", css("--pv")), fmt(h.pv, 2) + " kWh", "solar measured");
+  t += row(key("", css("--plan")), fmt(f && f.pv, 2) + " kWh", "forecast after shade");
+  t += row(key("", css("--muted")), fmt(f && f.pv_raw, 2) + " kWh", "forecast without shade");
+  t += `<div>${fmt(h.load, 2)} / ${fmt(f && f.load, 2)} kWh house measured / expected</div>`;
+  return t;
 }
 
 const dayName = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], {weekday: "short", day: "numeric", month: "short", timeZone: "UTC"});
@@ -662,7 +745,7 @@ let render = function (s) {
     kpi("buy / sell", `${fmt(pr.buy, 1)} / ${fmt(pr.sell, 1)} c`),
   ].join("");
   importLimit = s.peaks.limit_kw;
-  $("plan").innerHTML = planChart(s.plan);
+  planChart($("plan"), s.plan);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.3
+
+- The charts on the page now work on a phone (the Home Assistant app has no hover). Tap
+  the 36-hour plan or a planned-vs-actual chart for the values at that moment, or slide a
+  finger sideways along it. The details stay until you tap elsewhere. The plan's tooltip
+  shows the time, what the battery does, the buy and sell price, the battery level, the
+  expected solar, house and grid energy, and the night target.
+- The plan card explains its chart: the bar height is the buy price (left axis), and the
+  circle on the battery line is the night target.
+
 ## 2.3.2
 
 - The dashboard no longer shows "Cannot reach Battery Pilot: SyntaxError …" when it is
