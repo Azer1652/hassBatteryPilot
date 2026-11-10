@@ -72,3 +72,16 @@ def test_fixed_replay_is_the_same_with_blocking():
     free, blocked = replay("fixed", False), replay("fixed", True)
     assert blocked["cost_c"] == pytest.approx(free["cost_c"])
     assert blocked["exp"] == pytest.approx(free["exp"])
+
+
+def test_a_gap_in_the_prices_is_priced_like_the_day_before_not_at_zero():
+    """A price sensor that misses half a day must not make dynamic look cheap (it priced the gap at 0)."""
+    recs, prices, fc = sunny_day()
+    yesterday = [PriceSlot(p.start - timedelta(days=1), p.end - timedelta(days=1), p.eur_mwh) for p in prices[:24]]
+    full = yesterday + prices
+    gap = ((DAY + timedelta(hours=12)).astimezone(timezone.utc), (DAY + timedelta(days=1)).astimezone(timezone.utc))
+    gappy = [p for p in full if not gap[0] <= p.start < gap[1]]
+    args = (Options(), BXL)
+    a = replay_day(recs, "dynamic", *args, full, LoadProfile(default_kw=0.4), fc, 50.0, market_avg=60.0)
+    b = replay_day(recs, "dynamic", *args, gappy, LoadProfile(default_kw=0.4), fc, 50.0, market_avg=60.0)
+    assert b["cost_c"] == pytest.approx(a["cost_c"], rel=0.1, abs=20)

@@ -131,6 +131,7 @@
       sell prices when that switch is on. Contract fees and the capacity tariff are included.</p>
     <div id="cmpsum" class="kpis"></div>
     <div class="scroll"><table id="cmp"></table></div>
+    <p class="muted" id="cmpnote"></p>
   </div>
 
   <div class="grid">
@@ -250,12 +251,14 @@ function comparison(c) {
            <th>Fixed, best use</th><th>Dynamic, best use</th><th>Days replayed</th></tr>`;
   for (const r of rows.slice().reverse()) {
     const ws = r.with_strategy;
-    h += `<tr><td>${esc(r.month)}${r.imported_from_playbook ? " *" : ""}</td><td>${fmt(r.bought_kwh, 0)} kWh</td><td>${fmt(r.sold_kwh, 0)} kWh</td>
+    h += `<tr><td>${esc(r.month)}${r.imported_from_playbook ? " *" : ""}${r.estimated_quarters ? " †" : ""}</td><td>${fmt(r.bought_kwh, 0)} kWh</td><td>${fmt(r.sold_kwh, 0)} kWh</td>
       <td>${r.market_avg_eur_mwh === null ? "–" : "€" + fmt(r.market_avg_eur_mwh, 0) + "/MWh"}</td>
       <td>${eur(r.same_usage.fixed_eur)}</td><td>${eur(r.same_usage.dynamic_eur)}</td>
       <td>${ws ? eur(ws.fixed.eur) : "–"}</td><td>${ws ? eur(ws.dynamic.eur) : "–"}</td><td>${r.replay_days}</td></tr>`;
   }
   $("cmp").innerHTML = h;
+  $("cmpnote").textContent = rows.some((r) => r.estimated_quarters)
+    ? "† Some quarter-hours had no market price; both contracts use the price of the day before there." : "";
 }
 const signed = (v) => `<span class="${v < 0 ? "neg" : "pos"}">${v < 0 ? "−" : "+"}€${Math.abs(v).toFixed(0)}</span>`;
 

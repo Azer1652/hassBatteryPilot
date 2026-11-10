@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from .config import Options
 from .load import LoadProfile
 from .meter import QuarterRecord
-from .planner import make_plan, sticky_action
+from .planner import make_plan, market_at, sticky_action
 from .prices import PriceSlot, price_at
 from .simulate import Battery
 from .simulate import step as sim_step
@@ -44,7 +44,7 @@ def _blank():
             "dyn_c": 0.0, "quarters": 0, "replay": {k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0,
                                                         "discharged": 0.0, "grid_charged": 0.0, "peak_kw": 0.0}
                        for k in KINDS},
-            "replay_days": 0, "peak_kw": 0.0}
+            "replay_days": 0, "peak_kw": 0.0, "estimated": 0}
 
 
 @dataclass
@@ -60,7 +60,10 @@ class Comparison:
         return m
 
     # ---------------------------------------------------------------- same usage
-    def add_quarter(self, rec: QuarterRecord, market: float | None, o: Options, tz: ZoneInfo) -> None:
+    def add_quarter(self, rec: QuarterRecord, market: float | None, o: Options, tz: ZoneInfo,
+                    estimated: bool = False) -> None:
+        """`market`: the quarter's market price; `estimated` when it had none and the planner's
+        estimate is used (the price the day before), so both contracts price the same usage."""
         if rec.covered.get("import", 0) < 0.5:
             return
         m = self.month(_month(rec.start, tz))
@@ -77,6 +80,7 @@ class Comparison:
         if market is not None:
             m["market_sum"] += market
             m["market_n"] += 1
+            m["estimated"] += estimated
             dyn = tariff("dynamic", o)
             m["dyn_c"] += imp * dyn.buy(local, market) - exp * dyn.sell(local, market)
 
@@ -108,6 +112,7 @@ class Comparison:
                 if m["market_n"] else None,
             },
             "replay_days": m["replay_days"],
+            "estimated_quarters": m["estimated"],
             "with_strategy": None,
         }
         if m["replay_days"]:
@@ -198,6 +203,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         left = (st.start + timedelta(hours=st.hours) - r.start).total_seconds() / 3600 if st else None
         local = (r.start + timedelta(minutes=7, seconds=30)).astimezone(tz)
         market = price_at(prices, r.start)
+        if market is None:          # a gap in the price data: the planner's estimate, not 0 EUR/MWh
+            market, _ = market_at(prices, r.start)
         sell = tar.sell(local, market, market_avg)
         res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left,
                        curtail=block_negative and sell < 0, limit_kw=st.limit_kw if st else None,

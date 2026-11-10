@@ -205,3 +205,11 @@ def test_find_notify():
     two = [{"domain": "notify", "services": {"mobile_app_a": {}, "mobile_app_b": {}}}]
     assert discovery.find_notify(Options(), two)[0] is None
     assert discovery.find_notify(Options(notify_service="mobile_app_x"), [])[0] == "notify.mobile_app_x"
+
+
+def test_price_times_without_a_time_zone_are_in_home_assistants_time_zone():
+    st = {"state": "0.1", "attributes": {"unit_of_measurement": "EUR/kWh",
+          "prices": [{"time": "2026-01-14T00:00:00", "price": 0.10}, {"time": "2026-01-14T01:00:00", "price": 0.12}]}}
+    slots = prices.parse_state(st, ZoneInfo("Europe/Brussels"))
+    assert slots[0].start == datetime(2026, 1, 13, 23, 0, tzinfo=timezone.utc)     # midnight in Brussels
+    assert prices.parse_state(st)[0].start == datetime(2026, 1, 14, 0, 0, tzinfo=timezone.utc)   # no zone: UTC

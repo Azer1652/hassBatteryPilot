@@ -34,7 +34,8 @@ class PriceSlot:
         return int((self.end - self.start).total_seconds() // 60)
 
 
-def parse_time(value) -> datetime | None:
+def parse_time(value, tz=None) -> datetime | None:
+    """A time from a price list; one without a time zone is in `tz` (HA's), else UTC."""
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str) and value:
@@ -45,7 +46,7 @@ def parse_time(value) -> datetime | None:
     else:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=tz or timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
@@ -76,8 +77,9 @@ def _items(attrs: dict) -> list:
     return []
 
 
-def parse_state(state: dict | None) -> list[PriceSlot]:
-    """Price slots from a price sensor's state object (as returned by /api/states)."""
+def parse_state(state: dict | None, tz=None) -> list[PriceSlot]:
+    """Price slots from a price sensor's state object (as returned by /api/states). Times without
+    a time zone are taken in `tz`, HA's time zone."""
     if not state:
         return []
     attrs = state.get("attributes") or {}
@@ -85,9 +87,9 @@ def parse_state(state: dict | None) -> list[PriceSlot]:
     for item in _items(attrs):
         if not isinstance(item, dict):
             continue
-        start = next((parse_time(item[k]) for k in TIME_KEYS if k in item), None)
+        start = next((parse_time(item[k], tz) for k in TIME_KEYS if k in item), None)
         price = next((item[k] for k in PRICE_KEYS if k in item), None)
-        end = next((parse_time(item[k]) for k in END_KEYS if k in item), None)
+        end = next((parse_time(item[k], tz) for k in END_KEYS if k in item), None)
         if start is None or price is None:
             continue
         try:

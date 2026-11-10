@@ -19,7 +19,7 @@ from .helpers import CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
-from .planner import Plan, make_plan, sticky_action
+from .planner import Plan, make_plan, market_at, sticky_action
 from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
 from .solis import NEEDED as SOLIS_NEEDED
 from .solis import Solis
@@ -112,6 +112,8 @@ class App:
         self._cmd_failures = 0
         self._tou_mismatch = 0
         self._inverter_saved: dict | None = None
+        self._forecast_out = False
+        self._refresh_task: asyncio.Task | None = None
         self._last = {"refresh": None, "save": None, "publish": None}
 
     # ---------------------------------------------------------------- logging for the dashboard
@@ -488,8 +490,8 @@ class App:
             rec.mode = max(self._modes, key=self._modes.get)
             self._modes = {}
         self.peaks.add(rec, self.tz)
-        market = P.price_at(self.price_slots, rec.start)
-        self.comparison.add_quarter(rec, market, self.o, self.tz)
+        market, known = market_at(self.price_slots, rec.start) if self.price_slots else (None, False)
+        self.comparison.add_quarter(rec, market, self.o, self.tz, estimated=market is not None and not known)
         self.records.append(rec)
         cutoff = rec.start - timedelta(days=RECORD_DAYS)
         self.records = [r for r in self.records if r.start > cutoff]
@@ -512,7 +514,7 @@ class App:
         now = self.clock()
         if "price_sensor" in self.ent_ids:
             try:
-                new = P.parse_state(await self.ha.state(self.ent_ids["price_sensor"]))
+                new = P.parse_state(await self.ha.state(self.ent_ids["price_sensor"]), self.tz)
                 self.price_slots = P.merge(self.price_slots, new, now - timedelta(days=RECORD_DAYS))
             except Exception as e:  # noqa: BLE001
                 self.event(f"Reading prices failed: {e}", logging.WARNING)
@@ -545,7 +547,17 @@ class App:
                 if v is not None:
                     hourly.update(hourly_from_daily(day, v, self.lat, self.lon, self.tz))
         if hourly:
+            self._forecast_out = False
             self.forecast_archive = archive_forecast(self.forecast_archive, hourly, now)
+        else:
+            # The forecast is unavailable (service down, rate limit): keep planning with the last one
+            # received rather than with no sun at all, which would make every night a winter night.
+            hourly = {t: v for t, v in ((datetime.fromisoformat(k), v) for k, v in self.forecast_archive.items())
+                      if t >= now - timedelta(hours=1)}
+            if hourly and not self._forecast_out:
+                self._forecast_out = True
+                self.event("The solar forecast is unavailable; planning with the last one received.",
+                           logging.WARNING)
         self.pv = PvForecast(hourly, self.shade, self.tz)
 
     def replan(self, now: datetime | None = None):
@@ -713,7 +725,7 @@ class App:
         local = now.astimezone(self.tz)
         if local.time() < ALERTS_AT:
             return
-        if local.day == 1:
+        if local.day <= 7:            # (on a later day too, when the app was not running on the 1st)
             prev = (local.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
             if prev in self.comparison.months:
                 r = self.comparison.report(prev, self.o)
@@ -721,7 +733,9 @@ class App:
         end = self.o.fixed_end_date
         if end and self.o.contract == "fixed":
             days = (end - local.date()).days
-            if days in (42, 14, 3):
+            due = [d for d in (42, 14, 3) if 0 <= days <= d]     # the most urgent reminder not yet sent
+            if due:
+                mark = min(due)
                 s = self.comparison.summary(self.o, now, self.tz)
                 diff = (s.get("with_strategy") or s.get("same_usage") or {}).get("dynamic_minus_fixed_eur")
                 extra = ""
@@ -730,7 +744,7 @@ class App:
                              f" by about €{abs(diff):.0f}.")
                 await self.alert(f"Fixed price ends in {days} days",
                                  f"Your fixed price ends on {end}. When the new rates arrive, enter them in the app's "
-                                 f"settings for a new comparison.{extra}", key=f"renewal-{end}-{days}")
+                                 f"settings for a new comparison.{extra}", key=f"renewal-{end}-{mark}")
         avg30 = self.market_avg_30d()
         if avg30 is not None and self.o.contract == "fixed" and len(self.daily_market) >= 30:
             night_be = breakeven_eur_mwh(self.o.fixed_night_rate, self.o)
@@ -884,14 +898,24 @@ class App:
         """One round of the main loop (called every TICK_S seconds)."""
         now = self.clock()
         await self.tick()
-        if self._due("refresh", now, REFRESH_S):
-            await self.refresh()
+        idle = self._refresh_task is None or self._refresh_task.done()
+        if idle and self._due("refresh", now, REFRESH_S):
+            # Prices and the forecast can take long to read (the forecast websocket up to a minute):
+            # in the background, so the 10-second control loop keeps running meanwhile.
+            self._refresh_task = asyncio.create_task(self._background_refresh())
+            await asyncio.sleep(0)
         await self.nightly()
         await self.daily_alerts()
         if self._due("publish", now, PUBLISH_S):
             await self.publish()
         if self._due("save", now, SAVE_S):
             self.save_state()
+
+    async def _background_refresh(self):
+        try:
+            await self.refresh()
+        except Exception as e:  # noqa: BLE001
+            self._error(e)
 
     async def reach_ha(self) -> bool:
         """Ping Home Assistant; while it does not answer, say why (logged once per reason)."""
@@ -944,6 +968,8 @@ class App:
 
     async def shutdown(self):
         """App stopping: leave the inverter in self-use and save what was learned."""
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
         if self.solis and self.solis.mode in ("charge", "discharge", "failed"):
             try:
                 await self.solis.self_use(self.clock().astimezone(self.tz), "Battery Pilot stopped")
