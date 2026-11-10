@@ -75,7 +75,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
            control_on: bool) -> Decision:
     hour = r.t_local.strftime("%H:00:00")
     if not control_on:
-        if mode in ("charge", "discharge"):
+        if mode in ("charge", "discharge", "failed"):     # (failed: a command of ours may have half-applied)
             return Decision("self_use", reason="Battery Pilot control is off")
         return Decision("none", reason="shadow mode: control is off")
     if step is None:
@@ -92,6 +92,8 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         # current so the battery does not drain again before the slot ends.
         paced = paced_amps(step, r, o, up=True) if r.soc < step.soc_end else MIN_A
         want = min(follow, paced)
+        if mode == "failed" and follow >= MIN_A:
+            return Decision("charge", want, "send the charge command again")
         if mode == "charge":
             if r.projection_kw > limit + 0.1 or follow < MIN_A:
                 return Decision("self_use", reason="house load too high: battery helps instead")

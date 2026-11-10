@@ -10,6 +10,7 @@ init: false
 startup: services
 homeassistant_api: true
 ingress: true
+watchdog: tcp://[HOST]:[PORT:8099]
 panel_icon: mdi:battery-sync
 panel_title: Battery Pilot
 map:

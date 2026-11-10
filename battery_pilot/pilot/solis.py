@@ -2,7 +2,9 @@
 
 The same sequences as the old `script.ps_inverter`, which were tested on an
 S6-EH1P: time-of-use slot 1 is set to the current clock hour only, so a
-charge or discharge stops by itself within the hour if the app or HA stops.
+charge or discharge stops by itself when the hour ends if the app or HA stops.
+The Solis repeats its time-of-use slots every day, though: the app records
+what it left on the inverter and switches it back to self-use when it starts.
 """
 from __future__ import annotations
 
@@ -26,7 +28,8 @@ def hour_slot(t_local: datetime) -> tuple[str, str]:
 class Solis:
     ha: object                      # HA client
     entities: dict                  # key -> entity_id
-    mode: str = "unknown"           # what we last told it: self_use | charge | discharge
+    mode: str = "unknown"           # what we last told it: self_use | charge | discharge,
+                                    # unknown (nothing yet) or failed (a command failed half-way)
     slot_hour: str = ""             # local hour the slot was set for
     amps: int = 0
     log: list = field(default_factory=list)   # recent commands for the dashboard

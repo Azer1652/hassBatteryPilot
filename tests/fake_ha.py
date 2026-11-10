@@ -35,6 +35,8 @@ class FakeHA:
         self.check_ok = True
         self.history_data: dict = {}
         self.import_kw = 0.0
+        self.override: dict[str, str] = {}      # entity -> state shown instead of the physics (unavailable, frozen)
+        self.fail = None                        # (domain, service, data) -> True to make that call fail
         s = {
             "sensor.solis_grid_import_power": st(0, "W"),
             "sensor.solis_grid_export_power": st(0, "W"),
@@ -78,6 +80,8 @@ class FakeHA:
 
     async def state(self, eid):
         v = self.s.get(eid)
+        if v is not None and eid in self.override:
+            v = {**v, "state": self.override[eid]}
         return None if v is None else {"entity_id": eid, **v}
 
     async def services(self):
@@ -85,6 +89,8 @@ class FakeHA:
 
     async def call(self, domain, service, data=None):
         data = data or {}
+        if self.fail and self.fail(domain, service, data):
+            raise RuntimeError("Modbus timeout")
         self.calls.append((domain, service, data))
         eid = data.get("entity_id")
         if domain == "switch" and isinstance(eid, str):

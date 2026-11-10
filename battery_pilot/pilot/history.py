@@ -255,6 +255,8 @@ class HistoryStore:
         f = self._file(date.fromisoformat(doc["date"]))
         with open(f + ".tmp", "w", encoding="utf-8") as fh:
             json.dump(doc, fh, separators=(",", ":"))
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(f + ".tmp", f)
         self.index()
         self._index[doc["date"]] = doc["summary"]

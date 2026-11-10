@@ -34,6 +34,22 @@ PUBLISH_S = 30
 NIGHTLY_AT = time(0, 20)
 ALERTS_AT = time(9, 0)
 RECORD_DAYS = 3
+BLIND_S = 60          # without SOC or grid import this long, a charge or discharge is stopped
+HELPER_GRACE_S = 60   # a helper switch that cannot be read keeps its last state this long
+FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging at a real current is stale
+CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
+TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
+CMD_PROBLEM = "The inverter does not accept commands"
+
+
+def write_json(path: str, obj) -> None:
+    """Write a file so that a power cut leaves either the old or the new version, never half of it."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def utcnow() -> datetime:
@@ -81,11 +97,21 @@ class App:
         self.control_on = False
         self.curtail_on = False
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
+        self.export_limit_before: float | None = None   # the export limit we found before blocking (persisted)
         self.peak_warned = ""
-        self.boost_seen = ""              # the boost window last announced in the events
+        self.boost_seen: dict = {}        # the boost window last announced in the events (persisted)
         self.over_since: datetime | None = None
         self.events: list[dict] = []
         self._modes: dict[str, int] = {}  # inverter mode per tick in the current quarter
+        self.seen_at: datetime | None = None    # last tick with SOC and grid import
+        self.blind_reported = False
+        self._helper_seen: dict[str, datetime] = {}
+        self._soc_since: tuple[float, datetime] | None = None
+        self._stuck_soc: float | None = None
+        self._cmd_at: datetime | None = None
+        self._cmd_failures = 0
+        self._tou_mismatch = 0
+        self._inverter_saved: dict | None = None
         self._last = {"refresh": None, "save": None, "publish": None}
 
     # ---------------------------------------------------------------- logging for the dashboard
@@ -100,26 +126,39 @@ class App:
         return os.path.join(self.data_dir, "state.json")
 
     def load_state(self) -> bool:
+        """What was learned and stored. A file that cannot be used is kept as state.json.bad and
+        Battery Pilot starts fresh, rather than failing to start."""
         try:
             with open(self.state_file, encoding="utf-8") as f:
                 s = json.load(f)
-        except (OSError, ValueError):
+            if not isinstance(s, dict):
+                raise ValueError("not a JSON object")
+            loaded = {
+                "peaks": PeakTracker.from_json(s.get("peaks")), "shade": ShadeModel.from_json(s.get("shade")),
+                "load": LoadProfile.from_json(s.get("load")), "comparison": Comparison.from_json(s.get("comparison")),
+                "price_slots": P.from_json(s.get("prices")),
+                "forecast_archive": dict(s.get("forecast_archive") or {}),
+                "records": [QuarterRecord.from_json(r) for r in s.get("records") or []],
+                "daily_market": dict(s.get("daily_market") or {}), "alerts": dict(s.get("alerts") or {}),
+                "last_nightly": str(s.get("last_nightly") or ""), "migrated": bool(s.get("migrated")),
+                "curtailed_by_us": bool(s.get("curtailed_by_us")),
+                "export_limit_before": s.get("export_limit_before"),
+                "day_logs": dict(s.get("day_logs") or {}), "boost_seen": dict(s.get("boost_seen") or {}),
+            }
+            if s.get("load_default_kw"):
+                loaded["load"].default_kw = float(s["load_default_kw"])
+        except FileNotFoundError:
             return False
-        self.peaks = PeakTracker.from_json(s.get("peaks"))
-        self.shade = ShadeModel.from_json(s.get("shade"))
-        self.load = LoadProfile.from_json(s.get("load"))
-        self.comparison = Comparison.from_json(s.get("comparison"))
-        self.price_slots = P.from_json(s.get("prices"))
-        self.forecast_archive = dict(s.get("forecast_archive") or {})
-        self.records = [QuarterRecord.from_json(r) for r in s.get("records") or []]
-        self.daily_market = dict(s.get("daily_market") or {})
-        self.alerts = dict(s.get("alerts") or {})
-        self.last_nightly = s.get("last_nightly", "")
-        self.migrated = bool(s.get("migrated"))
-        self.curtailed_by_us = bool(s.get("curtailed_by_us"))
-        self.day_logs = dict(s.get("day_logs") or {})
-        if s.get("load_default_kw"):
-            self.load.default_kw = s["load_default_kw"]
+        except Exception as e:  # noqa: BLE001 - any damage: keep a copy, start fresh
+            try:
+                os.replace(self.state_file, self.state_file + ".bad")
+            except OSError:
+                pass
+            self.event(f"The saved state could not be read ({type(e).__name__}: {e}); starting fresh. "
+                       "A copy is kept as state.json.bad.", logging.WARNING)
+            return False
+        for k, v in loaded.items():
+            setattr(self, k, v)
         self.pv = PvForecast({}, self.shade, self.tz)
         return True
 
@@ -130,11 +169,36 @@ class App:
              "comparison": self.comparison.to_json(), "prices": P.to_json(self.price_slots),
              "forecast_archive": self.forecast_archive, "records": [r.to_json() for r in self.records],
              "daily_market": self.daily_market, "alerts": self.alerts, "last_nightly": self.last_nightly,
-             "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us, "day_logs": self.day_logs}
-        tmp = self.state_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f)
-        os.replace(tmp, self.state_file)
+             "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us,
+             "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
+             "boost_seen": self.boost_seen}
+        write_json(self.state_file, s)
+
+    # What Battery Pilot left on the inverter, in a small file written at every change: after a
+    # crash or power cut the next start can clean up (the Solis repeats its time-of-use slot daily).
+    @property
+    def inverter_file(self) -> str:
+        return os.path.join(self.data_dir, "inverter.json")
+
+    def _save_inverter(self):
+        s = {"mode": self.solis.mode if self.solis else "unknown", "curtailed_by_us": self.curtailed_by_us,
+             "export_limit_before": self.export_limit_before}
+        if s == self._inverter_saved:
+            return
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            write_json(self.inverter_file, s)
+            self._inverter_saved = s
+        except OSError as e:
+            log.warning("Could not save the inverter state: %s", e)
+
+    def _load_inverter(self) -> dict:
+        try:
+            with open(self.inverter_file, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
 
     # ---------------------------------------------------------------- setup
     async def setup(self) -> bool:
@@ -177,6 +241,20 @@ class App:
             self.event(f"Could not create the Battery Pilot helpers ({e}); control stays off.", logging.ERROR)
         self.problem = None
         self.solis = Solis(self.ha, {k: v for k, v in self.ent_ids.items() if k in SOLIS_NEEDED or k == "export_limit"})
+        saved = self._load_inverter()
+        if "curtailed_by_us" in saved:
+            self.curtailed_by_us = bool(saved["curtailed_by_us"])
+            self.export_limit_before = saved.get("export_limit_before")
+        if saved.get("mode") in ("charge", "discharge", "failed"):
+            # Stopped while the inverter was charging or discharging (crash, power cut): the Solis
+            # repeats its time-of-use slot every day, so it goes back to self-use now.
+            self.event("Battery Pilot had stopped while the inverter was charging or discharging; "
+                       "it is set back to self-use.", logging.WARNING)
+            await self._apply(Decision("self_use", reason="left active when Battery Pilot stopped"),
+                              self.clock().astimezone(self.tz))
+        soc = self._num(await self.ha.state(self.ent_ids["battery_soc"]))
+        if soc is not None and self.meter.soc_at_start is None:
+            self.meter.soc_at_start = soc            # the first plan starts from the real SOC
 
         if not self.migrated:
             notes = await migrate(self.ha, states, self.config_dir, os.path.join(self.data_dir, "playbook_backup"),
@@ -234,11 +312,11 @@ class App:
     async def tick(self):
         now = self.clock()
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_soc",
-                "battery_voltage")
+                "battery_voltage", "tou_switch")
         sts = await self._states(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), return_exceptions=True)
-        self.control_on = isinstance(helpers[0], dict) and helpers[0].get("state") == "on"
-        self.curtail_on = isinstance(helpers[1], dict) and helpers[1].get("state") == "on"
+        self.control_on = self._helper("control", helpers[0], self.control_on, now)
+        self.curtail_on = self._helper("curtail", helpers[1], self.curtail_on, now)
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
@@ -246,15 +324,19 @@ class App:
             self._quarter_closed(rec)
 
         local = now.astimezone(self.tz)
-        if soc is None or kw["import"] is None or kw["load"] is None:
-            self.readings = None
-            self.decision = Decision("none", reason="battery SOC, grid import or house load unavailable")
-            return
         voltage = self._num(sts.get("battery_voltage")) or self.o.battery_voltage
+        if kw["load"] is None and kw["import"] is not None:
+            kw["load"] = self._estimate_load(kw, voltage)     # a flaky load sensor must not stop a charge
+        if soc is None or kw["import"] is None or self._frozen(now, soc):
+            await self._blind(now, local, "battery SOC or grid import unavailable" if soc is None or kw["import"] is None
+                              else "the battery SOC does not change while (dis)charging")
+            return
+        self.seen_at, self.blind_reported = now, False
         projection = self.meter.projection_kw(now, kw["import"])
         self.readings = Readings(now, local, soc, kw["load"], kw["pv"] or 0.0, kw["import"], projection, voltage)
         step = self.plan.step_at(now) if self.plan else None
         if self.solis:
+            self._reconcile(now, (sts.get("tou_switch") or {}).get("state"))
             self.decision = decide(step, self.readings, self.o, self.solis.mode, self.solis.slot_hour,
                                    self.solis.amps, self.control_on)
             await self._apply(self.decision, local)
@@ -263,7 +345,70 @@ class App:
         self._modes[mode] = self._modes.get(mode, 0) + 1
         await self._peak_warning(now, projection)
 
+    def _helper(self, name: str, st, last: bool, now: datetime) -> bool:
+        """A helper switch's state; a read that fails keeps the last known state for a minute."""
+        if isinstance(st, dict) and st.get("state") in ("on", "off"):
+            self._helper_seen[name] = now
+            return st["state"] == "on"
+        seen = self._helper_seen.get(name)
+        if seen is not None and (now - seen).total_seconds() < HELPER_GRACE_S:
+            return last
+        return False
+
+    def _estimate_load(self, kw: dict, voltage: float) -> float:
+        """House load from grid, solar and the charge current we set, when the load sensor is out."""
+        charge_kw = self.solis.amps * voltage / 1000 if self.solis and self.solis.mode == "charge" else 0.0
+        return max(kw["import"] - (kw["export"] or 0.0) + (kw["pv"] or 0.0) - charge_kw, 0.0)
+
+    def _frozen(self, now: datetime, soc: float) -> bool:
+        """A SOC that stays the same while the battery is charged or discharged at a real current
+        is a stale reading; it counts as stale until it changes."""
+        if self._stuck_soc is not None:
+            if soc == self._stuck_soc:
+                return True
+            self._stuck_soc = None
+        s = self.solis
+        moving = (s is not None and s.amps >= 15 and
+                  ((s.mode == "charge" and soc < 99) or (s.mode == "discharge" and soc > self.o.battery_min_soc + 1)))
+        if not moving or self._soc_since is None or soc != self._soc_since[0]:
+            self._soc_since = (soc, now)
+            return False
+        if (now - self._soc_since[1]).total_seconds() >= FROZEN_S:
+            self._stuck_soc, self._soc_since = soc, None
+            return True
+        return False
+
+    async def _blind(self, now: datetime, local: datetime, why: str):
+        """No usable SOC or grid import: after BLIND_S, a charge or discharge is stopped."""
+        self.readings = None
+        self.decision = Decision("none", reason=why)
+        gone = (now - self.seen_at).total_seconds() if self.seen_at else BLIND_S
+        if self.solis and self.solis.mode in ("charge", "discharge", "failed") and gone >= BLIND_S:
+            if not self.blind_reported:
+                self.blind_reported = True
+                self.event(f"No usable measurements ({why}): the inverter goes back to self-use until they "
+                           "return.", logging.WARNING)
+            self.decision = Decision("self_use", reason="measurements unavailable")
+            await self._apply(self.decision, local)
+
+    def _reconcile(self, now: datetime, tou: str | None):
+        """Read the time-of-use switch back: if something else changed it, the next command corrects it."""
+        s = self.solis
+        settling = self._cmd_at is not None and (now - self._cmd_at).total_seconds() < TOU_SETTLE_S
+        if not self.control_on or tou not in ("on", "off") or settling:
+            self._tou_mismatch = 0
+            return
+        wrong = (tou == "on" and s.mode == "self_use") or (tou == "off" and s.mode in ("charge", "discharge"))
+        self._tou_mismatch = self._tou_mismatch + 1 if wrong else 0
+        if self._tou_mismatch >= 2:
+            self._tou_mismatch = 0
+            s.mode = "failed" if tou == "on" else "self_use"
+            self.event(f"The inverter's time-of-use switch is {tou}, not what Battery Pilot set; correcting it.")
+
     async def _apply(self, d: Decision, local: datetime):
+        if d.command not in ("charge", "discharge", "current", "self_use"):
+            return
+        self._cmd_at = self.clock()
         try:
             if d.command == "charge":
                 await self.solis.charge(local, d.amps)
@@ -271,11 +416,22 @@ class App:
                 await self.solis.discharge(local, d.amps)
             elif d.command == "current":
                 await self.solis.set_current(local, d.amps)
-            elif d.command == "self_use":
+            else:
                 await self.solis.self_use(local, d.reason)
+            self._cmd_failures = 0
+            if self.problem and self.problem.startswith(CMD_PROBLEM):
+                self.problem = None
         except Exception as e:  # noqa: BLE001
-            self.event(f"Inverter command '{d.command}' failed: {e}", logging.ERROR)
-            self.solis.mode = "unknown"
+            self.solis.mode = "failed"        # its state is not known: the next tick sends the command again
+            self._cmd_failures += 1
+            now, key = self.clock(), "cmdfail:" + d.command
+            last = self._last.get(key)
+            if last is None or (now - last).total_seconds() >= CMD_EVENT_S:
+                self._last[key] = now
+                self.event(f"Inverter command '{d.command}' failed: {e}", logging.ERROR)
+            if self._cmd_failures >= 3:
+                self.problem = f"{CMD_PROBLEM}: {e}"
+        self._save_inverter()
 
     @property
     def blocks_negative_export(self) -> bool:
@@ -292,11 +448,23 @@ class App:
         # a zero-export installation keeps its own setting.
         if want == self.curtailed_by_us:
             return
-        watts = 0 if want else int(self.o.export_limit_kw * 1000)
+        normal = self.o.export_limit_kw * 1000
+        if want:
+            try:
+                before = self._num(await self.ha.state(self.ent_ids["export_limit"]))
+            except Exception:  # noqa: BLE001
+                before = None
+            if before is not None and before <= 0:
+                return                    # a zero-export installation: nothing to block, and not ours to undo
+            self.export_limit_before, watts = before, 0
+        else:
+            before = self.export_limit_before
+            watts = int(min(before, normal)) if before is not None else int(normal)
         try:
             await self.solis.set_export_limit(local, watts)
             self.curtailed_by_us = want
             self.save_state()
+            self._save_inverter()
         except Exception as e:  # noqa: BLE001
             self.event(f"Setting the export limit failed: {e}", logging.ERROR)
 
@@ -399,9 +567,13 @@ class App:
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz),
                               month_peak_kw=self.peaks.month_peak(now, self.tz))
         self._log_plan(now)
-        boost = self.plan.boost
-        if boost and boost["from"] != self.boost_seen:
-            self.boost_seen = boost["from"]
+        boost, seen = self.plan.boost, self.boost_seen
+        # The plan is redone every few minutes while a boost runs: announce a window once, unless
+        # a new one starts after it or the level goes up clearly.
+        if boost and seen and boost["from"] < seen.get("to", "") and boost["limit_kw"] < seen.get("limit_kw", 0) + 0.5:
+            seen["to"] = max(seen["to"], boost["to"])
+        elif boost:
+            self.boost_seen = {"from": boost["from"], "to": boost["to"], "limit_kw": boost["limit_kw"]}
             a = datetime.fromisoformat(boost["from"]).astimezone(self.tz)
             z = datetime.fromisoformat(boost["to"]).astimezone(self.tz)
             why = (f"it earns about €{boost['gain_eur']:.2f}, more than the €{boost['peak_cost_eur']:.2f} the higher "
@@ -771,11 +943,12 @@ class App:
 
     async def shutdown(self):
         """App stopping: leave the inverter in self-use and save what was learned."""
-        if self.solis and self.solis.mode in ("charge", "discharge"):
+        if self.solis and self.solis.mode in ("charge", "discharge", "failed"):
             try:
                 await self.solis.self_use(self.clock().astimezone(self.tz), "Battery Pilot stopped")
             except Exception as e:  # noqa: BLE001
                 log.warning("Could not return the inverter to self-use: %s", e)
+            self._save_inverter()
         self.save_state()
 
 
