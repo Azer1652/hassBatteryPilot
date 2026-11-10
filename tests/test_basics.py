@@ -32,6 +32,8 @@ def test_from_dict_reads_entity_overrides_and_ignores_unknown_keys():
     {"night_start": "22:00", "night_end": "22:00"},
     {"battery_min_soc": 40, "battery_reserve_soc": 30},
     {"fixed_contract_end": "31/03/2027"},
+    {"winter_mode": "always"},
+    {"slot_entities": "slot_1"},
 ])
 def test_invalid_combinations_are_refused(raw):
     with pytest.raises(ConfigError):
@@ -213,3 +215,25 @@ def test_price_times_without_a_time_zone_are_in_home_assistants_time_zone():
     slots = prices.parse_state(st, ZoneInfo("Europe/Brussels"))
     assert slots[0].start == datetime(2026, 1, 13, 23, 0, tzinfo=timezone.utc)     # midnight in Brussels
     assert prices.parse_state(st)[0].start == datetime(2026, 1, 14, 0, 0, tzinfo=timezone.utc)   # no zone: UTC
+
+
+def test_price_times_in_every_form():
+    aware = datetime(2026, 1, 14, 12, 0, tzinfo=BXL)
+    assert prices.parse_time(aware) == aware.astimezone(timezone.utc)
+    assert prices.parse_time("2026-01-14T11:00:00Z") == datetime(2026, 1, 14, 11, 0, tzinfo=timezone.utc)
+    assert prices.parse_time("not a time") is None and prices.parse_time(None) is None and prices.parse_time(12) is None
+
+
+def test_slots_without_an_end_take_the_spacing_of_the_list():
+    st = {"state": "0.1", "attributes": {"unit_of_measurement": "EUR/MWh", "data": [
+        {"start": "2026-01-14T00:00:00+01:00", "value": 100},
+        {"start": "2026-01-14T00:15:00+01:00", "value": 110},
+        {"start": "garbage", "value": 120},
+        {"start": "2026-01-14T00:30:00+01:00", "value": "n/a"}]}}
+    slots = prices.parse_state(st)
+    assert [s.minutes for s in slots] == [15, 15] and [s.eur_mwh for s in slots] == [100, 110]
+
+
+def test_each_contract_has_its_own_yearly_fee():
+    o = Options(fixed_yearly_fee_eur=65, dynamic_yearly_fee_eur=99)
+    assert tariffs.FixedTariff(o).yearly_fee_eur == 65 and tariffs.DynamicTariff(o).yearly_fee_eur == 99

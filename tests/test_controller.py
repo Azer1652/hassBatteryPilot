@@ -121,3 +121,12 @@ def test_a_rising_house_load_lowers_the_charge_current_instead_of_pausing():
 def test_a_failed_charge_command_is_simply_sent_again():
     d = decide(step("charge", 60), rd(load=0.5, imp=2.3, proj=2.3), OPTS, "failed", "01:00:00", 30, True)
     assert d.command == "charge"                      # not a pause and restart
+
+
+def test_an_export_follows_its_pacing_in_steps_of_ten_amps():
+    s = step("discharge", 40)
+    want = paced_amps(s, rd(soc=60), OPTS, up=False)
+    d = decide(s, rd(soc=60), OPTS, "discharge", "01:00:00", want, True)
+    assert d.command == "none" and d.reason == "discharging"
+    d = decide(s, rd(soc=60), OPTS, "discharge", "01:00:00", want + 20, True)
+    assert d.command == "current" and d.amps == want

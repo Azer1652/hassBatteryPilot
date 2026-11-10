@@ -9,7 +9,7 @@ not filled in; the record says how much of the quarter was covered.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 CHANNELS = ("import", "export", "load", "pv")
@@ -133,10 +133,6 @@ class PeakTracker:
     @classmethod
     def from_json(cls, d):
         return cls(dict((d or {}).get("months", {})), (d or {}).get("last_quarter_kw", 0.0))
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def history_to_hourly(samples: list[tuple[datetime, str]], scale: float, start: datetime,

@@ -84,3 +84,31 @@ def test_peaks_only_winter_mode_is_cheaper_and_still_shaves(winter):
     assert peaks["fixed"]["grid_charged"] < full["fixed"]["grid_charged"] / 2
     assert peaks["fixed"]["peak_kw"] <= LIMIT + 0.1
     assert yearsim.month_eur(peaks, "fixed", o) < yearsim.month_eur(full, "fixed", o)
+
+
+def test_price_spikes_make_dynamic_cheaper_and_never_dearer(monkeypatch):
+    """Four synthetic March days with an extreme negative and an extreme positive hour, replayed
+    with the rules that cross the import limit and the reserve, and with those rules switched off."""
+    import pilot.planner as planner
+
+    spikes = {date(2026, 3, 10): {3: -8000.0}, date(2026, 3, 11): {19: 3000.0}}
+    real = yearsim.World.prices
+
+    def prices(self, day):
+        out = real(self, day)
+        for h, p in spikes.get(day, {}).items():
+            out[h] = type(out[h])(out[h].start, out[h].end, p)
+        return out
+
+    monkeypatch.setattr(yearsim.World, "prices", prices)
+    o = Options(contract="dynamic")
+
+    def cost():
+        (m,) = yearsim.run(date(2026, 3, 9), 4, o, warmup_days=2, replan_every_h=2)["months"].values()
+        return yearsim.month_eur(m, "dynamic", o)
+
+    with_rules = cost()
+    monkeypatch.setattr(planner, "BOOST_MIN_GAIN_C", 1e9)
+    monkeypatch.setattr(planner, "EXTREME_MARGIN_C", 1e9)
+    without = cost()
+    assert with_rules < without - 0.25                    # incl. the capacity cost of any higher peak

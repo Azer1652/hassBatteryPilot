@@ -144,5 +144,11 @@ def from_dict(raw: dict) -> Options:
 
 
 def load(path: str) -> Options:
-    with open(path, encoding="utf-8") as f:
-        return from_dict(json.load(f))
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError(f"the settings file {path} cannot be read ({e}).") from None
+    if not isinstance(raw, dict):
+        raise ConfigError(f"the settings file {path} does not hold settings.")
+    return from_dict(raw)

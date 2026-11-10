@@ -6,7 +6,7 @@ quarter-hours, so the planner keeps enough battery for those peaks.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .meter import QuarterRecord
@@ -99,16 +99,6 @@ class LoadProfile:
             n += 1
         return n
 
-    def learn_hourly(self, hourly: dict[datetime, tuple[float, float]], tz: ZoneInfo) -> int:
-        """Bootstrap from recorder history: {UTC hour: (kWh, coverage)}."""
-        n = 0
-        for hour, (kwh, cov) in sorted(hourly.items()):
-            if cov >= 0.9:
-                local = hour.astimezone(tz)
-                self.learn(local.weekday(), local.hour, kwh)
-                n += 1
-        return n
-
     def to_json(self):
         r = lambda m: [[None if v is None else round(v, 4) for v in row] for row in m]
         return {"kw": r(self.kw), "peak": r(self.peak)}
@@ -117,6 +107,3 @@ class LoadProfile:
     def from_json(cls, d):
         return cls(d["kw"], peak=d.get("peak")) if d and d.get("kw") else cls()
 
-
-def utc(dt: datetime) -> datetime:
-    return dt.astimezone(timezone.utc)

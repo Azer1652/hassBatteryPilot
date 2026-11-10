@@ -20,7 +20,7 @@ Contract fees and the capacity tariff are added at report time.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Options
@@ -228,6 +228,3 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
 def day_records(records: list[QuarterRecord], day_start: datetime, day_end: datetime) -> list[QuarterRecord]:
     return [r for r in records if day_start <= r.start < day_end]
 
-
-def utc(dt: datetime) -> datetime:
-    return dt.astimezone(timezone.utc)

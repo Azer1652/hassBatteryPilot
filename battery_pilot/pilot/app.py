@@ -791,7 +791,7 @@ class App:
             "mode": "active" if self.control_on else "shadow",
             "soc_target": round(step.soc_end, 1) if step else None,
             "reason": self.decision.reason, "winter": p.winter if p else None,
-            "plan_cost_eur": p.to_json()["cost_eur"] if p else None,
+            "plan_cost_eur": round(sum(st.cost_c for st in p.steps) / 100, 2) if p else None,
             "boost_kw": p.boost["limit_kw"] if p and p.boost else None,
             "next_hours": [{"start": s.start.astimezone(self.tz).strftime("%H:%M"), "action": s.action,
                             "soc": round(s.soc_end)} for s in (p.steps if p else [])

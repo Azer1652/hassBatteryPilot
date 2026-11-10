@@ -563,3 +563,106 @@ def test_a_finished_charge_is_not_sticky_so_nothing_charges_past_its_target():
     plan.steps[0].reserve = 10
     assert sticky_action(plan, t, 35, 35) == "discharge"                        # an extreme step goes lower
     assert sticky_action(None, t, 50, 35) is None
+
+
+# ---------------------------------------------------------------- the capacity peak across months and quarters
+def test_this_months_peak_is_not_free_in_the_next_month():
+    """The 3.6 kW of March costs nothing more in March, but April starts from the 2.5 kW minimum."""
+    o = Options()
+    end_of_march = datetime(2026, 3, 31, 23, 0, tzinfo=BXL)
+
+    def market(t):
+        return -200 if (t.day == 1 and t.hour < 2) else 100
+
+    plan = make_plan(end_of_march.astimezone(timezone.utc), BXL, o, DynamicTariff(o),
+                     _prices(market, start=end_of_march), _flat_load(0.45), lambda a, z: 0.0, soc=30, month_peak_kw=3.6)
+    april = [s for s in plan.steps if s.start.astimezone(BXL).month == 4 and s.action == "charge"]
+    assert april
+    over = [s for s in april if s.import_kwh / s.hours > o.capacity_min_kw + 1e-6]
+    assert not over or (plan.boost and plan.boost["peak_cost_eur"] > 0)
+
+
+@pytest.mark.parametrize("price,boost", [(-500, False), (-20000, True)])
+def test_one_extreme_quarter_hour_pays_a_whole_month_peak(price, boost):
+    """The capacity tariff bills the month's highest quarter-hour: crossing the limit for a single
+    quarter costs as much as for the whole month, so only a really extreme quarter is worth it."""
+    o = Options()
+    noon = datetime(2026, 3, 14, 12, 0, tzinfo=BXL)
+
+    def market(t):
+        return price if (t.day == 14 and t.hour == 13 and t.minute == 15) else 100
+
+    now = datetime(2026, 3, 14, 10, 0, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, DynamicTariff(o), _prices(market, minutes=15, start=noon - timedelta(hours=12)),
+                     _flat_load(0.45), lambda a, z: 0.0, soc=30)
+    q = next(s for s in plan.steps if s.start.astimezone(BXL).hour == 13 and s.start.astimezone(BXL).minute == 15)
+    assert bool(plan.boost) is boost
+    if boost:
+        assert q.import_kwh / q.hours == pytest.approx(_full_power_kw(o), abs=0.1)
+        assert plan.boost["peak_cost_eur"] == pytest.approx(
+            (plan.boost["limit_kw"] - o.capacity_min_kw) * o.capacity_tariff_eur_kw_year / 12, abs=0.01)
+    else:
+        assert q.import_kwh / q.hours <= o.capacity_min_kw + 1e-6
+
+
+# ---------------------------------------------------------------- the optimizer, on random days
+def _self_use_cost(b, slots, soc0, terminal, curtail):
+    """What plain self-use costs under the optimizer's own model (same rounding to SOC levels)."""
+    from pilot.planner import _self_delta, _slot_costs
+    e = b.capacity_kwh / 100
+    smin = math.ceil(b.min_soc)
+    s, total = int(min(max(round(soc0), 0), 100)), 0.0
+    for sl in slots:
+        maxc = int(b.max_charge_kw * sl.hours / e + 1e-9)
+        maxd = int(b.max_discharge_kw * sl.hours / e + 1e-9)
+        lo, hi = max(min(smin - s, 0), -maxd), min(100 - s, maxc)
+        ds = int(round(min(max(_self_delta(b, sl, e), lo), hi)))
+        total += _slot_costs(b, sl, e, ds, ds, curtail)[ds][0]
+        s += ds
+    return total - terminal * max(s - smin, 0) * e
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_the_plan_is_never_worse_than_doing_nothing_and_keeps_every_limit(seed):
+    from pilot.planner import CHARGE_HEADROOM_KW
+    rnd = random.Random(seed)
+    minutes = rnd.choice([60, 15])
+    n = 24 * 60 // minutes
+    h = minutes / 60
+    buy = [rnd.uniform(-10, 50) for _ in range(n)]
+    sell = [x - rnd.uniform(0, 15) for x in buy]
+    load = [rnd.uniform(0.1, 2.8) * h for _ in range(n)]
+    pv = [max(rnd.uniform(-1, 4), 0) * h for _ in range(n)]
+    slots = [Slot(T0 + timedelta(minutes=minutes * i), h, load[i], pv[i], buy[i], sell[i]) for i in range(n)]
+    soc0, terminal, curtail = rnd.uniform(10, 100), rnd.uniform(0, 30), rnd.random() < 0.3
+    steps = optimize(B, slots, soc0, terminal_c_kwh=terminal, curtail_negative=curtail,
+                     allow_export=rnd.random() < 0.8)
+    e = B.capacity_kwh / 100
+    plan_cost = sum(s.cost_c for s in steps) - terminal * max(steps[-1].soc_end - math.ceil(B.min_soc), 0) * e
+    assert plan_cost <= _self_use_cost(B, slots, soc0, terminal, curtail) + 1e-6
+    for s in steps:
+        assert 0 <= s.soc_end <= 100
+        assert s.export_kwh <= B.export_limit_kw * s.hours + 1e-9
+        if s.action == "discharge":
+            assert s.soc_end >= (s.reserve if s.reserve is not None else B.reserve_soc) - 1e-9
+        if s.action == "charge" and s.import_kwh > 1e-9:
+            assert s.import_kwh / s.hours <= B.import_limit_kw - CHARGE_HEADROOM_KW + 1e-6
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_a_boost_is_only_kept_when_it_clearly_pays(seed):
+    rnd = random.Random(seed)
+    o = Options()
+    spikes = {rnd.randrange(48): rnd.choice([-8000, -3000, -500, 3000, 8000]) for _ in range(rnd.randint(0, 3))}
+
+    def market(t):
+        k = (t - datetime(2026, 3, 14, tzinfo=BXL)).total_seconds() // 3600
+        return spikes.get(int(k), rnd.uniform(20, 200))
+
+    now = datetime(2026, 3, 14, rnd.randrange(24), 0, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, DynamicTariff(o), _prices(market, start=datetime(2026, 3, 14, tzinfo=BXL)),
+                     _flat_load(rnd.uniform(0.2, 1.5)), lambda a, z: 0.0, soc=rnd.uniform(10, 90),
+                     month_peak_kw=rnd.choice([0.0, 2.0, 3.0, 4.0]))
+    if plan.boost:
+        assert plan.boost["gain_eur"] - plan.boost["peak_cost_eur"] >= 0.24
+        assert plan.boost["limit_kw"] > o.import_limit_kw
