@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.2
+
+- The dashboard no longer shows "Cannot reach Battery Pilot: SyntaxError …" when it is
+  opened again after the browser or phone slept. Home Assistant's 15-minute ingress session
+  had lapsed and its plain-text "401: Unauthorized" was read as data. The dashboard now
+  updates as soon as it is visible again, retries within seconds while Home Assistant renews
+  the session, and only then warns, in words (session lapsed, app restarting, no
+  connection), with the time of the figures still on the page.
+
 ## 2.3.1
 
 - The app reports its health to Docker (a health check on its own web server that also

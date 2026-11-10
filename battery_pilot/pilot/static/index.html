@@ -599,21 +599,42 @@ function renderHistory() {
   $("htable").innerHTML = histTable(doc);
 }
 
+// Home Assistant's ingress proxy answers in plain text when it cannot pass a request on: "401: Unauthorized"
+// when the ingress session lapsed (the page slept for over 15 minutes; the HA frontend renews it within a
+// minute) and "502: Bad Gateway" while the app restarts. Only parse what Battery Pilot itself answered.
+async function getJSON(path, missing) {
+  let r;
+  try {
+    r = await fetch(path, {cache: "no-store"});
+  } catch (e) {
+    throw new Error("no connection to Home Assistant");
+  }
+  if (r.status === 404 && missing !== undefined) return missing;
+  if (r.status === 401) throw new Error("the Home Assistant session lapsed while the page was asleep. "
+    + "Home Assistant renews it within a minute (or reload the page)");
+  if (r.status >= 502 && r.status <= 504) throw new Error("it does not answer (starting or restarting?)");
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  try {
+    return await r.json();
+  } catch (e) {
+    throw new Error("its answer could not be read");
+  }
+}
+
 async function loadHistory(go) {
   try {
-    const idx = await (await fetch("api/history", {cache: "no-store"})).json();
+    const idx = await getJSON("api/history");
     hist.index = idx;
     const dates = (idx.days || []).map((d) => d.date);
     if (go) hist.day = go;
     else if (!hist.day || (hist.follow && hist.day !== idx.today) || !dates.includes(hist.day)) hist.day = idx.today;
     hist.follow = hist.day === idx.today;
     if (go || hist.day === idx.today || !hist.doc || hist.doc.date !== hist.day) {
-      const r = await fetch("api/history/" + encodeURIComponent(hist.day), {cache: "no-store"});
-      hist.doc = r.ok ? await r.json() : null;
+      hist.doc = await getJSON("api/history/" + encodeURIComponent(hist.day), null);
     }
     renderHistory();
   } catch (e) {
-    $("hnote").innerHTML = `<p class="muted">The history is not available: ${esc(e)}</p>`;
+    $("hnote").innerHTML = `<p class="muted">The history is not available: ${esc(e.message || e)}.</p>`;
   }
 }
 
@@ -663,21 +684,41 @@ let render = function (s) {
   $("events").innerHTML = (s.events || []).map((e) => li(e, e.text)).join("");
 }
 
+let last = null, lastOk = 0, failures = 0, timer = null, busy = false;
+const since = (t) => Date.now() - t < 12 * 3600e3 ? hm(t)
+  : new Date(t).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: tz});
+
 async function refresh() {
+  if (busy) return;
+  busy = true;
+  clearTimeout(timer);
   try {
-    const r = await fetch("api/status", {cache: "no-store"});
-    render(await r.json());
-  } catch (e) {
-    $("banner").innerHTML = `<div class="banner warn">Cannot reach Battery Pilot: ${esc(e)}</div>`;
+    try {
+      render(await getJSON("api/status"));
+      lastOk = Date.now();
+      failures = 0;
+    } catch (e) {
+      failures += 1;
+      // A page that wakes up often asks before Home Assistant has renewed its session: the first failure
+      // is retried within seconds without a warning, as long as there is something on the page.
+      if (failures > 1 || !last) {
+        $("banner").innerHTML = `<div class="banner warn">Cannot reach Battery Pilot: ${esc(e.message || e)}. ` +
+          `Trying again${last ? `; the figures below are from ${since(lastOk)}` : ""}.</div>`;
+      }
+    }
+    if (!failures) await loadHistory();
+  } finally {
+    busy = false;
+    timer = setTimeout(refresh, failures ? Math.min(30000, 2500 * 2 ** (failures - 1)) : 30000);
   }
-  await loadHistory();
 }
-let last = null;
 const _render = render;
 render = (s) => { last = s; _render(s); };
 window.addEventListener("resize", () => { if (last) _render(last); renderHistory(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && Date.now() - lastOk > 30000) refresh();
+});
 refresh();
-setInterval(refresh, 30000);
 </script>
 </body>
 </html>
