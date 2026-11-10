@@ -108,3 +108,16 @@ def test_an_extreme_price_step_discharges_below_the_reserve():
     d = decide(s, rd(soc=30), OPTS, "self_use", "", 0, True)
     assert d.command == "discharge" and "10" in d.reason
     assert decide(step("discharge", 10), rd(soc=30), OPTS, "self_use", "", 0, True).command == "none"   # normally not
+
+
+def test_a_rising_house_load_lowers_the_charge_current_instead_of_pausing():
+    """Pausing and restarting is a full command sequence; one lower current is enough."""
+    d = decide(step("charge", 60), rd(load=0.8, imp=2.45, proj=2.45), OPTS, "charge", "01:00:00", 30, True)
+    assert d.command == "current" and d.amps == follow_amps(rd(load=0.8), OPTS) < 30
+    d = decide(step("charge", 60), rd(load=0.8, imp=2.45, proj=2.45), OPTS, "charge", "01:00:00", 25, True)
+    assert d.command == "self_use"                    # already at that current and still over: pause
+
+
+def test_a_failed_charge_command_is_simply_sent_again():
+    d = decide(step("charge", 60), rd(load=0.5, imp=2.3, proj=2.3), OPTS, "failed", "01:00:00", 30, True)
+    assert d.command == "charge"                      # not a pause and restart

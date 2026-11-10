@@ -19,7 +19,7 @@ from .helpers import CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
-from .planner import Plan, make_plan
+from .planner import Plan, make_plan, sticky_action
 from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
 from .solis import NEEDED as SOLIS_NEEDED
 from .solis import Solis
@@ -561,11 +561,12 @@ class App:
             return
         if self.problem and self.problem.startswith("Dynamic contract"):
             self.problem = None
+        current = sticky_action(self.plan, now, soc, self.o.battery_reserve_soc) if self.readings else None
         self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz),
-                              month_peak_kw=self.peaks.month_peak(now, self.tz))
+                              month_peak_kw=self.peaks.month_peak(now, self.tz), current_action=current)
         self._log_plan(now)
         boost, seen = self.plan.boost, self.boost_seen
         # The plan is redone every few minutes while a boost runs: announce a window once, unless

@@ -528,3 +528,38 @@ def test_winter_exports_only_when_buying_back_later_costs_less():
     assert plan.winter and all(s.action != "discharge" for s in plan.steps)
     _, plan = _spike_plan(lambda t: 4000 if (t.day == 14 and t.hour == 19) else 95, soc=90)
     assert plan.winter and _hour(plan, 19).action == "discharge"
+
+
+# ---------------------------------------------------------------- not switching back and forth
+def _two_good_hours(first_sell=30.0):
+    """Two equally good hours to sell in, and only enough battery above the reserve for one."""
+    buy = [25.0] * 6
+    sell = [first_sell, 30.0, 5.0, 5.0, 5.0, 5.0]
+    return hourly(buy, sell, load=0.0)
+
+
+@pytest.mark.parametrize("now,first", [("self_use", "self_use"), ("discharge", "discharge")])
+def test_an_indifferent_choice_keeps_doing_what_is_being_done(now, first):
+    steps = optimize(B, _two_good_hours(), soc0=B.reserve_soc + 25, terminal_c_kwh=0, first_action=now)
+    assert steps[0].action == first
+    assert any(s.action == "discharge" for s in steps[:2])            # it sells in one of the two either way
+
+
+def test_a_clearly_better_choice_still_switches():
+    steps = optimize(B, _two_good_hours(first_sell=45.0), soc0=B.reserve_soc + 25, terminal_c_kwh=0,
+                     first_action="self_use")
+    assert steps[0].action == "discharge"
+
+
+def test_a_finished_charge_is_not_sticky_so_nothing_charges_past_its_target():
+    from pilot.planner import Plan, Step, sticky_action
+    t = T0
+    plan = Plan([Step(t, 1.0, "charge", 40, 60, 0, 0, 0, 0, 10, 5, 0)], t, "fixed")
+    assert sticky_action(plan, t + timedelta(minutes=30), 55, 35) == "charge"
+    assert sticky_action(plan, t + timedelta(minutes=30), 60, 35) is None       # target reached
+    plan = Plan([Step(t, 1.0, "discharge", 60, 20, 0, 0, 0, 0, 10, 30, 0)], t, "dynamic")
+    assert sticky_action(plan, t, 50, 35) == "discharge"
+    assert sticky_action(plan, t, 35, 35) is None                               # at the reserve: done
+    plan.steps[0].reserve = 10
+    assert sticky_action(plan, t, 35, 35) == "discharge"                        # an extreme step goes lower
+    assert sticky_action(None, t, 50, 35) is None

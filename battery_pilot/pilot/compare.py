@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from .config import Options
 from .load import LoadProfile
 from .meter import QuarterRecord
-from .planner import make_plan
+from .planner import make_plan, sticky_action
 from .prices import PriceSlot, price_at
 from .simulate import Battery
 from .simulate import step as sim_step
@@ -186,7 +186,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
             plan = make_plan(r.start, tz, o, tar, prices, lambda a, z: load.kwh(a, z, tz), pv_forecast, soc,
                              market_avg=market_avg, curtail_negative=block_negative, horizon_h=30,
                              peak_kw=lambda a, z: load.peak_kw(a, z, tz),
-                             month_peak_kw=max(month_peak_kw, out["peak_kw"]))
+                             month_peak_kw=max(month_peak_kw, out["peak_kw"]),
+                             current_action=sticky_action(plan, r.start, soc, o.battery_reserve_soc))
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:

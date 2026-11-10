@@ -68,6 +68,10 @@ BOOST_STEP_KW = 0.5
 BOOST_MIN_GAIN_C = 25.0
 # A slot is "extreme" when selling a stored kWh beats buying it back at the dearest later price by this.
 EXTREME_MARGIN_C = 1.0
+# The plan is redone every few minutes from the measured SOC. Changing what the inverter does right now
+# must be worth this much, or the last few SOC points flip it back and forth (each flip is a full
+# command sequence to the inverter).
+SWITCH_COST_C = 5.0
 
 
 @dataclass
@@ -171,11 +175,13 @@ def _self_delta(b: Battery, s: Slot, e: float) -> float:
 
 def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, float] | None = None,
              allow_export: bool = True, curtail_negative: bool = False,
-             terminal_c_kwh: float = 0.0, extreme: frozenset[int] = frozenset()) -> list[Step]:
+             terminal_c_kwh: float = 0.0, extreme: frozenset[int] = frozenset(),
+             first_action: str | None = None) -> list[Step]:
     """Cheapest sequence of actions. `targets[i]` = minimum SOC at the end of slot i.
 
     In the `extreme` slots the battery may be exported even when `allow_export` is False,
-    and down to its minimum instead of the reserve."""
+    and down to its minimum instead of the reserve. `first_action`: what is being done now;
+    doing something else in the first slot costs SWITCH_COST_C."""
     if not slots:
         return []
     targets = targets or {}
@@ -208,6 +214,10 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         exposed = excess * b.capacity_c_per_kw_month * PEAK_RISK if excess > 0 else 0.0
         cur = [0.0] * 101
         ch = [0] * 101
+
+        def switch(action, t=t):
+            return SWITCH_COST_C if t == 0 and first_action is not None and action != first_action else 0.0
+        sw_self, sw_charge, sw_dis = switch("self_use"), switch("charge"), switch("discharge")
         for s in levels:
             lo = max(min(smin - s, 0), -maxd)
             hi = min(100 - s, maxc)
@@ -215,19 +225,19 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
             best_d = ds
             best = table[ds][0] + nxt[s + ds]
             risk = exposed if s - smin < need else 0.0
-            best += risk
+            best += risk + sw_self
             act = ACTION_COST_C_PER_H * sl.hours
             cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
             for d in range(max(ds, 0) + cmin, hi + 1):         # charge from the grid
                 if table[d][1] > cap_kwh + 1e-9:
                     break                                      # more charge only imports more
-                v = table[d][0] + nxt[s + d] + act + risk
+                v = table[d][0] + nxt[s + d] + act + risk + sw_charge
                 if v < best - 1e-9:
                     best, best_d = v, d
             if allow_export or t in extreme:
                 floor = smin if t in extreme else sres
                 for d in range(max(lo, floor - s), min(ds, 0)):  # discharge / export, not below the floor
-                    v = table[d][0] + nxt[s + d] + act + risk
+                    v = table[d][0] + nxt[s + d] + act + risk + sw_dis
                     if v < best - 1e-9:
                         best, best_d = v, d
             cur[s], ch[s] = best, best_d
@@ -329,9 +339,10 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
               load_kwh: LoadFn, pv_kwh: PvFn, soc: float, market_avg: float | None = None,
               curtail_negative: bool = False, horizon_h: int = 36,
               forecast_until: datetime | None = None, peak_kw: LoadFn | None = None,
-              month_peak_kw: float = 0.0) -> Plan:
+              month_peak_kw: float = 0.0, current_action: str | None = None) -> Plan:
     """`forecast_until`: end of the solar forecast; nights after it get no winter target.
-    `month_peak_kw`: the highest quarter-hour import so far this month (for the capacity cost)."""
+    `month_peak_kw`: the highest quarter-hour import so far this month (for the capacity cost).
+    `current_action`: what the previous plan is still doing now (see `sticky_action`)."""
     b = Battery.from_options(o)
     end = now + timedelta(hours=horizon_h)
     minutes = 60
@@ -400,12 +411,27 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
     terminal = max(min(statistics.median(buys), statistics.fmean(buys)) * b.eta_d - b.wear_c_kwh, 0.0)
     allow_export = not (winter and o.winter_mode == "full_day")
     extreme = extreme_slots(b, slots)
-    steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal, extreme)
+    steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal, extreme, current_action)
     boost = None
     if o.capacity_tariff_eur_kw_year > 0 and steps:
         steps, boost = _boost(b, o, slots, soc, targets, allow_export, curtail_negative, terminal, extreme,
-                              steps, now, tz, month_peak_kw)
+                              steps, now, tz, month_peak_kw, current_action)
     return Plan(steps, now, tariff.kind, target_info, winter, allow_export, boost)
+
+
+def sticky_action(prev: Plan | None, t: datetime, soc: float, reserve: float) -> str | None:
+    """What the previous plan is doing at `t` and has not finished: self-use, or a charge or
+    discharge that has not reached its SOC yet. A finished step is not sticky, so a plan never
+    keeps charging past a target it reached."""
+    step = prev.step_at(t) if prev else None
+    if step is None:
+        return None
+    if step.action == "charge":
+        return "charge" if soc < step.soc_end - 0.5 else None
+    if step.action == "discharge":
+        floor = step.reserve if step.reserve is not None else reserve
+        return "discharge" if soc > max(step.soc_end, floor) + 0.5 else None
+    return "self_use"
 
 
 def extreme_slots(b: Battery, slots: list[Slot]) -> frozenset[int]:
@@ -445,7 +471,8 @@ def _money_c(b: Battery, steps: list[Step], terminal_c_kwh: float) -> float:
 
 def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict, allow_export: bool,
            curtail_negative: bool, terminal: float, extreme: frozenset[int], normal: list[Step],
-           now: datetime, tz: ZoneInfo, month_peak_kw: float) -> tuple[list[Step], dict | None]:
+           now: datetime, tz: ZoneInfo, month_peak_kw: float,
+           current_action: str | None = None) -> tuple[list[Step], dict | None]:
     """Try charging above the import limit; keep it only when it beats the normal plan after the capacity cost."""
     free_now = max(month_peak_kw, o.capacity_min_kw)
     free_later = o.capacity_min_kw
@@ -480,16 +507,17 @@ def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict,
         if bound - max(level - free_now, 0.0) * rate < BOOST_MIN_GAIN_C:
             continue
         steps = optimize(replace(b, import_limit_kw=level), slots, soc, targets, allow_export, curtail_negative,
-                         terminal, extreme)
-        for st in steps:
-            st.limit_kw = level
+                         terminal, extreme, current_action)
+        cap = limit - CHARGE_HEADROOM_KW
+        for st in steps:                # only the steps that charge above the normal limit follow the higher one
+            if st.action == "charge" and st.import_kwh / st.hours > cap + 0.05:
+                st.limit_kw = level
         score = _money_c(b, steps, terminal) + _peak_cost_c(b, steps, tz, month_now, free_now, free_later)
         if score < best_score - 1e-9:
             best_plan, best_score, best_level = steps, score, level
     if best_level is None or best_score > score_normal - BOOST_MIN_GAIN_C:
         return normal, None
-    cap = limit - CHARGE_HEADROOM_KW
-    boosted = [s for s in best_plan if s.action == "charge" and s.import_kwh / s.hours > cap + 0.05]
+    boosted = [s for s in best_plan if s.limit_kw is not None]
     if not boosted:
         return normal, None
     peak_cost = (_peak_cost_c(b, best_plan, tz, month_now, free_now, free_later)
@@ -506,4 +534,4 @@ def in_night_window(t_local: datetime, o: Options) -> bool:
 
 
 __all__ = ["Slot", "Step", "Plan", "optimize", "make_plan", "night_target", "night_windows",
-           "slot_grid", "market_at", "is_night", "in_night_window", "extreme_slots"]
+           "slot_grid", "market_at", "is_night", "in_night_window", "extreme_slots", "sticky_action"]

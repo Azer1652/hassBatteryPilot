@@ -95,7 +95,11 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         if mode == "failed" and follow >= MIN_A:
             return Decision("charge", want, "send the charge command again")
         if mode == "charge":
-            if r.projection_kw > limit + 0.1 or follow < MIN_A:
+            if follow < MIN_A:
+                return Decision("self_use", reason="house load too high: battery helps instead")
+            if r.projection_kw > limit + 0.1:
+                if want < amps_now:       # a lower current keeps the quarter-hour under the limit
+                    return Decision("current", want, "house load up: lower the charge current")
                 return Decision("self_use", reason="house load too high: battery helps instead")
             if slot_hour != hour:
                 return Decision("charge", want, "renew the hourly charge slot")
