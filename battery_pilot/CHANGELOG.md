@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.0
+
+- **Planned vs actual.** A new card on the page shows, day by day, what the plan
+  predicted and what really happened: the battery level, the solar (forecast before and
+  after the shade correction, and measured) and what the inverter did. One chart shows
+  the plan made just after midnight, the other the plan in force at the start of each
+  hour. The last 60 days are kept, with a summary per day.
+- The plan is redone right after the nightly learning, so it uses the new shade and
+  consumption factors at once.
+- Dark mode: the battery line is a little darker, for contrast.
+
 ## 2.0.2
 
 - Fix: the app could not reach Home Assistant and stayed on "waiting for Home

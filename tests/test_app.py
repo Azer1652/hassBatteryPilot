@@ -1,15 +1,17 @@
 """The whole app against a simulated Home Assistant, house, battery and Solis."""
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fake_ha import TZ, FakeHA, utc
 
+from pilot import history as H
 from pilot.app import App
 from pilot.config import Options
 from pilot.meter import QuarterRecord
 from pilot.migrate import MARK
+from pilot.web import make_web
 
 CONTROL = "input_boolean.battery_pilot_control"
 
@@ -303,3 +305,67 @@ async def test_unreachable_home_assistant_is_explained_once(tmpdata, caplog):
     fake.ping_error = None
     assert await app.reach_ha()
     assert await app.setup() and app.problem is None
+
+
+async def test_history_planned_vs_actual(tmpdata):
+    """A day is kept with the day-ahead plan, the plan of every hour and what really happened."""
+    fc = {**winter_forecast(datetime(2026, 3, 10), 12), **winter_forecast(datetime(2026, 3, 11), 12)}
+    pv = lambda t: fc.get(t.replace(minute=0, second=0, microsecond=0), 0.0) * 0.6   # the trees take 40 %
+    fake = FakeHA(utc(2026, 3, 9, 23, 30), soc=40, pv=pv, forecast=fc)
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    for h in range(9, 16):
+        for _ in range(10):
+            app.shade.learn(3, h, 0.8, 1.0)                  # what was learned before: 80 % at these hours
+    before = app.shade.factor(3, 12)
+    await run_until(app, fake, utc(2026, 3, 11, 0, 30), step_s=120)
+
+    assert os.path.exists(os.path.join(tmpdata, "history", "2026-03-10.json"))
+    doc = app.history_day(date(2026, 3, 10))
+    da = doc["day_ahead"]
+    assert 20 <= da["created"] <= 25                          # made right after the nightly learning
+    noon = da["hours"][12]
+    assert noon[2] == pytest.approx(noon[1] * before, abs=0.01)
+    assert len(doc["hourly"]) == 24 and doc["hourly"][0]["created"] < 10
+    assert sum(v is not None for v in doc["measured"]["soc"]) >= 96
+    assert set(doc["measured"]["mode"]) <= {"charge", "self_use", "discharge"}
+    s = doc["summary"]["day_ahead"]
+    assert s["solar_forecast"] > s["solar_after_shade"] > s["solar_measured"] > 0
+    assert doc["summary"]["hourly"]["soc_mean_abs"] < s["soc_mean_abs"]   # each hour starts from the real SOC
+
+    # Today's day-ahead plan already uses what was learned from yesterday's sun.
+    today = app.history_day(date(2026, 3, 11))
+    after = app.shade.factor(3, 12)
+    assert after < before - 0.02
+    noon = today["day_ahead"]["hours"][12]
+    assert noon[2] == pytest.approx(noon[1] * after, abs=0.01)
+    assert today["live"]["now"] >= 30 and today["live"]["plan"]
+
+    app.save_state()
+    app2 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app2.setup()
+    assert app2.day_logs["2026-03-11"]["day_ahead"] == app.day_logs["2026-03-11"]["day_ahead"]
+    assert [d["date"] for d in app2.history_index()["days"]] == ["2026-03-09", "2026-03-10", "2026-03-11"]
+
+
+async def test_history_api(tmpdata, aiohttp_client):
+    fake = FakeHA(utc(2026, 3, 11, 12, 0))
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    await app.step()
+    app.history.write(H.build_day(date(2026, 3, 9), TZ, [], None))
+    client = await aiohttp_client(make_web(app, None))
+    r = await client.get("/api/history")
+    assert r.status == 200
+    idx = await r.json()
+    assert idx["today"] == "2026-03-11" and [d["date"] for d in idx["days"]] == ["2026-03-09", "2026-03-11"]
+    r = await client.get("/api/history/2026-03-09")
+    assert r.status == 200 and (await r.json())["date"] == "2026-03-09"
+    r = await client.get("/api/history/2026-03-11")
+    assert r.status == 200 and "live" in await r.json()
+    for bad in ("2026-03-08", "2026-02-30", "..%2Fstate", "2026-3-9", "%2E%2E"):
+        assert (await client.get("/api/history/" + bad)).status == 404, bad
+    outside = await aiohttp_client(make_web(app, {"172.30.32.2"}))   # only the ingress proxy may connect
+    for path in ("/", "/api/status", "/api/history", "/api/history/2026-03-09"):
+        assert (await outside.get(path)).status == 403, path

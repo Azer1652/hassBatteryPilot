@@ -15,6 +15,7 @@ async function page(browser, opts) {
   p.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   await p.goto(url);
   await p.waitForSelector("#plan svg");
+  await p.waitForSelector("#hday svg");
   await p.waitForTimeout(500);
   const overflow = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   if (errors.length || overflow) throw new Error(`page errors ${JSON.stringify(errors)}, horizontal overflow ${overflow}`);
@@ -28,6 +29,7 @@ const card = (p, inner) => p.locator(".card", { has: p.locator(inner) });
   const desk = await page(browser, { viewport: { width: 1100, height: 900 }, deviceScaleFactor: 2, colorScheme: "light" });
   await desk.screenshot({ path: path.join(out, "overview.png"), fullPage: true });
   await card(desk, "#plan").screenshot({ path: path.join(out, "plan.png") });
+  await card(desk, "#hday").screenshot({ path: path.join(out, "history.png") });
   await card(desk, "#cmp").screenshot({ path: path.join(out, "comparison.png") });
   await desk.locator(".grid", { has: desk.locator("#shade") }).screenshot({ path: path.join(out, "shade-peaks.png") });
 

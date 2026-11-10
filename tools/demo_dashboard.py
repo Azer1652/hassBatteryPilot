@@ -2,10 +2,11 @@
 
 Nothing here talks to a real Home Assistant. The history (12 months of comparison,
 monthly peaks, the learned tree shade and consumption) comes from the synthetic year
-in tools/yearsim.py, replayed with the app's own code. Then the real app runs for an
-evening against the simulated house, battery and Solis from tests/fake_ha.py with
-control switched on, so the plan, readings, inverter commands and events on the page
-are what the app actually did.
+in tools/yearsim.py, replayed with the app's own code. Then the real app runs for the
+last three days against the simulated house, battery and Solis from tests/fake_ha.py
+with control switched on, so the plan, the planned-vs-actual days, readings, inverter
+commands and events on the page are what the app actually did. The panels deliver a
+little more or less than the forecast from day to day, as real weather does.
 
     python tools/demo_dashboard.py              # http://127.0.0.1:8765/ (Ctrl+C to stop)
     python tools/demo_dashboard.py --days 60    # quicker, less history
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import random
 import sys
 import tempfile
 from datetime import date, datetime, time, timedelta, timezone
@@ -34,12 +36,13 @@ from pilot.web import make_web  # noqa: E402
 
 TODAY = date(2026, 11, 9)          # a Monday in November: a dull day, tree shade, winter night charging
 NOW = datetime.combine(TODAY, time(23, 0), TZ)
+LIVE_DAYS = 3                      # days the real app runs before NOW (the planned-vs-actual history)
 
 
 def history(days: int, o: Options) -> dict:
-    """The synthetic year up to yesterday, replayed per contract (takes a few minutes for a year)."""
+    """The synthetic year up to the days the app runs itself, replayed per contract (a few minutes for a year)."""
     print(f"Replaying {days} synthetic days for the history...", flush=True)
-    return yearsim.run(TODAY - timedelta(days=days), days, o)
+    return yearsim.run(TODAY - timedelta(days=days), days - LIVE_DAYS + 1, o)
 
 
 def fill(app: App, res: dict) -> None:
@@ -62,23 +65,25 @@ async def main(days: int, port: int, seconds: float | None):
     o = Options()
     res = history(days, o)
     w = yearsim.World(seed=1)
-    fc = {**w.forecast(TODAY), **w.forecast(TODAY + timedelta(days=1))}
+    live = [TODAY + timedelta(days=i) for i in range(-LIVE_DAYS, 2)]
+    fc = {h: v for d in live for h, v in w.forecast(d).items()}
     prices = [{"time": p.start.isoformat(), "price": round(p.eur_mwh / 1000, 5)}
-              for p in w.prices(TODAY) + w.prices(TODAY + timedelta(days=1))]
+              for d in live for p in w.prices(d)]
+    weather = {d: random.Random(d.toordinal()).uniform(0.75, 1.2) for d in live}   # forecast error per day
 
     def pv(t):
         local = t.astimezone(TZ)
         hour = t.replace(minute=0, second=0, microsecond=0)
-        return fc.get(hour, 0.0) * yearsim.true_shade(local.month, local.hour)
+        return fc.get(hour, 0.0) * yearsim.true_shade(local.month, local.hour) * weather[local.date()]
 
-    start = datetime.combine(TODAY, time(16, 0), TZ).astimezone(timezone.utc)
+    start = datetime.combine(TODAY - timedelta(days=LIVE_DAYS), time(16, 0), TZ).astimezone(timezone.utc)
     fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
-    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.0.0 · demo data")
+    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.1.0 · demo data")
     await app.setup()
     fill(app, res)
-    print("Running the app for the evening...", flush=True)
+    print(f"Running the app for {LIVE_DAYS} days...", flush=True)
     while fake.now < NOW.astimezone(timezone.utc) + timedelta(minutes=2):
         await app.step()
         fake.advance(timedelta(seconds=30))

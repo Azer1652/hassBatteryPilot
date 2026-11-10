@@ -9,6 +9,7 @@ import statistics
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from . import history as H
 from . import prices as P
 from .compare import KINDS, Comparison, day_records, replay_day
 from .config import Options
@@ -69,6 +70,8 @@ class App:
         self.alerts: dict[str, str] = {}
         self.last_nightly = ""
         self.migrated = False
+        self.day_logs: dict[str, dict] = {}   # date -> predictions made that day, until the day is closed
+        self.history = H.HistoryStore(os.path.join(data_dir, "history"))
         # live state
         self.pv = PvForecast({}, self.shade, self.tz)
         self.plan: Plan | None = None
@@ -81,6 +84,7 @@ class App:
         self.peak_warned = ""
         self.over_since: datetime | None = None
         self.events: list[dict] = []
+        self._modes: dict[str, int] = {}  # inverter mode per tick in the current quarter
         self._last = {"refresh": None, "save": None, "publish": None}
 
     # ---------------------------------------------------------------- logging for the dashboard
@@ -112,6 +116,7 @@ class App:
         self.last_nightly = s.get("last_nightly", "")
         self.migrated = bool(s.get("migrated"))
         self.curtailed_by_us = bool(s.get("curtailed_by_us"))
+        self.day_logs = dict(s.get("day_logs") or {})
         if s.get("load_default_kw"):
             self.load.default_kw = s["load_default_kw"]
         self.pv = PvForecast({}, self.shade, self.tz)
@@ -124,7 +129,7 @@ class App:
              "comparison": self.comparison.to_json(), "prices": P.to_json(self.price_slots),
              "forecast_archive": self.forecast_archive, "records": [r.to_json() for r in self.records],
              "daily_market": self.daily_market, "alerts": self.alerts, "last_nightly": self.last_nightly,
-             "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us}
+             "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us, "day_logs": self.day_logs}
         tmp = self.state_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f)
@@ -253,6 +258,8 @@ class App:
                                    self.solis.amps, self.control_on)
             await self._apply(self.decision, local)
             await self._curtail(local)
+        mode = self.solis.mode if self.control_on and self.solis else "shadow"
+        self._modes[mode] = self._modes.get(mode, 0) + 1
         await self._peak_warning(now, projection)
 
     async def _apply(self, d: Decision, local: datetime):
@@ -306,6 +313,9 @@ class App:
             self.over_since = None
 
     def _quarter_closed(self, rec: QuarterRecord):
+        if self._modes:
+            rec.mode = max(self._modes, key=self._modes.get)
+            self._modes = {}
         self.peaks.add(rec, self.tz)
         market = P.price_at(self.price_slots, rec.start)
         self.comparison.add_quarter(rec, market, self.o, self.tz)
@@ -384,6 +394,27 @@ class App:
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz))
+        self._log_plan(now)
+
+    def _log_plan(self, now: datetime):
+        """Keep what this plan predicts: for the day (the first plan after the nightly learning)
+        and for this clock hour (the first plan in it)."""
+        try:
+            local = now.astimezone(self.tz)
+            day = local.date()
+            start, end = H.day_bounds(day, self.tz)
+            entry = self.day_logs.setdefault(day.isoformat(), {"day_ahead": None, "hours": {}})
+            load = lambda a, b: self.load.kwh(a, b, self.tz)  # noqa: E731
+            if entry.get("day_ahead") is None and self.last_nightly == day.isoformat():
+                entry["day_ahead"] = H.day_ahead(self.plan, self.pv, load, start, end)
+            hour = local.replace(minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            key = str(H.minutes(hour, start))
+            if key not in entry["hours"]:
+                entry["hours"][key] = H.hour_ahead(self.plan, self.pv, load, hour, start)
+            for d in sorted(self.day_logs)[:-H.OPEN_DAYS]:
+                del self.day_logs[d]
+        except Exception as e:  # noqa: BLE001 - the history must never stop the planning
+            log.warning("Keeping the plan for the history failed: %s", e)
 
     def current_prices(self) -> dict:
         now = self.clock()
@@ -414,21 +445,33 @@ class App:
         start = datetime.combine(y, time(0), self.tz).astimezone(timezone.utc)
         end = datetime.combine(local.date(), time(0), self.tz).astimezone(timezone.utc)
         recs = day_records(self.records, start, end)
-        if not recs:          # first day after install: nothing measured yet
-            return
-        n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz)
-        n_load = self.load.learn_records(recs, self.tz)
-        self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
-        if self.price_slots or self.o.contract == "fixed":
-            # The replay is CPU work: run it in a thread on copies, apply the results here.
-            soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
-            block = self.blocks_negative_export
-            results = await asyncio.get_running_loop().run_in_executor(
-                None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive), soc0,
-                block)
-            self._apply_replay(y, results, block)
-        self.comparison.prune()
+        if recs:              # (none on the first day after install: nothing measured yet)
+            self._close_day(y)
+            n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz)
+            n_load = self.load.learn_records(recs, self.tz)
+            self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
+            if self.price_slots or self.o.contract == "fixed":
+                # The replay is CPU work: run it in a thread on copies, apply the results here.
+                soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
+                block = self.blocks_negative_export
+                results = await asyncio.get_running_loop().run_in_executor(
+                    None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive),
+                    soc0, block)
+                self._apply_replay(y, results, block)
+            self.comparison.prune()
+        # Plan again with what was just learned; this plan is also the day-ahead prediction.
+        self.replan(now)
         self.save_state()
+
+    def _close_day(self, day: date):
+        """Store the day's predictions and measurements in the history."""
+        try:
+            doc = H.build_day(day, self.tz, self.records, self.day_logs.get(day.isoformat()))
+            self.history.write(doc)
+            self.history.prune(day)
+            self.day_logs.pop(day.isoformat(), None)
+        except Exception as e:  # noqa: BLE001
+            self.event(f"Storing the history of {day} failed: {e}", logging.WARNING)
 
     def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict,
                 block_negative: bool = False):
@@ -619,6 +662,34 @@ class App:
                           "day": round(breakeven_eur_mwh(self.o.fixed_day_rate, self.o))},
             "events": list(reversed(self.events[-30:])),
         }
+
+    # ---------------------------------------------------------------- planned vs actual
+    def history_day(self, day: date) -> dict | None:
+        """A stored day, or a day still in memory (today, live; yesterday until it is closed)."""
+        now = self.clock()
+        today = now.astimezone(self.tz).date()
+        key = day.isoformat()
+        if day != today:
+            doc = self.history.read(day)
+            if doc is not None or key not in self.day_logs:
+                return doc
+        live = None
+        if day == today:
+            start, end = H.day_bounds(day, self.tz)
+            live = {"now": H.minutes(now, start), "soc": self.readings.soc if self.readings else None,
+                    "plan": H.plan_points(self.plan, now, end, start) if self.plan else []}
+        return H.build_day(day, self.tz, self.records, self.day_logs.get(key), live)
+
+    def history_index(self) -> dict:
+        """Summaries of every stored day, plus the days still in memory."""
+        today = self.clock().astimezone(self.tz).date()
+        days = {s["date"]: s for s in self.history.index()}
+        for key in set(self.day_logs) | {today.isoformat()}:
+            if key not in days and key <= today.isoformat():
+                doc = self.history_day(date.fromisoformat(key))
+                if doc:
+                    days[key] = doc["summary"]
+        return {"today": today.isoformat(), "tz": str(self.tz), "days": [days[k] for k in sorted(days)]}
 
     # ---------------------------------------------------------------- main loop
     async def step(self):

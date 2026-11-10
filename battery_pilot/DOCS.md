@@ -24,6 +24,8 @@ What it does:
 - **Learns your tree shade.** It compares what your panels deliver with the forecast
   for every month and hour of the day. Low winter sun behind trees gets its own
   correction; summer noon keeps its own.
+- **Shows planned vs actual**, day by day: the battery level and solar the plan
+  expected against what really happened, so you can see how good the prediction is.
 - **Compares contracts** with your own measured energy, in two ways (see below).
 - **Alerts you** on your phone: capacity peak warnings, a monthly verdict, reminders
   before your fixed price ends, and when the market crosses your break-even.
@@ -102,6 +104,37 @@ The page also shows the shade Battery Pilot learned for every month and hour (da
 the forecast is too high, e.g. low winter sun behind trees) and your monthly peaks:
 
 ![Learned shade and monthly peaks (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/shade-peaks.png)
+
+## Planned vs actual
+
+The page keeps what the plan predicted and what really happened, so you can see how good
+the prediction is. Step through the days with ◀ ▶, or pick one from the list of recent
+days. Each day has two charts, from midnight to midnight:
+
+- **Day ahead:** the plan made just after midnight (right after the nightly learning),
+  and the solar forecast after shade and the usual consumption it was based on. Errors in
+  those forecasts add up over the day, so this shows how far the real day drifted from
+  what was expected.
+- **Hour by hour:** the plan in force at the start of each hour, with the forecast it
+  had at that moment. Each one starts from the real battery level, so its error is one
+  hour's worth.
+
+In each chart, the top panel is the measured battery level (green) against the planned
+one (dashed). The two strips under it show what the plan wanted (grid charge, discharge,
+self-use) and what the inverter did. The bottom panel is the solar the panels delivered
+per hour (bars) against the forecast after the shade correction and the raw forecast.
+Hover over a chart, or focus it and use the arrow keys, for the values at each moment; the
+table under the charts has every hour.
+
+The list of recent days shows the solar forecast before and after shade against what was
+measured, and how many SOC points the battery was off on average. The line above it says
+how much the shade correction improves the solar forecast over all stored days. On days
+with *Battery Pilot control* off (shadow mode) the inverter does not follow the plan, so
+the battery differs from it by the charging and export it planned; those days are marked.
+
+Days are kept for 60 days.
+
+![Planned vs actual: the day-ahead plan and the plan of every hour against the real battery and solar (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/history.png)
 
 ## What Battery Pilot reads, and why
 
@@ -203,7 +236,8 @@ self-use by itself within the hour if Battery Pilot or Home Assistant stops.
   `battery_playbook_*.yaml` package files after a configuration check (a copy goes to
   the app's own storage), switches off the old automations, and reloads HA's YAML.
 - **Its own storage** (`/data/state.json`): what it learned (shade, consumption, peaks),
-  the comparison history and the last days of prices and measurements.
+  the comparison history and the last days of prices and measurements. In
+  `/data/history`, one file per day for the last 60 days of planned vs actual.
 
 ## All settings
 

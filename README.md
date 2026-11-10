@@ -21,6 +21,8 @@ level. The dull day ahead means the battery is filled by the end of the night.*
   house.
 - **Learns the shade of your trees** for every month and hour, and corrects the solar
   forecast with it.
+- **Shows planned vs actual**, day by day: the battery level and solar the plan expected
+  against what really happened.
 - **Compares fixed and dynamic contracts** every month, on your measured usage and
   with the battery used the best way for each contract.
 - **Alerts your phone**: capacity peak warnings, a monthly verdict, reminders before
@@ -69,6 +71,11 @@ Fluvius connection with a 16 kWh battery.
 ## Screenshots
 
 All with demo data: a simulated house replayed through the app's own code.
+
+**Planned vs actual.** What the plan expected for the battery and the solar against what
+happened: above, the plan made just after midnight; below, the plan in force each hour.
+
+![Planned vs actual](docs/screenshots/history.png)
 
 **Fixed or dynamic?** Every month priced on both contracts, as you used it and with the
 best battery strategy for each.

@@ -146,14 +146,14 @@ class PvForecast:
         local = hour.astimezone(self.tz)
         return raw * self.shade.factor(local.month, local.hour)
 
-    def kwh(self, t0: datetime, t1: datetime) -> float:
+    def kwh(self, t0: datetime, t1: datetime, corrected: bool = True) -> float:
         total = 0.0
         hour = t0.replace(minute=0, second=0, microsecond=0)
         while hour < t1:
             nxt = hour + timedelta(hours=1)
             overlap = (min(t1, nxt) - max(t0, hour)).total_seconds() / 3600
             if overlap > 0:
-                total += self.corrected(hour) * overlap
+                total += (self.corrected(hour) if corrected else self.hourly.get(hour, 0.0)) * overlap
             hour = nxt
         return total
 

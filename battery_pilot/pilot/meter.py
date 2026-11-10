@@ -27,14 +27,18 @@ class QuarterRecord:
     kwh: dict                             # channel -> kWh
     covered: dict                         # channel -> fraction of the quarter with data
     soc: float | None = None              # SOC at the start of the quarter
+    mode: str | None = None               # inverter mode most of the quarter (shadow: control off)
 
     def to_json(self):
-        return {"start": self.start.isoformat(), "kwh": {k: round(v, 5) for k, v in self.kwh.items()},
-                "covered": {k: round(v, 3) for k, v in self.covered.items()}, "soc": self.soc}
+        d = {"start": self.start.isoformat(), "kwh": {k: round(v, 5) for k, v in self.kwh.items()},
+             "covered": {k: round(v, 3) for k, v in self.covered.items()}, "soc": self.soc}
+        if self.mode:
+            d["mode"] = self.mode
+        return d
 
     @classmethod
     def from_json(cls, d):
-        return cls(datetime.fromisoformat(d["start"]), d["kwh"], d["covered"], d.get("soc"))
+        return cls(datetime.fromisoformat(d["start"]), d["kwh"], d["covered"], d.get("soc"), d.get("mode"))
 
 
 @dataclass

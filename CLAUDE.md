@@ -63,6 +63,10 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 - `migrate.py`: takes over from Battery Playbook 1.x (turns its automations off, imports
   `sensor.cw_shadow_bill`, removes `battery_playbook_*.yaml` packages after a config check).
 - `helpers.py`: creates the two `input_boolean` helpers over the websocket (no YAML).
+- `history.py`: planned vs actual. `App._log_plan()` keeps per day (`day_logs`) the day-ahead plan
+  (the replan at the end of `nightly()`) and the plan at the start of each clock hour; `nightly()`
+  closes yesterday into `/data/history/YYYY-MM-DD.json` (60 days) with the measured quarters
+  (`QuarterRecord.mode` = inverter mode). Served by `/api/history` and `/api/history/{day}`.
 - State lives in `/data/state.json` (`App.save_state`/`load_state`).
 
 ## Tests
