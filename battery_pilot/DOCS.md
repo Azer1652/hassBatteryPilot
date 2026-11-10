@@ -116,32 +116,40 @@ hover over a cell or a bar for its value:
 
 The page keeps what the plan predicted and what really happened, so you can see how good
 the prediction is. Step through the days with ◀ ▶, or pick one from the list of recent
-days. Each day has two charts, from midnight to midnight:
+days. Each day compares the measurements with the **day-ahead plan**: the plan made just
+after midnight (right after the nightly learning), with the solar forecast after shade and
+the usual consumption it was based on. Errors in those forecasts add up over the day, so
+this shows how far the real day drifted from what was expected.
 
-- **Day ahead:** the plan made just after midnight (right after the nightly learning),
-  and the solar forecast after shade and the usual consumption it was based on. Errors in
-  those forecasts add up over the day, so this shows how far the real day drifted from
-  what was expected.
-- **Hour by hour:** the plan in force at the start of each hour, with the forecast it
-  had at that moment. Each one starts from the real battery level, so its error is one
-  hour's worth.
+- **In words:** one or two sentences on what differed (the house used more or less than
+  expected, the panels gave more or less than forecast, from 0.5 kWh and 15 % on) and where
+  the battery is against the plan. On days with *Battery Pilot control* off (shadow mode)
+  a note says that the inverter did not do the planned grid charging or export, so the
+  battery can differ from the plan there.
+- **Figures:** expected, measured and the difference for the solar (and the forecast before
+  the shade correction), the house and the battery now or at the end of the day. Under it:
+  how many SOC points the battery was off from the day-ahead plan on average and at worst,
+  and how far it was off at the end of each hour against the plan in force at the start of
+  that hour (each of those starts from the real battery level, so its error is one hour's
+  worth).
+- **The chart,** from midnight to midnight, in four panels: the battery level; two strips
+  with what the plan wanted (grid charge, discharge, self-use) and what the inverter did;
+  the solar per hour; and the house consumption per hour. Solar and house share one kWh
+  scale. In every panel a solid line or bars is what was measured and a dashed line what
+  the plan expected; today, a dotted line continues with the current plan after "now".
+  Tap or hover over the chart (on a phone, slide a finger sideways along it), or focus it
+  and use the arrow keys, for the values at each moment, including the forecast without
+  shade. The table under it has every hour, with each hour's own plan too. On a day without
+  a day-ahead plan (the app started during the day), the plan of each hour is shown instead.
 
-In each chart, the top panel is the measured battery level (green) against the planned
-one (dashed). The two strips under it show what the plan wanted (grid charge, discharge,
-self-use) and what the inverter did. The bottom panel is the solar the panels delivered
-per hour (bars) against the forecast after the shade correction and the raw forecast.
-Tap or hover over a chart (on a phone, slide a finger sideways along it), or focus it and
-use the arrow keys, for the values at each moment; the table under the charts has every hour.
-
-The list of recent days shows the solar forecast before and after shade against what was
-measured, and how many SOC points the battery was off on average. The line above it says
-how much the shade correction improves the solar forecast over all stored days. On days
-with *Battery Pilot control* off (shadow mode) the inverter does not follow the plan, so
-the battery differs from it by the charging and export it planned; those days are marked.
+The list of recent days shows, per day, the solar forecast after shade against what was
+measured, the expected house consumption against what was measured, and how many SOC
+points the battery was off on average; days in shadow mode are marked. The line above it
+says how much the shade correction improves the solar forecast over all stored days.
 
 Days are kept for 60 days.
 
-![Planned vs actual: the day-ahead plan and the plan of every hour against the real battery and solar (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/history.png)
+![Planned vs actual: the day in words and figures, and the day-ahead plan against the real battery, solar and house (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/history.png)
 
 ## What Battery Pilot reads, and why
 

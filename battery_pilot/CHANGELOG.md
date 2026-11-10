@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.4.0
+
+**Planned vs actual is easier to read**, on a phone above all:
+
+- **The day in words** at the top: what differed from the forecasts (the house used more or
+  less than expected, the panels gave more or less) and where the battery is against the
+  plan. Shadow mode is one short note instead of a large banner.
+- **A small table of figures** (expected, measured, difference for solar, house and the
+  battery) replaces the eight number tiles.
+- **One chart** instead of two: the day-ahead plan. How far each hour's own plan was off is
+  one figure under the table, and every hour is still in the hourly table.
+- **New House panel**: the consumption per hour against what was expected, on the same
+  kWh scale as the solar. The panels have titles, and one rule holds for all of them:
+  solid line or bars = measured, dashed = expected. The legend shows only the strip colours
+  the day has; the strips and their labels are larger.
+- The list of recent days has four columns that fit a phone, with the house consumption.
+- The explanation sits under *How to read this*.
+
 ## 2.3.3
 
 - The charts on the page now work on a phone (the Home Assistant app has no hover). Tap

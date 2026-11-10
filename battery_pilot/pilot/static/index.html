@@ -8,14 +8,14 @@
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
     --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --soc: #1b9e5a; --warn: #c23b2b;
-    --plan: #6250d6; --pv: #eda100;
+    --plan: #6250d6; --pv: #eda100; --house: #c2477e;
     --ok-bg: #e8f5ee; --warn-bg: #fdecea; --shadow-bg: #fff6e0;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #111418; --card: #1b2027; --text: #e6e9ee; --muted: #9aa3b2; --line: #2c333d;
       --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --soc: #30a86a; --warn: #ff6b5a;
-      --plan: #9085e9; --pv: #c98500;
+      --plan: #9085e9; --pv: #c98500; --house: #c85593;
       --ok-bg: #16301f; --warn-bg: #3a1c19; --shadow-bg: #3a3017;
     }
   }
@@ -58,13 +58,22 @@
   .nav span { min-width: 120px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
   .legend i.ln { width: 16px; height: 0; border-top: 2px solid; display: inline-block; }
   .legend i.ln.dash, .tip i.dash { border-top-style: dashed; }
+  .legend i.ln.dot { border-top-style: dotted; }
+  .legend > div { margin: 2px 0; }
   .legend span[hidden] { display: none; }
   .hint { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
   .hchart { position: relative; }
   .hchart svg { touch-action: pan-y pinch-zoom; cursor: crosshair; }
   .hchart svg:focus { outline: none; }
   .hchart svg:focus-visible { outline: 2px solid var(--charge); outline-offset: 2px; border-radius: 4px; }
-  .hchart svg text.s { font-size: 9px; }
+  .hchart svg text.pt { fill: var(--text); font-weight: 600; }
+  .verdict { margin: 8px 0 10px; }
+  table.score { margin: 2px 0 4px; max-width: 560px; }
+  table.score th, table.score td { padding: 4px 6px; }
+  table.score td:first-child { white-space: normal; }
+  #hdays th, #hdays td { padding: 5px 6px; }
+  .sub { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  #hdays th { white-space: normal; vertical-align: bottom; }
   .tip { position: absolute; top: 4px; pointer-events: none; background: var(--card); border: 1px solid var(--line);
          border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.5; white-space: nowrap; z-index: 2;
          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); font-variant-numeric: tabular-nums; max-width: min(320px, 100%); }
@@ -114,19 +123,24 @@
         <button id="hnext" type="button" aria-label="Next day">&#9654;</button>
       </div>
     </div>
-    <p class="muted">How well the plan predicted each day. <b>Day ahead</b> is the plan made just after midnight,
-      from the solar forecast after shade and your usual consumption: its error adds up through the day.
-      <b>Hour by hour</b> is the plan in force at the start of each hour, which starts again from the real battery
-      level: its error is one hour's worth. Days are kept for 60 days.</p>
+    <p class="muted">How the day went against the plan made just after midnight.</p>
+    <details><summary>How to read this</summary>
+      <p class="muted"><b>The chart</b> has four panels on one time axis: the battery level, two strips with what the
+        plan wanted (grid charge, discharge, self-use) and what the inverter did, and the solar and house energy per hour.
+        In every panel a solid line or bars is what was measured and a dashed line what the plan expected. Tap or hover
+        over the chart for the values at each moment.</p>
+      <p class="muted"><b>Day ahead</b> is the plan made just after midnight, right after the nightly learning, from the
+        solar forecast after shade and your usual consumption. Its errors add up over the day. The plan in force at the
+        start of each hour is kept too: it starts again from the real battery level, so its error is one hour's worth
+        ("off at the end of each hour" below, and the hourly table). Days are kept for 60 days.</p>
+    </details>
     <div id="hnote"></div>
+    <div id="hverdict"></div>
+    <div class="scroll" id="hscore"></div>
+    <h3><span id="htitle">Day ahead</span> <span class="muted" id="hmade"></span></h3>
     <div class="legend" id="hlegend"></div>
-    <h3>Day ahead <span class="muted" id="hmade"></span></h3>
     <div class="hchart" id="hday"></div>
-    <div class="kpis" id="hdaykpi"></div>
-    <h3>Hour by hour <span class="muted">the plan in force at the start of each hour</span></h3>
-    <div class="hchart" id="hhour"></div>
-    <div class="kpis" id="hhourkpi"></div>
-    <details><summary>Hour by hour, as a table</summary><div class="scroll"><table id="htable"></table></div></details>
+    <details><summary>Every hour, as a table</summary><div class="scroll"><table id="htable"></table></div></details>
     <h3>Recent days</h3>
     <p class="muted" id="hoverall"></p>
     <div class="scroll"><table id="hdays" class="pick"></table></div>
@@ -536,76 +550,85 @@ function barPath(x, y, w, h) {
 }
 
 function histChart(el, doc, kind) {
+  // One time axis, four panels: battery (%), the planned / inverter strips, solar and house (kWh per hour, one scale).
+  // Measured is a solid line or bars, expected a dashed --plan line.
   const W = Math.max(el.clientWidth, 300), phone = W < 600;
-  const left = 46, right = 10, top = 10, hS = phone ? 120 : 150, strip = 6, hP = phone ? 56 : 72;
-  const yS1 = top + hS, yA = yS1 + 12, yB = yA + strip + 4, yP0 = yB + strip + 14, yP1 = yP0 + hP, H = yP1 + 22;
+  const left = 54, right = 10, hS = phone ? 110 : 140, strip = 8, hE = phone ? 60 : 76;
+  const yS0 = 20, yS1 = yS0 + hS, yA = yS1 + 12, yB = yA + strip + 5;
+  const yP0 = yB + strip + 26, yP1 = yP0 + hE, yH0 = yP1 + 26, yH1 = yH0 + hE, H = yH1 + 22;
   const t0 = new Date(doc.start).getTime(), tEnd = t0 + doc.minutes * 60e3;
   const x = (t) => left + (t - t0) / (tEnd - t0) * (W - left - right), xm = (m) => x(t0 + m * 60e3);
-  const ys = (s) => top + (100 - s) / 100 * hS;
-  const hrs = hoursOf(doc), fc = hrs.map((h) => h[kind]);
-  const pmax = Math.max(1, ...hrs.map((h) => h.pv || 0), ...fc.map((f) => f ? Math.max(f.pv || 0, f.pv_raw || 0) : 0));
-  const yp = (v) => yP1 - v / pmax * hP;
-  const line = css("--line"), plan = css("--plan");
+  const ys = (v) => yS0 + (100 - v) / 100 * hS;
+  const hrs = hoursOf(doc), fc = hrs.map((h) => h[kind] || {});
+  const pv = hrs.map((h) => h.pv), load = hrs.map((h) => h.load);
+  const pvExp = fc.map((f) => f.pv ?? null), loadExp = fc.map((f) => f.load ?? null);
+  const emax = Math.max(0.5, ...[pv, load, pvExp, loadExp].flat().map((v) => v || 0));
+  const yE = (y1) => (v) => y1 - v / emax * hE, yp = yE(yP1), yh = yE(yH1);
+  const line = css("--line"), plan = css("--plan"), card = css("--card");
   let g = "";
-  for (const s of [0, 50, 100]) {
-    g += `<line x1="${left}" x2="${W - right}" y1="${ys(s)}" y2="${ys(s)}" stroke="${line}"/>
-          <text x="${left - 5}" y="${ys(s) + 4}" text-anchor="end">${s}%</text>`;
+  // battery
+  g += `<text class="pt" x="${left}" y="${yS0 - 7}">Battery</text>`;
+  for (const v of [0, 50, 100]) {
+    g += `<line x1="${left}" x2="${W - right}" y1="${ys(v)}" y2="${ys(v)}" stroke="${line}"/>
+          <text x="${left - 5}" y="${ys(v) + 4}" text-anchor="end">${v}%</text>`;
   }
-  g += `<line x1="${left}" x2="${W - right}" y1="${yp(0)}" y2="${yp(0)}" stroke="${line}"/>
-        <line x1="${left}" x2="${W - right}" y1="${yp(pmax)}" y2="${yp(pmax)}" stroke="${line}"/>
-        <text x="${left - 5}" y="${yp(0) + 4}" text-anchor="end">0</text>
-        <text x="${left - 5}" y="${yp(pmax) + 4}" text-anchor="end">${fmt(pmax, pmax < 10 ? 1 : 0)} kW</text>`;
-  // solar: measured columns, forecast steps
-  const slot = xm(60) - xm(0), bw = Math.min(24, Math.max(slot - 2, 1));
-  for (const h of hrs) {
-    if (h.pv !== null && h.pv > 0.005) {
-      const cx = (xm(h.m) + xm(Math.min(h.m + 60, doc.minutes))) / 2;
-      g += `<path d="${barPath(cx - bw / 2, yp(h.pv), bw, yp(0) - yp(h.pv))}" fill="${css("--pv")}"/>`;
-    }
-  }
-  const val = (i, key) => (fc[i] && fc[i][key]) ?? null;
-  const steps = (key) => {
-    // Night hours (zero forecast) are left out, except next to a sunny one so the step rises from 0.
-    let d = "", on = false;
-    hrs.forEach((h, i) => {
-      const v = val(i, key);
-      if (v === null || !(v > 0 || val(i - 1, key) > 0 || val(i + 1, key) > 0)) { on = false; return; }
-      d += `${on ? "L" : "M"}${xm(h.m)},${yp(v)} L${xm(Math.min(h.m + 60, doc.minutes))},${yp(v)} `;
-      on = true;
-    });
-    return d;
-  };
-  g += `<path d="${steps("pv_raw")}" fill="none" stroke="${css("--muted")}" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="${steps("pv")}" fill="none" stroke="${plan}" stroke-width="2" stroke-linejoin="round"/>`;
   // what was planned and what the inverter did
   const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"), shadow: line};
-  const planned = kind === "day" ? (doc.day_ahead ? doc.day_ahead.actions : []) : (doc.hourly || []).flatMap((h) => h.actions);
-  for (const [a, b, act] of planned) {
-    g += `<rect x="${xm(a)}" y="${yA}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="1" fill="${col[act] || col.self_use}"/>`;
+  for (const [a, b, act] of plannedActions(doc, kind)) {
+    g += `<rect x="${xm(a)}" y="${yA}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="2" fill="${col[act] || col.self_use}"/>`;
   }
   for (const [a, b, md] of modeRuns(doc.measured.mode)) {
-    g += `<rect x="${xm(a)}" y="${yB}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="1" fill="${col[md] || col.self_use}"/>`;
+    g += `<rect x="${xm(a)}" y="${yB}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="2" fill="${col[md] || col.self_use}"/>`;
   }
-  g += `<text class="s" x="${left - 5}" y="${yA + strip}" text-anchor="end">plan</text>
-        <text class="s" x="${left - 5}" y="${yB + strip}" text-anchor="end">actual</text>`;
-  // battery: planned dashed, measured solid
+  g += `<text x="${left - 5}" y="${yA + strip}" text-anchor="end">planned</text>
+        <text x="${left - 5}" y="${yB + strip}" text-anchor="end">inverter</text>`;
+  // solar and house: measured bars, expected as a dashed step line with a ring of the card colour over the bars
+  const slot = xm(60) - xm(0), bw = Math.min(24, Math.max(slot - 2, 1));
+  const bars = (vals, y, color) => hrs.map((h, i) => {
+    const v = vals[i];
+    if (v === null || v === undefined || v <= 0.005) return "";
+    const cx = (xm(h.m) + xm(Math.min(h.m + 60, doc.minutes))) / 2;
+    return `<path d="${barPath(cx - bw / 2, y(v), bw, y(0) - y(v))}" fill="${color}"/>`;
+  }).join("");
+  const stepLine = (vals, y, skipDark) => {
+    // skipDark: night hours (zero forecast) are left out, except next to a sunny one so the step rises from 0
+    let d = "", on = false;
+    hrs.forEach((h, i) => {
+      const v = vals[i];
+      if (v === null || v === undefined || (skipDark && !(v > 0 || vals[i - 1] > 0 || vals[i + 1] > 0))) { on = false; return; }
+      d += `${on ? "L" : "M"}${xm(h.m)},${y(v)} L${xm(Math.min(h.m + 60, doc.minutes))},${y(v)} `;
+      on = true;
+    });
+    return d ? `<path d="${d}" fill="none" stroke="${card}" stroke-width="4" stroke-dasharray="5 3" stroke-linejoin="round"/>
+      <path d="${d}" fill="none" stroke="${plan}" stroke-width="2" stroke-dasharray="5 3" stroke-linejoin="round"/>` : "";
+  };
+  const energy = (title, y0, y1, y, vals, exp, color, skipDark) => {
+    g += `<text class="pt" x="${left}" y="${y0 - 7}">${title}</text>
+          <line x1="${left}" x2="${W - right}" y1="${y1}" y2="${y1}" stroke="${line}"/>
+          <line x1="${left}" x2="${W - right}" y1="${y0}" y2="${y0}" stroke="${line}"/>
+          <text x="${left - 5}" y="${y1 + 4}" text-anchor="end">0</text>
+          <text x="${left - 5}" y="${y0 + 4}" text-anchor="end">${fmt(emax, emax < 10 ? 1 : 0)} kWh</text>`;
+    g += bars(vals, y, color) + stepLine(exp, y, skipDark);
+  };
+  energy("Solar, per hour", yP0, yP1, yp, pv, pvExp, css("--pv"), true);
+  energy("House, per hour", yH0, yH1, yh, load, loadExp, css("--house"), false);
+  // battery lines last, on top of the gridlines
   const path = (pts, attrs) => pts.length > 1
-    ? `<path d="M${pts.map(([m, s]) => `${xm(m)},${ys(s)}`).join(" L")}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" ${attrs}/>` : "";
+    ? `<path d="M${pts.map(([m, v]) => `${xm(m)},${ys(v)}`).join(" L")}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" ${attrs}/>` : "";
   if (kind === "day" && doc.day_ahead) g += path(doc.day_ahead.soc, `stroke="${plan}" stroke-dasharray="6 4"`);
   if (kind === "hour") for (const h of doc.hourly || []) g += path(h.soc, `stroke="${plan}" stroke-dasharray="6 4"`);
   if (doc.live && doc.live.plan) g += path(doc.live.plan, `stroke="${plan}" stroke-dasharray="2 4" opacity="0.8"`);
   for (const sg of measuredSegments(doc)) g += path(sg, `stroke="${css("--soc")}"`);
   if (doc.live) {
-    const xn = xm(doc.live.now);
-    g += `<line x1="${xn}" x2="${xn}" y1="${top}" y2="${yP1}" stroke="${css("--muted")}"/>
-          <text x="${xn > W - right - 30 ? xn - 4 : xn + 4}" y="${top + 9}"
-            text-anchor="${xn > W - right - 30 ? "end" : "start"}">now</text>`;
+    const xn = xm(doc.live.now), end = xn > W - right - 30;
+    g += `<line x1="${xn}" x2="${xn}" y1="${yS0}" y2="${yH1}" stroke="${css("--muted")}"/>
+          <text x="${end ? xn - 4 : xn + 4}" y="${yS0 + 10}" text-anchor="${end ? "end" : "start"}">now</text>`;
   }
   g += hourTicks(t0, tEnd, x, H - 6, W);
-  g += `<line class="xh" x1="0" x2="0" y1="${top}" y2="${yP1}" stroke="${css("--text")}" visibility="hidden"/>`;
-  const name = kind === "day" ? "Day-ahead plan" : "Hour-by-hour plan";
+  g += `<line class="xh" x1="0" x2="0" y1="${yS0}" y2="${yH1}" stroke="${css("--text")}" visibility="hidden"/>`;
+  const name = kind === "day" ? "Day-ahead plan" : "Each hour's plan";
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" tabindex="0" role="img"
-      aria-label="${name} versus the measured battery and solar. Use the arrow keys to read the values.">${g}</svg>
+      aria-label="${name} versus the measured battery, solar and house. Use the arrow keys to read the values.">${g}</svg>
     <div class="tip" hidden></div>`;
   chartTip(el, {key: doc.date, W, box: [left, W - right],
     value: (f) => f * doc.minutes,
@@ -616,6 +639,10 @@ function histChart(el, doc, kind) {
     html: (q) => histTip(doc, kind, hrs, q)});
 }
 
+function plannedActions(doc, kind) {
+  return kind === "day" ? (doc.day_ahead ? doc.day_ahead.actions : []) : (doc.hourly || []).flatMap((h) => h.actions);
+}
+
 function histTip(doc, kind, hrs, q) {
   // the tooltip at minute q (a quarter-hour)
   const at = (m) => new Date(new Date(doc.start).getTime() + m * 60e3).toISOString();
@@ -624,15 +651,16 @@ function histTip(doc, kind, hrs, q) {
   const h = hrs[Math.min(Math.floor(q / 60), hrs.length - 1)];
   let meas = doc.measured.soc[q / 15];
   if ((meas === null || meas === undefined) && doc.live && Math.abs(doc.live.now - q) < 15) meas = doc.live.soc;
-  const p = planAt(doc, kind, q), f = h[kind];
+  const p = planAt(doc, kind, q), f = h[kind], plan = css("--plan");
   let t = `<div><b>${hm(at(q))}</b></div>`;
   t += row(key("", css("--soc")), meas === null || meas === undefined ? "–" : fmt(meas, 0) + " %", "battery measured");
-  t += row(key("dash", css("--plan")), p ? fmt(p[0], 0) + " %" : "–", p ? p[1] : "planned");
+  t += row(key("dash", plan), p ? fmt(p[0], 0) + " %" : "–", p ? p[1] : "planned");
   t += `<div class="h">${hm(at(h.m))}–${hm(at(Math.min(h.m + 60, doc.minutes)))}</div>`;
   t += row(key("bar", css("--pv")), fmt(h.pv, 2) + " kWh", "solar measured");
-  t += row(key("", css("--plan")), fmt(f && f.pv, 2) + " kWh", "forecast after shade");
-  t += row(key("", css("--muted")), fmt(f && f.pv_raw, 2) + " kWh", "forecast without shade");
-  t += `<div>${fmt(h.load, 2)} / ${fmt(f && f.load, 2)} kWh house measured / expected</div>`;
+  t += row(key("dash", plan), fmt(f && f.pv, 2) + " kWh", "forecast after shade");
+  t += row(key("", "transparent"), fmt(f && f.pv_raw, 2) + " kWh", "forecast without shade");
+  t += row(key("bar", css("--house")), fmt(h.load, 2) + " kWh", "house measured");
+  t += row(key("dash", plan), fmt(f && f.load, 2) + " kWh", "house expected");
   return t;
 }
 
@@ -640,17 +668,91 @@ const dayName = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], {weekda
 const pts = (v) => v === null || v === undefined ? "–" : `${Number(v) < 0 ? "−" : ""}${Math.abs(v).toFixed(Math.abs(v) < 10 ? 1 : 0)}`;
 const control = (a) => a === null || a === undefined ? "–" : a >= 0.995 ? "on" : a <= 0.005 ? "off (shadow)" : `on ${Math.round(a * 100)} %`;
 
-function histLegend(doc) {
+function histLegend(doc, kind) {
+  // How to read every panel, then only the strip colours this day has.
   const sw = (cls, v, label) => `<span><i class="${cls}" style="${v}"></i>${esc(label)}</span>`;
-  let h = sw("ln", `border-color:${css("--soc")}`, "battery measured")
-    + sw("ln dash", `border-color:${css("--plan")}`, "battery planned")
-    + sw("sw", `background:${css("--pv")}`, "solar measured")
-    + sw("ln", `border-color:${css("--plan")}`, "solar forecast after shade")
-    + sw("ln", `border-color:${css("--muted")}`, "forecast without shade");
-  h += `<br>` + sw("sw", `background:${css("--charge")}`, "grid charge") + sw("sw", `background:${css("--discharge")}`, "discharge / export")
-    + sw("sw", `background:${css("--self")}`, "self-use") + sw("sw", `background:${css("--line")}`, "control off (shadow)");
-  if (doc && doc.live) h += `<br>` + sw("ln dash", `border-color:${css("--plan")};opacity:.8`, "today after now: the current plan");
-  return h;
+  let h = "<div>" + sw("ln", `border-color:${css("--muted")}`, "measured (line or bars)")
+    + sw("ln dash", `border-color:${css("--plan")}`, "planned / expected");
+  if (doc.live) h += sw("ln dot", `border-color:${css("--plan")}`, "after now: the current plan");
+  const seen = new Set([...plannedActions(doc, kind).map((r) => r[2]), ...doc.measured.mode.filter(Boolean)]);
+  const strips = [["charge", "--charge", "grid charge"], ["discharge", "--discharge", "discharge / export"],
+    ["self_use", "--self", "self-use"], ["shadow", "--line", "control off (shadow)"]].filter(([k]) => seen.has(k));
+  return h + "</div><div>" + strips.map(([, v, label]) => sw("sw", `background:${css(v)}`, label)).join("") + "</div>";
+}
+
+function socNow(doc) {
+  // [minute, measured SOC] now (today) or at the end of the day
+  if (doc.live) return [doc.live.now, doc.live.soc ?? null];
+  const soc = doc.measured.soc;
+  for (let i = soc.length - 1; i >= 0; i--) if (soc[i] !== null) return [i * 15, soc[i]];
+  return [doc.minutes, null];
+}
+
+function histVerdict(doc, kind) {
+  // In words: what differed from the forecasts, then where the battery is against the plan.
+  const s = doc.summary, k = kind === "day" ? s.day_ahead : s.hourly, a = s.active_share;
+  let out;
+  if (!k) out = `<p class="verdict">No plan was recorded for this day.</p>`;
+  else {
+    const notes = [];
+    const dev = (exp, got, text) => {
+      if (exp === null || got === null || exp === undefined || got === undefined) return;
+      const d = got - exp;
+      if (Math.abs(d) >= 0.5 && Math.abs(d) >= 0.15 * Math.abs(exp)) notes.push([Math.abs(d), text(d, got, exp)]);
+    };
+    dev(k.house_expected, k.house_measured, (d, got, exp) =>
+      `the house used ${fmt(Math.abs(d))} kWh ${d > 0 ? "more" : "less"} than expected (${fmt(got)} instead of ${fmt(exp)})`);
+    dev(k.solar_after_shade, k.solar_measured, (d, got, exp) =>
+      `the panels gave ${fmt(Math.abs(d))} kWh ${d > 0 ? "more" : "less"} than forecast (${fmt(got)} instead of ${fmt(exp)})`);
+    notes.sort((x, y) => y[0] - x[0]);
+    const when = doc.live ? "So far today" : "On this day";
+    let t = notes.length ? `${when}, ${notes.map((n) => n[1]).join(" and ")}.`
+      : `${when}, solar and house use were close to the forecast.`;
+    const [m, meas] = socNow(doc), p = planAt(doc, kind, m);
+    if (p && meas !== null) {
+      const d = Math.round(meas - p[0]), is = doc.live ? "is" : "ended";
+      t += Math.abs(d) < 3 ? ` The battery ${is} on plan (within 3 points).`
+        : ` The battery ${is} ${Math.abs(d)} points ${d < 0 ? "below" : "above"} plan.`;
+    }
+    out = `<p class="verdict">${t}</p>`;
+  }
+  if (a !== null && a !== undefined && a < 0.995) {
+    const off = a <= 0.005 ? (doc.live ? "Control has been off all day" : "Control was off all day")
+      : `Control was off for ${Math.round((1 - a) * 100)} % of the day`;
+    out += `<div class="banner shadow">${off} (shadow mode): the inverter does not do the planned grid charging or export,
+      so the battery can differ from the plan there.</div>`;
+  }
+  return out;
+}
+
+function histScore(doc, kind) {
+  // expected / measured / difference for solar, house and the battery
+  const s = doc.summary, k = kind === "day" ? s.day_ahead : s.hourly;
+  if (!k) return "";
+  // units sit in the row labels, so the numbers fit a phone
+  const diff = (a, b, d) => {
+    if (a === null || b === null || a === undefined || b === undefined) return "–";
+    const v = Number((b - a).toFixed(d));
+    return v === 0 ? (0).toFixed(d) : `${v < 0 ? "−" : "+"}${Math.abs(v).toFixed(d)}`;
+  };
+  const [m, meas] = socNow(doc), p = planAt(doc, kind, m);
+  const planned = p ? Math.round(p[0]) : null, got = meas === null ? null : Math.round(meas);
+  let h = `<table class="score"><tr><th></th><th>expected</th><th>measured</th><th>difference</th></tr>
+    <tr><td>Solar, kWh<span class="sub">before shade ${fmt(k.solar_forecast)}</span></td><td>${fmt(k.solar_after_shade)}</td>
+      <td>${fmt(k.solar_measured)}</td><td>${diff(k.solar_after_shade, k.solar_measured, 1)}</td></tr>
+    <tr><td>House, kWh</td><td>${fmt(k.house_expected)}</td><td>${fmt(k.house_measured)}</td>
+      <td>${diff(k.house_expected, k.house_measured, 1)}</td></tr>
+    <tr><td>Battery ${doc.live ? "now" : "at the end"}, %</td><td>${fmt(planned, 0)}</td><td>${fmt(got, 0)}</td>
+      <td>${diff(planned, got, 0)}</td></tr></table>`;
+  const notes = [], da = s.day_ahead, hr = s.hourly;
+  if (da && da.soc_mean_abs !== null && da.soc_mean_abs !== undefined) {
+    notes.push(`Battery off from the day-ahead plan: ${pts(da.soc_mean_abs)} points on average, at most ` +
+      `${pts(Math.abs(da.soc_max_abs))} ${da.soc_max_abs < 0 ? "below" : "above"}.`);
+  }
+  if (hr && hr.soc_mean_abs !== null && hr.soc_mean_abs !== undefined) {
+    notes.push(`Off at the end of each hour, against that hour's own plan: ${pts(hr.soc_mean_abs)} points on average.`);
+  }
+  return h + (notes.length ? `<p class="muted" style="margin:4px 0 0;font-size:13px">${notes.join(" ")}</p>` : "");
 }
 
 function histTable(doc) {
@@ -669,15 +771,17 @@ function histTable(doc) {
 
 function histDays(idx) {
   const days = (idx.days || []).slice().reverse();
-  let h = `<thead><tr><th>Day</th><th>Control</th><th>Solar forecast</th><th>after shade</th><th>measured</th>
-    <th>Battery off, day ahead</th><th>hour by hour</th></tr></thead><tbody>`;
+  let h = `<thead><tr><th>Day</th><th>Solar kWh<span class="sub">forecast → measured</span></th>
+    <th>House kWh<span class="sub">expected → measured</span></th><th>Battery<span class="sub">pts off, avg.</span></th>
+    </tr></thead><tbody>`;
   for (const d of days) {
-    const s = d.day_ahead || d.hourly || {};
-    const label = dayName(d.date) + (d.date === idx.today ? " (so far)" : "");
-    h += `<tr tabindex="0" data-day="${esc(d.date)}" class="${d.date === hist.day ? "sel" : ""}"><td>${esc(label)}</td>
-      <td>${control(d.active_share)}</td><td>${fmt(s.solar_forecast)} kWh</td><td>${fmt(s.solar_after_shade)} kWh</td>
-      <td>${fmt(s.solar_measured)} kWh</td><td>${pts(d.day_ahead && d.day_ahead.soc_mean_abs)} pts</td>
-      <td>${pts(d.hourly && d.hourly.soc_mean_abs)} pts</td></tr>`;
+    const s = d.day_ahead || d.hourly || {}, c = control(d.active_share);
+    const tags = [d.date === idx.today ? "so far" : "", c === "off (shadow)" ? "shadow" : c.startsWith("on ") ? "control " + c.slice(3) : ""]
+      .filter(Boolean);
+    h += `<tr tabindex="0" data-day="${esc(d.date)}" class="${d.date === hist.day ? "sel" : ""}">
+      <td>${esc(dayName(d.date))}${tags.length ? `<span class="sub">${tags.join(" · ")}</span>` : ""}</td>
+      <td>${fmt(s.solar_after_shade)} → ${fmt(s.solar_measured)}</td><td>${fmt(s.house_expected)} → ${fmt(s.house_measured)}</td>
+      <td>${pts((d.day_ahead || d.hourly || {}).soc_mean_abs)}</td></tr>`;
   }
   return h + "</tbody>";
 }
@@ -699,38 +803,24 @@ function renderHistory() {
   $("hdate").textContent = hist.day ? dayName(hist.day) + (hist.day === idx.today ? " · today" : "") : "–";
   $("hprev").disabled = i <= 0;
   $("hnext").disabled = i < 0 || i >= dates.length - 1;
-  $("hlegend").innerHTML = histLegend(doc);
   $("hdays").innerHTML = histDays(idx);
   $("hoverall").textContent = histOverall(idx);
   if (!doc || doc.date !== hist.day) {
-    for (const id of ["hday", "hhour", "hdaykpi", "hhourkpi", "htable", "hmade"]) $(id).innerHTML = "";
+    for (const id of ["hverdict", "hscore", "hlegend", "hday", "htable", "hmade"]) $(id).innerHTML = "";
     $("hnote").innerHTML = `<p class="muted">No history for this day.</p>`;
     return;
   }
-  const s = doc.summary, da = s.day_ahead, hr = s.hourly;
+  $("hnote").innerHTML = "";
+  // The day-ahead plan, or each hour's own plan on a day without one (the app started during the day).
+  const kind = doc.day_ahead ? "day" : "hour";
   const at = (m) => hm(new Date(new Date(doc.start).getTime() + m * 60e3).toISOString());
-  const a = s.active_share;
-  $("hnote").innerHTML = a !== null && a < 0.995 ? `<div class="banner shadow">Battery Pilot control was off for
-    ${Math.round((1 - a) * 100)} % of this day (shadow mode). The inverter did not follow the plan then, so the battery
-    differs from the plan by the charging and export it planned.</div>` : "";
-  $("hmade").textContent = doc.day_ahead ? `plan made at ${at(doc.day_ahead.created)}` : "no plan was made after midnight this day";
-  histChart($("hday"), doc, "day");
-  histChart($("hhour"), doc, "hour");
-  const kwh = (v) => fmt(v);
-  $("hdaykpi").innerHTML = da ? [
-    kpi("solar kWh: forecast → after shade → measured", `${kwh(da.solar_forecast)} → ${kwh(da.solar_after_shade)} → ${kwh(da.solar_measured)}`),
-    kpi("house kWh: expected → measured", `${kwh(da.house_expected)} → ${kwh(da.house_measured)}`),
-    kpi("battery off by, SOC points: average / worst", `${pts(da.soc_mean_abs)} / ${pts(da.soc_max_abs)}`),
-    kpi(doc.live ? "battery now: planned → measured" : "end of day: planned → measured",
-      doc.live ? `${fmt(interpPts(doc.day_ahead.soc, doc.live.now), 0)} → ${fmt(doc.live.soc, 0)} %`
-        : `${fmt(da.soc_end_planned, 0)} → ${fmt(da.soc_end_measured, 0)} %`),
-  ].join("") : "";
-  $("hhourkpi").innerHTML = hr ? [
-    kpi("solar kWh: forecast → after shade → measured", `${kwh(hr.solar_forecast)} → ${kwh(hr.solar_after_shade)} → ${kwh(hr.solar_measured)}`),
-    kpi("house kWh: expected → measured", `${kwh(hr.house_expected)} → ${kwh(hr.house_measured)}`),
-    kpi("battery off at the end of each hour, SOC points: average / worst", `${pts(hr.soc_mean_abs)} / ${pts(hr.soc_max_abs)}`),
-    kpi("hours planned", String(hr.hours)),
-  ].join("") : "";
+  $("htitle").textContent = kind === "day" ? "Day ahead" : "Each hour's plan";
+  $("hmade").textContent = kind === "day" ? `plan made at ${at(doc.day_ahead.created)}`
+    : (doc.hourly || []).length ? "no day-ahead plan this day" : "no plan this day";
+  $("hverdict").innerHTML = histVerdict(doc, kind);
+  $("hscore").innerHTML = histScore(doc, kind);
+  $("hlegend").innerHTML = histLegend(doc, kind);
+  histChart($("hday"), doc, kind);
   $("htable").innerHTML = histTable(doc);
 }
 
