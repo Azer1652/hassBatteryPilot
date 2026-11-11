@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fake_ha import CHEAP_NIGHT, TZ, FakeHA, utc
+from fake_ha import CHEAP_NIGHT, RATES_EARLY_2026, TZ, FakeHA, utc
 
 from pilot.app import App
 from pilot.config import Options
@@ -64,7 +64,7 @@ async def test_an_evening_export_through_the_solis(tmpdata):
     fake = FakeHA(utc(2026, 6, 14, 18, 55), soc=90, prices=prices, pv=lambda t: 0.0,
                   forecast={**sun(date(2026, 6, 15), 30), **sun(date(2026, 6, 16), 30)})
     log = recorded(fake)
-    app = await start(tmpdata, fake, contract="dynamic")
+    app = await start(tmpdata, fake, contract="dynamic", **RATES_EARLY_2026)
     lowest, planned = [100.0], {}
 
     def watch():

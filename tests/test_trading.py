@@ -23,16 +23,16 @@ def dyn(prices, **kw):
 
 
 def test_a_trade_breaks_even_only_at_a_high_selling_price():
-    """Default rates: bought at a market price of 0, a kWh must be sold near 180 EUR/MWh: the grid
+    """Default rates: bought at a market price of 0, a kWh must be sold near 167 EUR/MWh: the grid
     fees sit on the purchase, a tenth is lost and the battery wears."""
-    even = dyn({2: 0.0, 9: 180.0})["trade"]
+    even = dyn({2: 0.0, 9: 167.0})["trade"]
     assert even["margin_c"] == pytest.approx(0.0, abs=0.2)
-    assert even["needed_market_eur_mwh"] == pytest.approx(180, abs=2)
-    assert even["buy_c"] == pytest.approx(13.02, abs=0.01) and even["needed_sell_c"] == pytest.approx(16.6, abs=0.1)
+    assert even["needed_market_eur_mwh"] == pytest.approx(167, abs=2)
+    assert even["buy_c"] == pytest.approx(11.76, abs=0.01) and even["needed_sell_c"] == pytest.approx(15.2, abs=0.1)
     assert dyn({2: 0.0, 9: 100.0})["trade"]["margin_c"] < -5
     assert dyn({2: 0.0, 9: 250.0})["trade"]["margin_c"] > 5
     neg = dyn({2: -50.0, 9: 100.0})["trade"]                 # a negative price lowers the bar, not enough
-    assert neg["needed_market_eur_mwh"] == pytest.approx(120, abs=3) and neg["margin_c"] < 0
+    assert neg["needed_market_eur_mwh"] == pytest.approx(107, abs=3) and neg["margin_c"] < 0
 
 
 def test_the_sale_comes_after_the_purchase():

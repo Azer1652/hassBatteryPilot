@@ -36,7 +36,7 @@ class Options:
     # contract
     contract: str = "fixed"                  # the contract you are on now: fixed | dynamic
     fixed_contract_end: str = ""             # YYYY-MM-DD, for renewal reminders
-    grid_fees_c_kwh: float = 11.96           # added to every bought kWh, both contracts, incl. VAT
+    grid_fees_c_kwh: float = 11.33           # added to every bought kWh, both contracts, incl. VAT
     injection_fee_c_kwh: float = 0.19        # subtracted from every sold kWh, both contracts
     fixed_day_rate: float = 18.59            # c/kWh incl. VAT, without grid fees
     fixed_night_rate: float = 15.22
@@ -44,11 +44,11 @@ class Options:
     fixed_sell_add: float = -2.72
     fixed_yearly_fee_eur: float = 65.0
     dynamic_buy_mult: float = 0.102          # dynamic buy = (mult x market + add) x (1 + VAT) + grid fees
-    dynamic_buy_add: float = 1.0
+    dynamic_buy_add: float = 0.408
     dynamic_vat_pct: float = 6.0
     dynamic_sell_mult: float = 0.1           # dynamic sell = mult x market + add - injection fee
-    dynamic_sell_add: float = -1.188
-    dynamic_yearly_fee_eur: float = 100.0
+    dynamic_sell_add: float = -1.3
+    dynamic_yearly_fee_eur: float = 15.0
     night_start: str = "22:00"               # night tariff (fixed contract) and night charging window
     night_end: str = "07:00"
     weekend_is_night: bool = True

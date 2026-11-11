@@ -13,7 +13,7 @@ BXL = ZoneInfo("Europe/Brussels")
 # ---------------------------------------------------------------- options
 def test_defaults_are_the_original_setup():
     o = Options()
-    assert (o.import_limit_kw, o.fixed_day_rate, o.fixed_night_rate, o.grid_fees_c_kwh) == (2.3, 18.59, 15.22, 11.96)
+    assert (o.import_limit_kw, o.fixed_day_rate, o.fixed_night_rate, o.grid_fees_c_kwh) == (2.3, 18.59, 15.22, 11.33)
     assert (o.capacity_tariff_eur_kw_year, o.capacity_min_kw, o.battery_capacity_kwh) == (52.37, 2.5, 16.0)
     assert o.max_charge_kw == pytest.approx(50 * 51.2 / 1000)
     assert o.charge_efficiency * o.discharge_efficiency == pytest.approx(0.9)
@@ -103,12 +103,12 @@ def test_formulas_match_the_original_templates():
     o = Options()
     t = datetime(2026, 11, 10, 12, tzinfo=BXL)   # a Tuesday
     dyn, fix = tariffs.DynamicTariff(o), tariffs.FixedTariff(o)
-    assert dyn.buy(t, 100) == pytest.approx((0.102 * 100 + 1) * 1.06 + 11.96)
-    assert dyn.sell(t, 100) == pytest.approx(0.1 * 100 - 1.188 - 0.19)
-    assert fix.buy(t) == pytest.approx(18.59 + 11.96)
+    assert dyn.buy(t, 100) == pytest.approx((0.102 * 100 + 0.408) * 1.06 + 11.33)
+    assert dyn.sell(t, 100) == pytest.approx(0.1 * 100 - 1.3 - 0.19)
+    assert fix.buy(t) == pytest.approx(18.59 + 11.33)
     assert fix.sell(t, None, 100) == pytest.approx(0.084 * 0.95 * 100 - 2.72 - 0.19, abs=1e-9)
-    assert round(tariffs.breakeven_eur_mwh(15.22, o)) == 131
-    assert round(tariffs.breakeven_eur_mwh(18.59, o)) == 162
+    assert round(tariffs.breakeven_eur_mwh(15.22, o)) == 137
+    assert round(tariffs.breakeven_eur_mwh(18.59, o)) == 168
 
 
 @pytest.mark.parametrize("when,night", [

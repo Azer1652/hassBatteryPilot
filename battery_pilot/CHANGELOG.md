@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.1
+
+- **Default rates brought up to Eneco's November 2026 card** (Zon & Wind Dynamisch, Fluvius
+  Antwerpen): dynamic buy price + 0.408 c/kWh (was 1), dynamic sell price − 1.3 c/kWh (was − 1.188),
+  dynamic contract fee € 15 per year (was € 100), grid fees and taxes 11.33 c/kWh (was 11.96).
+  Settings you already saved are not changed by an update: change them on the Configuration tab or
+  with an import.
+
 ## 2.11.0
 
 - **Export and import the settings.** A new *Settings* tab on the page: *Export settings*

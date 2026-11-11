@@ -140,9 +140,9 @@ async def test_takes_over_from_battery_playbook(tmp_path, tmpdata):
     oct_ = app.comparison.report("2026-10", o)
     assert oct_["bought_kwh"] == 250 and oct_["market_avg_eur_mwh"] == 95
     # 100 kWh by day, 150 at night, 80 sold at the month's 95 EUR/MWh, the yearly fee and the billed minimum peak
-    fixed = (100 * 30.55 + 150 * 27.18 - 80 * (0.0798 * 95 - 2.72 - 0.19)) / 100 + 65 / 12 + 2.5 * 52.37 / 12
+    fixed = (100 * 29.92 + 150 * 26.55 - 80 * (0.0798 * 95 - 2.72 - 0.19)) / 100 + 65 / 12 + 2.5 * 52.37 / 12
     assert oct_["same_usage"]["fixed_eur"] == pytest.approx(fixed, abs=0.01)
-    assert oct_["same_usage"]["dynamic_eur"] == pytest.approx(60.5 - 4.2 + 100 / 12 + 2.5 * 52.37 / 12, abs=0.01)
+    assert oct_["same_usage"]["dynamic_eur"] == pytest.approx(60.5 - 4.2 + 15 / 12 + 2.5 * 52.37 / 12, abs=0.01)
     assert app.load.default_kw == pytest.approx(0.5)
     # second start: nothing to do any more
     app2 = App(Options(), fake, data_dir=tmpdata, config_dir=str(cfg), clock=lambda: fake.now)
@@ -248,7 +248,7 @@ async def test_dashboard_status_is_complete(tmpdata):
     s = app.status()
     for k in ("plan", "prices", "solar", "load", "peaks", "comparison", "breakeven", "readings", "inverter"):
         assert k in s
-    assert s["breakeven"] == {"night": 131, "day": 162}
+    assert s["breakeven"] == {"night": 137, "day": 168}
     # the shade tooltips tell a learned cell from one still at the default factor
     app.shade.learn(1, 13, 0.3, 1.0)
     kwh = app.status()["solar"]["shade_kwh"]

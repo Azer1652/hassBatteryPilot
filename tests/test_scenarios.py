@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import yearsim  # noqa: E402
+from fake_ha import RATES_EARLY_2026  # noqa: E402
 
 from pilot.config import Options  # noqa: E402
 
@@ -78,8 +79,8 @@ def test_battery_beats_no_battery_in_summer(summer):
 
 @pytest.mark.parametrize("scale,cheaper", [(0.4, "dynamic"), (2.5, "fixed")])
 def test_comparison_follows_the_market(scale, cheaper):
-    _, m = week("2026-03-09", price_scale=scale)
-    o = Options()
+    o = Options(**RATES_EARLY_2026)     # (on the rates of late 2026 dynamic wins this week at any market level)
+    _, m = week("2026-03-09", price_scale=scale, opts=o)
     f, d = yearsim.month_eur(m, "fixed", o), yearsim.month_eur(m, "dynamic", o)
     assert (d < f) if cheaper == "dynamic" else (f < d)
 

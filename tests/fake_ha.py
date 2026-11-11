@@ -18,6 +18,12 @@ CAP = 16.0
 CHEAP_NIGHT = {"fixed_night_rate": 8.0}
 
 
+# The rates the planner's behaviour tests were tuned on (the defaults until 2.11.1). A test that
+# checks what the plan does at a given price level passes these, so new default rates do not move it.
+RATES_EARLY_2026 = {"grid_fees_c_kwh": 11.96, "dynamic_buy_add": 1.0, "dynamic_sell_add": -1.188,
+                    "dynamic_yearly_fee_eur": 100.0}
+
+
 def st(state, unit=None, **attrs):
     a = dict(attrs)
     if unit:

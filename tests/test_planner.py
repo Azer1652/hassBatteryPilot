@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from fake_ha import RATES_EARLY_2026
 
 from pilot.config import Options
 from pilot.planner import Slot, Step, make_plan, night_target, night_windows, optimize
@@ -377,7 +378,7 @@ def test_battery_is_sold_down_before_the_shaded_sunrise(case):
 def test_battery_is_kept_when_selling_early_does_not_pay(day_kwh):
     """12 kWh: the sun will not refill it. 25 kWh with sun until 20 h: the battery only fills late,
     and the solar it would push out sells tomorrow evening at the same price, without battery losses."""
-    o, _, plan, i = _sunny_plan(day_kwh=day_kwh)
+    o, _, plan, i = _sunny_plan(day_kwh=day_kwh, **RATES_EARLY_2026)
     sun = plan.steps[i]
     if day_kwh == 12:
         assert all(s.action != "discharge" for s in plan.steps[:i])

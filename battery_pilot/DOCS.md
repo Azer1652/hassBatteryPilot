@@ -343,12 +343,12 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 | Fixed: sell price × market | `fixed_sell_mult` | 0.0798 | Fixed sell price = this × the month's average market price (EUR/MWh) + the next setting − injection fee. 0 for a flat sell rate. |
 | Fixed: sell price + | `fixed_sell_add` | −2.72 c/kWh | See above; your flat sell rate if the setting above is 0. |
 | Dynamic: buy price × market | `dynamic_buy_mult` | 0.102 | Dynamic buy price = (this × market + the next setting) × (1 + VAT) + grid fees. |
-| Dynamic: buy price + | `dynamic_buy_add` | 1.0 c/kWh | Supplier margin, before VAT. |
+| Dynamic: buy price + | `dynamic_buy_add` | 0.408 c/kWh | Supplier margin, before VAT. |
 | Dynamic: VAT | `dynamic_vat_pct` | 6 % | VAT on the dynamic energy price. |
 | Dynamic: sell price × market | `dynamic_sell_mult` | 0.1 | Dynamic sell price = this × market + the next setting − injection fee. |
-| Dynamic: sell price + | `dynamic_sell_add` | −1.188 c/kWh | Usually negative: the supplier's deduction. |
-| Dynamic contract fee | `dynamic_yearly_fee_eur` | 100 €/year | Added in the comparison. |
-| Grid fees and taxes | `grid_fees_c_kwh` | 11.96 c/kWh | Added to every bought kWh on both contracts. Update each January. |
+| Dynamic: sell price + | `dynamic_sell_add` | −1.3 c/kWh | Usually negative: the supplier's deduction. |
+| Dynamic contract fee | `dynamic_yearly_fee_eur` | 15 €/year | Added in the comparison. |
+| Grid fees and taxes | `grid_fees_c_kwh` | 11.33 c/kWh | Added to every bought kWh on both contracts. Update each January. |
 | Injection fee | `injection_fee_c_kwh` | 0.19 c/kWh | Subtracted from every sold kWh on both contracts. |
 | Night tariff starts | `night_start` | 22:00 | Night rate, and the window for winter night charging. The window may cross midnight (22:00–07:00) or lie inside one day (01:00–06:00). |
 | Night tariff ends | `night_end` | 07:00 | On winter days the battery reaches its night target by this time. |
