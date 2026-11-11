@@ -64,7 +64,7 @@ it on the app's Documentation tab.
     charging*, the charge and discharge current, and slot 1's charge and discharge
     times (always for the current hour only), plus the export limit at negative prices
     if you switch that on;
-  - in Home Assistant: two switches it creates, its own `sensor.battery_pilot_*`
+  - in Home Assistant: three switches it creates, its own `sensor.battery_pilot_*`
     sensors, and notifications.
 - **[All settings](battery_pilot/DOCS.md#all-settings):** your contract, grid and
   capacity tariff, battery, planning and inverter, each with its default and what it

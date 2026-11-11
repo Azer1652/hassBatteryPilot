@@ -16,10 +16,10 @@ from . import prices as P
 from . import trading
 from .compare import KINDS, Comparison, day_records, replay_day
 from .config import Options
-from .controller import ACTIVE, Decision, Readings, decide
+from .controller import ACTIVE, FILL_AGAIN, Decision, Readings, decide
 from .discovery import ENTITIES, NEEDED_FOR, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
-from .helpers import CONTROL, CURTAIL, ensure_helpers
+from .helpers import CAR_FILL, CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import MAX_GAP, PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
@@ -42,6 +42,7 @@ ALERTS_AT = time(9, 0)
 RECORD_DAYS = 3
 BLIND_S = 60          # without SOC or grid import this long, a charge or discharge is stopped
 HELPER_GRACE_S = 60   # a helper switch that cannot be read keeps its last state this long
+FILL_MAX_H = 24       # the fill switch turns itself off this long after it was turned on
 FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging at a real current is stale
 CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
 TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
@@ -104,6 +105,9 @@ class App:
         self.decision = Decision("none", reason="starting")
         self.control_on = False
         self.curtail_on = False
+        self.fill_on = False              # the "fill the battery for the car" helper
+        self.fill_since = ""              # when it was turned on (UTC, ISO; persisted)
+        self._fill_done = False           # a car session ended: the helper is turned off at this tick
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
         self.export_limit_before: float | None = None   # the export limit we found before blocking (persisted)
         self.peak_warned = ""
@@ -165,7 +169,7 @@ class App:
                 "records": [QuarterRecord.from_json(r) for r in s.get("records") or []],
                 "daily_market": dict(s.get("daily_market") or {}), "alerts": dict(s.get("alerts") or {}),
                 "last_nightly": str(s.get("last_nightly") or ""), "migrated": bool(s.get("migrated")),
-                "curtailed_by_us": bool(s.get("curtailed_by_us")),
+                "curtailed_by_us": bool(s.get("curtailed_by_us")), "fill_since": str(s.get("fill_since") or ""),
                 "export_limit_before": s.get("export_limit_before"),
                 "day_logs": dict(s.get("day_logs") or {}), "boost_seen": dict(s.get("boost_seen") or {}),
             }
@@ -202,7 +206,8 @@ class App:
              "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us,
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
              "boost_seen": self.boost_seen, "whole_day_averages": True,
-             "efficiency": self.efficiency.to_json(), "car_months": self.car_months}
+             "efficiency": self.efficiency.to_json(), "car_months": self.car_months,
+             "fill_since": self.fill_since}
         write_json(self.state_file, s)
 
     # What Battery Pilot left on the inverter, in a small file written at every change: after a
@@ -359,14 +364,17 @@ class App:
                 "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
                 "car_charger_power")
         sts = await self._states(keys)
-        helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), return_exceptions=True)
+        helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
+                                       return_exceptions=True)
         self.control_on = self._helper("control", helpers[0], self.control_on, now)
         self.curtail_on = self._helper("curtail", helpers[1], self.curtail_on, now)
+        self.fill_on = self._helper("fill", helpers[2], self.fill_on, now)
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
         self._blocked = self._blocked or self.curtailed_by_us
         self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None)
+        await self._fill(now)
         for rec in self.meter.add(now, kw, soc):
             self._quarter_closed(rec)
 
@@ -392,7 +400,7 @@ class App:
                                    self.solis.amps, self.control_on,
                                    (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9,
                                    car_kw=self.car_state.power_kw if self.car_state.charging else 0.0,
-                                   can_shave=self.can_peak_shave)
+                                   can_shave=self.can_peak_shave, fill=self.fill_on)
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
@@ -419,6 +427,39 @@ class App:
         elif was.charging and not self.car_state.charging and self._car_session:
             self.event(f"Car charging ended: {self._car_session[1]:.1f} kWh.")
             self._car_session = None
+            self._fill_done = True
+
+    async def _fill(self, now: datetime):
+        """The "fill the battery for the car" switch: note when it went on, and turn it off when the
+        car has charged or after FILL_MAX_H (a forgotten switch would keep buying grid power)."""
+        done, self._fill_done = self._fill_done, False
+        if not self.fill_on:
+            if self.fill_since:
+                self.fill_since = ""
+                self.event("Fill the battery for the car: off; the plan is followed again.")
+            return
+        if not self.fill_since:
+            self.fill_since = now.isoformat()
+            self.event("Fill the battery for the car: on. The battery is charged to 100 % under the import "
+                       "limit and kept full" + ("." if self.control_on else
+                                                " once Battery Pilot control is on."))
+        old = now - datetime.fromisoformat(self.fill_since) >= timedelta(hours=FILL_MAX_H)
+        if done or old:
+            try:
+                await self.set_fill(False)
+            except Exception as e:  # noqa: BLE001 - tried again at the next tick or session end
+                self._fill_done = done
+                log.warning("Could not turn the fill switch off: %s", e)
+                return
+            self.fill_since = ""
+            self.event("Fill the battery for the car: turned off, " +
+                       ("the car has charged." if done else f"{FILL_MAX_H} hours have passed."))
+
+    async def set_fill(self, on: bool):
+        """Turn the fill helper on or off (the page's button, and the automatic end)."""
+        await self.ha.call("input_boolean", "turn_on" if on else "turn_off", {"entity_id": CAR_FILL})
+        self.fill_on = on
+        self._helper_seen["fill"] = self.clock()
 
     def _helper(self, name: str, st, last: bool, now: datetime) -> bool:
         """A helper switch's state; a read that fails keeps the last known state for a minute."""
@@ -689,7 +730,23 @@ class App:
                 "session_kwh": round(self._car_session[1], 1) if self._car_session else None,
                 "month_kwh": round(self.car_months.get(now.astimezone(self.tz).strftime("%Y-%m"), 0.0), 1),
                 "shaving": bool(s.charging and self.solis and self.solis.mode == "peak_shave"),
-                "can_shave": self.can_peak_shave, "soc": s.soc, "plugged": s.plugged}
+                "can_shave": self.can_peak_shave, "soc": s.soc, "plugged": s.plugged,
+                "fill": self.fill_on, "fill_state": self._fill_state(),
+                "fill_until": ((datetime.fromisoformat(self.fill_since) + timedelta(hours=FILL_MAX_H)).isoformat()
+                               if self.fill_on and self.fill_since else None)}
+
+    def _fill_state(self) -> str | None:
+        if not self.fill_on:
+            return None
+        if not self.control_on or not self.solis:
+            return "no_control"
+        if self.car_state.charging:
+            return "car"
+        if self.solis.mode == "charge" and self.readings and self.readings.soc < 100:
+            return "filling"
+        if self.readings and self.readings.soc >= FILL_AGAIN:
+            return "holding"
+        return "waiting"
 
     @property
     def today_factor(self) -> float:

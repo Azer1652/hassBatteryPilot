@@ -237,7 +237,7 @@ entities match, the one with `solis` in its name wins.
   sunrise and sunset).
 - **Notify actions:** to find the Companion app phone for alerts (unless *Phone
   notification action* is set).
-- **Its two switches:** *Battery Pilot control* and *Battery Pilot block negative
+- **Its three switches:** *Battery Pilot control*, *Battery Pilot fill battery for car* and *Battery Pilot block negative
   export*, every 10 seconds.
 - **The recorder**, once on the first start: 10 days of house load, solar and forecast
   power, to learn your consumption, peaks and shade straight away.
@@ -295,9 +295,11 @@ at an extreme price.
 
 ### In Home Assistant
 
-- **Two switches**, created as normal helpers on the first start (off):
-  `input_boolean.battery_pilot_control` and
-  `input_boolean.battery_pilot_block_negative_export`.
+- **Three switches**, created as normal helpers on the first start (off):
+  `input_boolean.battery_pilot_control`,
+  `input_boolean.battery_pilot_block_negative_export` and
+  `input_boolean.battery_pilot_fill_battery_for_car` (see *Fill the battery for the car*).
+  Battery Pilot turns the last one off itself when the car has charged, or after 24 hours.
 - **Its sensors**, listed below. They are updated every 30 seconds and come back
   within 30 seconds after a Home Assistant restart.
 - **Notifications** in HA, and on your phone through the Companion app:
@@ -458,6 +460,31 @@ Limits:
   the charger.
 - It does not read the car's battery level or whether it is plugged in. The code is ready
   for that, but no car integration is included.
+
+### Fill the battery for the car
+
+On a day the car will charge, the battery can only cover the car's power above the import
+limit for as long as it has energy. The button *Fill the battery for the car* on the Battery
+Pilot page (the helper `input_boolean.battery_pilot_fill_battery_for_car`, which you can also
+put on a dashboard or use in an automation) fills it beforehand. It works without car
+detection too. While it is on, and *Battery Pilot control* is on, it takes the place of the plan:
+
+- **Fill.** The battery is charged from the grid to 100 %, with the usual charging rules: the
+  current follows the house so that grid import stays at the import limit. Solar surplus
+  goes into the battery as well.
+- **Keep.** Once full, the battery is kept. With the inverter's peak-shaving switch: the
+  grid feeds the house up to the import limit and the battery only what is above it; below
+  95 % it is charged again. Without that switch: the charge slot stays on at the minimum
+  current.
+- **The car charges.** As described above: peak shaving while the house asks more than the
+  import limit.
+- **It ends by itself** when a car session ends (when the car is detected), or 24 hours
+  after it was turned on. You can turn it off at any time; the plan is followed again.
+
+What it costs: the battery is filled at the rate of that moment (the day rate, on a fixed
+contract in the daytime), and about 10 % of that energy is lost in the battery. What it
+saves is the capacity tariff on the car's peak. The plan on the page is not changed by the
+switch; it is made again every 5 minutes from the battery level of that moment.
 
 ## Measured efficiency
 

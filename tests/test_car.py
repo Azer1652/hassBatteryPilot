@@ -256,3 +256,106 @@ def test_the_replay_shaves_the_car_too():
     assert shaved["peak_kw"] <= o.import_limit_kw + 0.05
     assert plain["peak_kw"] > 4.0                                # the battery ran out before the car was done
     assert date(2026, 1, 14) == recs[0].start.astimezone(TZ).date()
+
+
+# ---------------------------------------------------------------- the fill switch
+FILL = "input_boolean.battery_pilot_fill_battery_for_car"
+
+
+def test_the_fill_switch_charges_to_full_under_the_limit_and_then_keeps_the_battery():
+    o = Options()
+    calm = rd(load=0.5, soc=40)
+    d = decide(step("discharge", 20), calm, o, "self_use", "", 0, True, fill=True)
+    assert d.command == "charge" and d.amps >= 15 and d.reason.startswith("fill switch")
+    assert decide(None, calm, o, "self_use", "", 0, True, fill=True).command == "charge"       # also without a plan
+    # the house takes the whole limit: no charging, the battery helps as usual
+    assert decide(step("self_use"), rd(load=2.6, soc=40), o, "self_use", "", 0, True, fill=True).command == "none"
+    assert decide(step("self_use"), rd(load=3.0, soc=40), o, "charge", "", 20, True, fill=True).command == "self_use"
+    # full: kept with peak shaving when the inverter has it, and charged again only below 95 %
+    full = rd(load=0.5, soc=100)
+    assert decide(step("self_use"), full, o, "charge", "", 10, True, can_shave=True, fill=True).command == "peak_shave"
+    assert decide(step("self_use"), rd(load=0.5, soc=96), o, "peak_shave", "", 0, True, can_shave=True,
+                  fill=True).command == "none"
+    assert decide(step("self_use"), rd(load=0.5, soc=94), o, "peak_shave", "", 0, True, can_shave=True,
+                  fill=True).command == "charge"
+    # without that switch: held at the minimum charge current
+    hold = decide(step("self_use"), full, o, "charge", T0.astimezone(TZ).strftime("%H:00:00"), 30, True, fill=True)
+    assert (hold.command, hold.amps) == ("current", 10)
+    # the car, control off and the switch off each win over it
+    assert decide(step("self_use"), rd(soc=40), o, "self_use", "", 0, True, car_kw=5.0, can_shave=True,
+                  fill=True).command == "peak_shave"
+    assert decide(step("self_use"), calm, o, "self_use", "", 0, False, fill=True).command == "none"
+    assert decide(step("self_use"), calm, o, "charge", "", 20, True, fill=False).command == "self_use"
+
+
+async def fill_day(tmp_path, peak_shaving=True):
+    """A January afternoon at 40 %, the switch on at 14:00, the car from 20:00 to 22:00."""
+    fake = FakeHA(utc(2026, 1, 14, 14, 0), soc=40, load=car_load(utc(2026, 1, 14, 20, 0), 2),
+                  peak_shaving=peak_shaving)
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(car_min_kw=3.5), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+
+    async def run(end):
+        while fake.now < end:
+            await app.step()
+            fake.advance(timedelta(seconds=30))
+
+    return app, fake, run
+
+
+async def test_the_fill_switch_fills_the_battery_before_the_car_and_ends_with_it(tmp_path):
+    app, fake, run = await fill_day(tmp_path)
+    await app.set_fill(True)
+    await run(utc(2026, 1, 14, 14, 30))
+    car = app.status()["car"]
+    assert car["fill"] and car["fill_state"] == "filling" and car["fill_until"].startswith("2026-01-15T13:0")
+    assert fake.mode() == "charge"
+    await run(utc(2026, 1, 14, 19, 55))
+    assert fake.soc >= 95 and app.status()["car"]["fill_state"] == "holding"       # full, and kept
+    assert fake.mode() == "peak_shave"
+    await run(utc(2026, 1, 14, 22, 30))
+    limit = Options().import_limit_kw
+    assert max(r.kwh["import"] * 4 for r in app.records) <= limit + 0.15           # never above the limit
+    assert fake.soc > 40                                         # the car's 6 kWh above the limit came from a full battery
+    assert fake.s[FILL]["state"] == "off" and not app.fill_on    # the car has charged: the switch is off again
+    assert any("turned off, the car has charged" in e["text"] for e in app.events)
+    assert app.status()["car"]["fill"] is False and app.fill_since == ""
+
+
+async def test_the_fill_switch_ends_after_a_day_or_by_hand_and_needs_control(tmp_path):
+    app, fake, run = await fill_day(tmp_path, peak_shaving=False)
+    fake.load_fn = lambda t: 0.4                                    # the car never comes
+    fake.s[CONTROL]["state"] = "off"
+    fake.s[FILL]["state"] = "on"                                 # from a Home Assistant dashboard
+    await run(utc(2026, 1, 14, 14, 10))
+    assert app.status()["car"]["fill_state"] == "no_control" and fake.mode() == "self_use"
+    fake.s[CONTROL]["state"] = "on"
+    await run(utc(2026, 1, 14, 19, 55))
+    assert fake.soc >= 99 and fake.mode() == "charge"            # no peak-shaving switch: held by the charge slot
+    await run(utc(2026, 1, 15, 14, 5))
+    assert fake.s[FILL]["state"] == "off"
+    assert any("24 hours have passed" in e["text"] for e in app.events)
+    # by hand: the plan is followed again at once
+    await app.set_fill(True)
+    await run(utc(2026, 1, 15, 14, 10))
+    fake.s[FILL]["state"] = "off"
+    await run(utc(2026, 1, 15, 14, 15))
+    assert not app.fill_on and app.fill_since == ""
+    assert any(e["text"].startswith("Fill the battery for the car: off") for e in app.events)
+
+
+async def test_the_page_button_turns_the_helper_on_and_off(tmp_path, aiohttp_client):
+    from pilot.web import make_web
+    app, fake, run = await fill_day(tmp_path)
+    client = await aiohttp_client(make_web(app, None))
+    r = await client.post("/api/car_fill", json={"on": True})
+    assert r.status == 200 and fake.s[FILL]["state"] == "on" and app.fill_on
+    r = await client.post("/api/car_fill", json={"on": False})
+    assert r.status == 200 and fake.s[FILL]["state"] == "off"
+    assert (await client.post("/api/car_fill", json={"on": "yes"})).status == 400
+    assert (await client.post("/api/car_fill", data="x")).status == 400
+    outside = await aiohttp_client(make_web(app, {"172.30.32.2"}))
+    assert (await outside.post("/api/car_fill", json={"on": True})).status == 403
+    fake.fail = lambda *a: True
+    assert (await client.post("/api/car_fill", json={"on": True})).status == 502

@@ -53,6 +53,21 @@ async def history_day(request: web.Request):
     return web.json_response(doc, dumps=_dumps)
 
 
+async def car_fill(request: web.Request):
+    """The page's button: turn the "fill the battery for the car" helper on or off."""
+    try:
+        on = (await request.json())["on"]
+    except Exception:  # noqa: BLE001
+        on = None
+    if not isinstance(on, bool):
+        raise web.HTTPBadRequest(text='Expected {"on": true} or {"on": false}.')
+    try:
+        await request.app[APP_KEY].set_fill(on)
+    except Exception as e:  # noqa: BLE001
+        raise web.HTTPBadGateway(text=f"Home Assistant did not take the change: {e}") from e
+    return web.json_response({"on": on})
+
+
 def _dumps(obj):
     import json
     return json.dumps(obj, default=str)
@@ -67,6 +82,7 @@ def make_web(app, allowed_ips: set[str] | None = None) -> web.Application:
     w.router.add_get("/health", health)
     w.router.add_get("/api/history", history_index)
     w.router.add_get("/api/history/{day}", history_day)
+    w.router.add_post("/api/car_fill", car_fill)
     w.router.add_static("/static/", STATIC)
     return w
 

@@ -110,6 +110,11 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   can_shave=)`: while the car charges above the import limit it forces `peak_shave`. `QuarterRecord.car`
   is kept out of `LoadProfile` and the peaks; the replay uses peak_shave in car quarters; the plan adds
   the car's power for the next hour. `status["car"]`, `sensor.battery_pilot_car_power`, `#carnote`.
+- The fill switch (`helpers.CAR_FILL`, third helper; the page's `#fillbtn` posts to `/api/car_fill` →
+  `App.set_fill`, the only POST route): while on and the car is not charging, `controller.decide(fill=True)`
+  replaces the plan's step by `fill_step` (charge to 100 % in the current clock hour; once full
+  `peak_shave` when the inverter has it, charging again below `FILL_AGAIN`). The plan is not changed.
+  `App._fill` turns the helper off when a car session ends or after `FILL_MAX_H` (`fill_since` is persisted).
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices

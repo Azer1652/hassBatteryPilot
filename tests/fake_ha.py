@@ -69,6 +69,7 @@ class FakeHA:
         if with_helpers:
             s["input_boolean.battery_pilot_control"] = st("off")
             s["input_boolean.battery_pilot_block_negative_export"] = st("off")
+            s["input_boolean.battery_pilot_fill_battery_for_car"] = st("off")
         self.s = s
         self.helpers_created: list[str] = []
         self.advance(timedelta(0))
@@ -102,7 +103,7 @@ class FakeHA:
             raise RuntimeError("Modbus timeout")
         self.calls.append((domain, service, data))
         eid = data.get("entity_id")
-        if domain == "switch" and isinstance(eid, str):
+        if domain in ("switch", "input_boolean") and isinstance(eid, str):
             self.s[eid]["state"] = "on" if service == "turn_on" else "off"
         elif domain == "number" and service == "set_value":
             self.s[eid]["state"] = str(data["value"])

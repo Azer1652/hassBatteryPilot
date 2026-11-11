@@ -18,6 +18,9 @@ Pure function, so every rule can be tested without Home Assistant:
               battery may not feed the house in that mode);
 * the car   - while the electric car charges and the house asks more than the import
               limit, peak shaving whatever the step says (when the inverter has it);
+* the fill switch - while it is on and the car does not charge: grid charge to 100 % under
+              the import limit, then keep the battery (peak shaving when the inverter has it,
+              else the hold at the minimum current); it charges again below FILL_AGAIN;
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -44,6 +47,7 @@ START_A = 15        # start charging only with some headroom (old playbook)
 ACTIVE = ("charge", "discharge", "peak_shave", "solar_hold", "failed")
 HOLD_SURPLUS_KW = 0.3   # solar hold starts with this much surplus
 HOLD_DWELL_S = 120      # and is not started or ended within this time of the last command
+FILL_AGAIN = 95.0       # the fill switch: a full battery is charged again below this SOC
 
 
 @dataclass
@@ -85,10 +89,20 @@ def paced_amps(step: Step, r: Readings, o: Options, up: bool) -> int:
     return max(min(a, limit), MIN_A)
 
 
+def fill_step(r: Readings, mode: str, can_shave: bool) -> Step:
+    """The step the fill switch puts in the plan's place: charge to 100 % within this clock hour
+    (so at the current the import limit allows), and once full keep the battery."""
+    start = r.t.replace(minute=0, second=0, microsecond=0)
+    filling = r.soc < FILL_AGAIN or (mode in ("charge", "failed") and r.soc < 100)
+    action = "charge" if filling or not can_shave else "peak_shave"
+    return Step(start, 1.0, action, r.soc, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
 def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str, amps_now: int,
-           control_on: bool, mode_age_s: float = 1e9, car_kw: float = 0.0, can_shave: bool = False) -> Decision:
+           control_on: bool, mode_age_s: float = 1e9, car_kw: float = 0.0, can_shave: bool = False,
+           fill: bool = False) -> Decision:
     """`car_kw`: what the electric car takes now (0: not charging). `can_shave`: the inverter has
-    the peak-shaving switch."""
+    the peak-shaving switch. `fill`: the "fill the battery for the car" switch is on."""
     hour = r.t_local.strftime("%H:00:00")
     if not control_on:
         if mode in ACTIVE:
@@ -103,6 +117,9 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
             return Decision("peak_shave", reason="the car is charging: the grid gives up to the import limit, "
                                                  "the battery the rest")
         return Decision("none", reason="peak shaving while the car charges")
+    src = "plan"
+    if fill and car_kw <= 0:
+        step, src = fill_step(r, mode, can_shave), "fill switch"
     if step is None:
         if mode != "self_use":
             return Decision("self_use", reason="no plan")
@@ -132,7 +149,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
                 return Decision("current", want, "follow house load")
             return Decision("none", reason="charging")
         if follow >= START_A and r.projection_kw < limit - 0.2:
-            return Decision("charge", want, f"plan: charge to {step.soc_end:.0f} %")
+            return Decision("charge", want, f"{src}: charge to {step.soc_end:.0f} %")
         if mode != "self_use":
             return Decision("self_use", reason="waiting for room under the import limit")
         return Decision("none", reason="waiting for room under the import limit")
@@ -148,7 +165,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
 
     if step.action == "peak_shave":
         if mode != "peak_shave":
-            return Decision("peak_shave", reason="plan: peak shaving (the battery is kept for later)")
+            return Decision("peak_shave", reason=f"{src}: peak shaving (the battery is kept for later)")
         return Decision("none", reason="peak shaving")
 
     if step.action == "solar_hold":

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.9.0
+
+**A button to fill the battery before the car charges.**
+
+- **The button** *Fill the battery for the car* is on the Battery Pilot page, under the plan.
+  It is a normal helper, `input_boolean.battery_pilot_fill_battery_for_car`, created at the
+  first start after the update, so it also works from a dashboard or an automation.
+- **While it is on** (and *Battery Pilot control* is on) the battery is charged from the grid
+  to 100 %, with grid import kept at the import limit, and then kept full: with the
+  inverter's peak-shaving switch the grid feeds the house and the battery only what is
+  above the limit; without it the charge slot stays on at the minimum current.
+- **When the car charges**, the 2.8.0 rule applies: the grid gives up to the import limit
+  and the full battery the rest.
+- **It turns itself off** when the car has charged (with car detection on) or after
+  24 hours. Turn it off yourself at any time; the plan is followed again.
+- It works without car detection (`car_min_kw`); the switch then ends after 24 hours or by hand.
+- The plan on the page does not show the fill; the line next to the button says what it
+  is doing.
+
 ## 2.8.0
 
 **Battery Pilot knows when the car charges and shaves its peak.**

@@ -54,6 +54,12 @@
   .nav { display: flex; align-items: center; gap: 8px; }
   .nav button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
                 width: 34px; height: 30px; cursor: pointer; }
+  .fill { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0 0; }
+  .fill button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 6px 12px; cursor: pointer; }
+  .fill button[aria-pressed="true"] { border-color: var(--charge); font-weight: 600; }
+  .fill button:disabled { opacity: 0.5; cursor: default; }
+  .fill p { margin: 0; flex: 1 1 240px; }
   .nav button:disabled { opacity: 0.35; cursor: default; }
   .nav span { min-width: 120px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
   .legend i.ln { width: 16px; height: 0; border-top: 2px solid; display: inline-block; }
@@ -116,6 +122,10 @@
     <p class="muted" id="plannote"></p>
     <p class="muted" id="tradenote"></p>
     <p class="muted" id="carnote"></p>
+    <div class="fill">
+      <button id="fillbtn" type="button" aria-pressed="false">Fill the battery for the car</button>
+      <p class="muted" id="fillnote"></p>
+    </div>
     <p class="muted" id="effnote"></p>
   </div>
 
@@ -382,6 +392,44 @@ function carNote(c) {
   if (c.shaving) return `${now}: the grid gives up to the import limit and the battery the rest (peak shaving). ` +
     `${fmt(c.session_kwh, 1)} kWh so far.`;
   return c.can_shave ? `${now}.` : `${now}. The inverter's peak-shaving switch was not found, so the battery is used as usual.`;
+}
+
+// The "fill the battery for the car" switch: what it is doing.
+function fillNote(c) {
+  if (!c || !c.fill) return "Before the car charges: charges the battery to 100 % from the grid, under the import limit, " +
+    "and keeps it full, so it can cover the car's power above the limit for longer.";
+  const until = c.fill_until ? ` It turns itself off when the car has charged, or on ${new Date(c.fill_until).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: tz})}.` : "";
+  const what = {
+    no_control: "On, but Battery Pilot control is off: nothing is sent to the inverter.",
+    car: "On: the car is charging.",
+    filling: "On: the battery is charging to 100 % under the import limit.",
+    holding: "On: the battery is full and is kept for the car.",
+    waiting: "On: waiting for room under the import limit to charge.",
+  }[c.fill_state] || "On.";
+  return what + until;
+}
+
+async function toggleFill() {
+  const b = $("fillbtn"), on = b.getAttribute("aria-pressed") !== "true";
+  b.disabled = true;
+  try {
+    const r = await fetch("api/car_fill", {method: "POST", headers: {"Content-Type": "application/json"},
+                                           body: JSON.stringify({on})});
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    if (last && last.car) { last.car.fill = on; last.car.fill_state = null; last.car.fill_until = null; renderFill(last.car); }
+    $("fillnote").textContent = on ? "On." : fillNote({fill: false});
+  } catch (e) {
+    $("fillnote").textContent = `Could not change the switch: ${e.message || e}`;
+  }
+  b.disabled = false;
+  setTimeout(refresh, 1500);
+}
+
+function renderFill(c) {
+  const on = !!(c && c.fill);
+  $("fillbtn").setAttribute("aria-pressed", on);
+  $("fillbtn").textContent = on ? "Stop filling the battery" : "Fill the battery for the car";
+  $("fillnote").textContent = fillNote(c);
 }
 
 // Why the plan trades with the grid, or not: the best pair of hours with this contract's prices.
@@ -925,6 +973,7 @@ function goDay(d) {
   if (i >= 0 && dates[i + d]) loadHistory(dates[i + d]);
 }
 $("hprev").addEventListener("click", () => goDay(-1));
+$("fillbtn").addEventListener("click", toggleFill);
 $("hnext").addEventListener("click", () => goDay(1));
 const pick = (e) => { const tr = e.target.closest("tr[data-day]"); if (tr) loadHistory(tr.dataset.day); };
 $("hdays").addEventListener("click", pick);
@@ -950,6 +999,7 @@ let render = function (s) {
   $("effnote").textContent = efficiencyNote(s.efficiency);
   $("tradenote").textContent = tradeNote((s.trading || {})[s.contract]);
   $("carnote").textContent = carNote(s.car);
+  renderFill(s.car);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`
