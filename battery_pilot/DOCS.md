@@ -27,6 +27,11 @@ What it does:
 - **Learns your tree shade.** It compares what your panels deliver with the forecast
   for every month and hour of the day. Low winter sun behind trees gets its own
   correction; summer noon keeps its own.
+- **Follows today's weather.** When the panels gave clearly less (or more) in the last
+  three hours than the forecast after shade, the rest of today is planned lower (or
+  higher). The correction fades over the following hours and never touches tomorrow.
+  Quarter-hours in which the inverter held the panels back do not count. The page says
+  so when the difference is 15 % or more.
 - **Shows planned vs actual**, day by day: the battery level and solar the plan
   expected against what really happened, so you can see how good the prediction is.
 - **Compares contracts** with your own measured energy, in two ways (see below).
@@ -422,7 +427,7 @@ the measured value stays 3 points or more from the setting, change the setting y
 | `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
 | `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), or unknown until there is enough data | `round_trip_pct`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_round_trip_pct`, `solar_round_trip_pct` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
-| `sensor.battery_pilot_solar_today` | Shade-corrected solar forecast for today (kWh) | `forecast_kwh` (before correction) |
+| `sensor.battery_pilot_solar_today` | Solar forecast for today after shade and today's weather correction (kWh) | `forecast_kwh` (before correction), `today_factor` (what the panels gave in the last hours against the forecast after shade; 1.0 = as forecast) |
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |
 | `sensor.battery_pilot_quarter_projection` | Where this quarter-hour's average import is heading (kW) | |
 | `sensor.battery_pilot_month_peak` | This month's highest quarter-hour (kW) | `billed_kw`, `month_cost_eur`, `rolling_12_month_kw` |

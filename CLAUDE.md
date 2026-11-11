@@ -108,6 +108,12 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   follows the month's average) is taken from whole days only: the price archive keeps 3 days, and
   what is left of a day while it is dropped is its evening. The replay, like the live plan, blocks export at negative sell
   prices only when `App.blocks_negative_export` (block switch on and an export-limit entity found).
+- `solar.PvForecast.observe()` (called in `App.replan` and, through `replay_day(on_replan=)`, in the
+  nightly replay and `yearsim`): today's measured solar over the last 3 hours against the forecast after
+  shade (`intraday_factor`; blocked, incomplete and export-limited quarters skipped, 0.5 kWh pull to 1,
+  clamp 0.3-1.6) scales the rest of today, fading with a 4-hour half-life. Tomorrow, the winter rule and
+  shade learning (raw archive) are untouched. `yearsim --forecast-error` makes the forecast wrong about
+  the day; `--no-nowcast` switches the correction off.
 - `solar.ShadeModel`: 12 × 24 actual/forecast factors weighted by forecast kWh; skips hours with
   incomplete PV data and hours with a `QuarterRecord.blocked` quarter (export held at 0 by
   `App._curtail`: the inverter throttles the panels; the replay uses the forecast there when it is

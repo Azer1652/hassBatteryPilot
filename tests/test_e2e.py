@@ -119,6 +119,24 @@ async def test_when_the_sun_disappoints_the_dear_evening_is_still_covered(tmpdat
     assert app.peaks.month_peak(fake.now, TZ) <= Options().import_limit_kw + 0.1
 
 
+async def test_a_cloudy_day_lowers_what_the_plan_expects_from_the_afternoon(tmpdata, monkeypatch):
+    """The forecast says 35 kWh; the panels give 40 % of it. By noon the plan counts on much less
+    for the afternoon than the forecast, and tomorrow's forecast is left alone."""
+    monkeypatch.setattr("pilot.app.REFRESH_S", 900)
+    fc = {**sun(date(2026, 6, 15), 35), **sun(date(2026, 6, 16), 35)}
+    fake = FakeHA(utc(2026, 6, 15, 4, 0), soc=40, forecast=fc, load=lambda t: 0.45,
+                  pv=lambda t: fc.get(t.replace(minute=0, second=0, microsecond=0), 0.0) * 0.4)
+    app = await start(tmpdata, fake)
+    await run(app, fake, utc(2026, 6, 15, 10, 5), step_s=60)     # 12:05 local
+    assert app.today_factor == pytest.approx(0.45, abs=0.07)
+    h13 = utc(2026, 6, 15, 11, 0)
+    assert fc[h13] * 0.4 < app.pv.kwh(h13, h13 + timedelta(hours=1)) < fc[h13] * 0.6     # (the correction fades a little)
+    step = app.plan.step_at(h13 + timedelta(minutes=5))
+    assert step.pv_kwh / step.hours < fc[h13] * 0.6
+    assert app.pv.day_total(date(2026, 6, 16)) == pytest.approx(sum(sun(date(2026, 6, 16), 35).values()), rel=0.05)
+    assert app.status()["solar"]["today_factor"] == app.today_factor
+
+
 # ---------------------------------------------------------------- the DST nights
 @pytest.mark.parametrize("night,hours", [(date(2026, 3, 28), 23), (date(2026, 10, 24), 25)])
 async def test_a_winter_night_charge_across_a_clock_change(tmpdata, night, hours):

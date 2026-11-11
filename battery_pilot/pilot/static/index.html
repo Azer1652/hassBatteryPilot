@@ -164,6 +164,7 @@
     <div class="card">
       <h2>Solar and tree shade</h2>
       <div class="kpis" id="solar"></div>
+      <p class="muted" id="suntoday"></p>
       <p class="muted">What your panels deliver compared with the forecast, by month (rows) and hour (columns).
         Dark cells are hours the forecast overestimates, such as low winter sun behind trees.
         Tap or hover over a cell for its value.</p>
@@ -929,6 +930,10 @@ let render = function (s) {
   comparison(s.comparison || {});
   $("solar").innerHTML = kpi("today, after shade", fmt(s.solar.today) + " kWh") + kpi("tomorrow, after shade", fmt(s.solar.tomorrow) + " kWh")
     + kpi("house, per day", fmt(s.load.daily_kwh) + " kWh");
+  const sun = s.solar.today_factor;
+  $("suntoday").textContent = sun && Math.abs(sun - 1) >= 0.15
+    ? `In the last hours the panels gave ${Math.round(sun * 100)} % of the forecast after shade: ` +
+      `the rest of today is planned ${sun < 1 ? "lower" : "higher"}.` : "";
   shadeChart($("shade"), s.solar.shade, s.solar.shade_kwh);
   peaksChart($("peaks"), s.peaks);
   $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW.` +

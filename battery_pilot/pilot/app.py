@@ -638,6 +638,14 @@ class App:
                            logging.WARNING)
         self.pv = PvForecast(hourly, self.shade, self.tz)
 
+    @property
+    def today_factor(self) -> float:
+        """Measured solar against the forecast over the last hours (1.0: as forecast, or no data)."""
+        return round(self.pv.nowcast[0], 2) if self.pv.nowcast else 1.0
+
+    def _archive_hours(self) -> dict[datetime, float]:
+        return {datetime.fromisoformat(k): v for k, v in self.forecast_archive.items()}
+
     def replan(self, now: datetime | None = None):
         now = now or self.clock()
         soc = self.readings.soc if self.readings else None
@@ -652,6 +660,8 @@ class App:
         if self.problem and self.problem.startswith("Dynamic contract"):
             self.problem = None
         current = sticky_action(self.plan, now, soc, self.o.battery_reserve_soc) if self.readings else None
+        # Today's weather against the forecast, from the quarters measured so far.
+        self.pv.observe(self.records, now, past=self._archive_hours(), export_limit_kw=self.o.export_limit_kw)
         self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
@@ -766,7 +776,8 @@ class App:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
             res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
                              block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
-                             peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
+                             peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold,
+                             on_replan=lambda past, t: pv_fc.observe(past, t, export_limit_kw=self.o.export_limit_kw))
             if res is None:
                 return None
             results[kind] = res
@@ -888,7 +899,8 @@ class App:
             sensors.append((f"sensor.battery_pilot_solar_{name}", round(self.pv.day_total(day), 1), {
                 "friendly_name": f"Battery Pilot solar {name} (shade-corrected)", "unit_of_measurement": "kWh",
                 "device_class": "energy", "icon": "mdi:solar-power-variant",
-                "forecast_kwh": round(self.pv.day_total(day, corrected=False), 1)}))
+                "forecast_kwh": round(self.pv.day_total(day, corrected=False), 1),
+                **({"today_factor": self.today_factor} if name == "today" else {})}))
         if self.readings:
             sensors.append(("sensor.battery_pilot_quarter_projection", round(self.readings.projection_kw, 2), {
                 "friendly_name": "Battery Pilot quarter-hour projection", "unit_of_measurement": "kW",
@@ -944,6 +956,7 @@ class App:
             "prices": self.current_prices(),
             "solar": {"today": round(self.pv.day_total(now.astimezone(self.tz).date()), 1),
                       "tomorrow": round(self.pv.day_total(now.astimezone(self.tz).date() + timedelta(days=1)), 1),
+                      "today_factor": self.today_factor,
                       "shade": self.shade.to_json()["factors"], "shade_months": self.shade.month_summary(),
                       "shade_kwh": [[round(w, 1) for w in row] for row in self.shade.weights]},
             "load": {"daily_kwh": self.load.daily_kwh(), "kw": self.load.to_json()["kw"]},

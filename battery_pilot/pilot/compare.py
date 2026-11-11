@@ -178,7 +178,7 @@ class Comparison:
 def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo, prices: list[PriceSlot],
                load: LoadProfile, pv_forecast, soc0: float, market_avg: float | None,
                replan_every_h: int = 1, block_negative: bool = False, month_peak_kw: float = 0.0,
-               peak_shave: bool = False, solar_hold: bool = False) -> dict | None:
+               peak_shave: bool = False, solar_hold: bool = False, on_replan=None) -> dict | None:
     """Replay one day of measured quarters on a contract with its battery strategy.
 
     `pv_forecast(t0, t1)` is the (shade-corrected) forecast the app had; the plan uses
@@ -189,6 +189,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     above the import limit when that pays more than a higher peak costs).
     `peak_shave`: the inverter has a peak-shaving switch, so the plan may use it.
     `solar_hold`: it has a feed-in priority switch, so the plan may put solar charging off.
+    `on_replan(quarters so far, time)` is called before each plan: the forecast corrects itself with
+    the solar measured so far that day, as the app does (`PvForecast.observe`).
     """
     recs = sorted(records, key=lambda r: r.start)
     good = [r for r in recs if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5]
@@ -202,6 +204,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     plan = None
     for i, r in enumerate(recs):
         if plan is None or (i % (4 * replan_every_h) == 0):
+            if on_replan:
+                on_replan(recs[:i], r.start)
             plan = make_plan(r.start, tz, o, tar, prices, lambda a, z: load.kwh(a, z, tz), pv_forecast, soc,
                              market_avg=market_avg, curtail_negative=block_negative, horizon_h=30,
                              peak_kw=lambda a, z: load.peak_kw(a, z, tz),

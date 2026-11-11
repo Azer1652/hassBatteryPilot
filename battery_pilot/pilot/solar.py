@@ -21,6 +21,12 @@ MAX_WEIGHT_KWH = 30.0       # memory: older data fades once this much forecast e
 PRIOR_KWH = 0.5             # a little pull towards 1.0 for cells with little data
 CLAMP = (0.05, 1.5)
 
+# Today's weather against the forecast (`intraday_factor`)
+NOWCAST_WINDOW_H = 3.0      # the measured quarters that count
+NOWCAST_PRIOR_KWH = 0.5     # pull towards 1.0: a dim dawn says little about the day
+NOWCAST_HALF_LIFE_H = 4.0   # the correction fades: clouds now say less about this evening
+NOWCAST_CLAMP = (0.3, 1.6)
+
 
 class ShadeModel:
     def __init__(self, factors=None, weights=None):
@@ -131,13 +137,62 @@ def hourly_from_daily(day: date, total_kwh: float, latitude: float, longitude: f
     return {h: total_kwh * w / tot for h, w in weights.items()} if tot > 0 else {}
 
 
+def intraday_factor(records: list[QuarterRecord], hourly: dict[datetime, float], shade: ShadeModel,
+                    now: datetime, tz: ZoneInfo, export_limit_kw: float | None = None) -> tuple[float, float]:
+    """(measured / expected solar over the last hours of today, the expected kWh it rests on).
+
+    The shade factors are an average over weeks; this is today: a day much cloudier or clearer
+    than forecast. Quarters in which the inverter held the panels back (export blocked, or at
+    the export limit) are skipped: that is not weather."""
+    today = now.astimezone(tz).date()
+    quarter = timedelta(minutes=15)
+    actual = expected = 0.0
+    for r in records:
+        if r.start < now - timedelta(hours=NOWCAST_WINDOW_H) or r.start + quarter > now:
+            continue
+        if r.start.astimezone(tz).date() != today or r.covered.get("pv", 0) < 0.9 or r.blocked:
+            continue
+        if export_limit_kw and r.kwh.get("export", 0.0) * 4 >= 0.95 * export_limit_kw:
+            continue
+        hour = r.start.replace(minute=0, second=0, microsecond=0)
+        fc = hourly.get(hour)
+        if fc is None:
+            continue
+        local = hour.astimezone(tz)
+        expected += fc / 4 * shade.factor(local.month, local.hour)
+        actual += max(r.kwh.get("pv", 0.0), 0.0)
+    f = (actual + NOWCAST_PRIOR_KWH) / (expected + NOWCAST_PRIOR_KWH)
+    return min(max(f, NOWCAST_CLAMP[0]), NOWCAST_CLAMP[1]), expected
+
+
 class PvForecast:
-    """Hourly solar forecast (UTC hour -> kWh) with the shade correction applied."""
+    """Hourly solar forecast (UTC hour -> kWh) with the shade correction applied, and for the
+    rest of today the correction for today's weather (`observe`)."""
 
     def __init__(self, hourly: dict[datetime, float], shade: ShadeModel, tz: ZoneInfo):
         self.hourly = hourly
         self.shade = shade
         self.tz = tz
+        self.nowcast: tuple[float, datetime] | None = None     # (factor, measured at)
+
+    def observe(self, records: list[QuarterRecord], now: datetime, past: dict[datetime, float] | None = None,
+                export_limit_kw: float | None = None) -> float:
+        """Compare today's measured solar with the forecast and correct the rest of today.
+        `past`: the forecast as it was for hours that have started, where `hourly` no longer has them."""
+        factor, _ = intraday_factor(records, {**self.hourly, **(past or {})}, self.shade, now, self.tz, export_limit_kw)
+        self.nowcast = (factor, now) if abs(factor - 1) > 1e-6 else None
+        return factor
+
+    def today_factor(self, hour: datetime) -> float:
+        """Today's weather correction for an hour: full for the hour that is running, fading after it,
+        none for tomorrow or for hours that are over."""
+        if self.nowcast is None:
+            return 1.0
+        factor, at = self.nowcast
+        if hour + timedelta(hours=1) <= at or hour.astimezone(self.tz).date() != at.astimezone(self.tz).date():
+            return 1.0
+        ahead = max((hour - at).total_seconds() / 3600, 0.0)
+        return 1 + (factor - 1) * 0.5 ** (ahead / NOWCAST_HALF_LIFE_H)
 
     @property
     def until(self) -> datetime | None:
@@ -146,7 +201,7 @@ class PvForecast:
     def corrected(self, hour: datetime) -> float:
         raw = self.hourly.get(hour, 0.0)
         local = hour.astimezone(self.tz)
-        return raw * self.shade.factor(local.month, local.hour)
+        return raw * self.shade.factor(local.month, local.hour) * self.today_factor(hour)
 
     def kwh(self, t0: datetime, t1: datetime, corrected: bool = True) -> float:
         total = 0.0

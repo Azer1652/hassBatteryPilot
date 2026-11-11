@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.7.0
+
+**The plan follows today's weather.**
+
+- **Today's solar forecast is corrected as the day goes.** Until now the forecast was only
+  corrected for shade, an average over weeks. Now the plan also compares what the panels
+  gave in the last three hours with the forecast after shade, and plans the rest of today
+  lower or higher by that ratio (between 0.3 and 1.6). The correction fades with a
+  half-life of four hours and never touches tomorrow, so the winter rule and the night
+  target are unchanged. Quarter-hours with missing data, with export blocked or at the
+  export limit do not count: the inverter held the panels back then. Shade learning is
+  unchanged. The nightly replay plans the same way.
+- The page shows a line when today differs from the forecast by 15 % or more, and
+  `sensor.battery_pilot_solar_today` has the attribute `today_factor`.
+- The gain is small. In the year simulation with a forecast that is wrong about the day
+  (`tools/yearsim.py --forecast-error`), the dynamic contract goes from €874 to €869 and
+  the fixed contract stays at €947. With a forecast that is right about the day it changes
+  nothing on fixed and costs €1 on dynamic. Other window lengths and half-lives gave the
+  same result within €1.
+- Not new: the plan already keeps battery for your usual consumption peaks (the typical
+  highest quarter-hour per weekday and hour), since 2.0.
+
 ## 2.6.0
 
 **Solar hold, and the battery's measured efficiency.**

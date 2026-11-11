@@ -6,7 +6,7 @@ import pytest
 
 from pilot.load import LoadProfile
 from pilot.meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
-from pilot.solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
+from pilot.solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, intraday_factor, parse_energy_forecast
 
 BXL = ZoneInfo("Europe/Brussels")
 
@@ -111,6 +111,74 @@ def test_corrected_forecast_applies_shade_per_hour_and_overlap():
     assert fc.kwh(h15, h15 + timedelta(hours=1)) == pytest.approx(0.2, abs=0.02)
     assert fc.day_total(date(2026, 1, 14), corrected=False) == pytest.approx(3.0)
     assert fc.until == h15 + timedelta(hours=1)
+
+
+# ---------------------------------------------------------------- today's weather against the forecast
+def quarters(start, hours, kw, **kw_rec):
+    """Closed quarters from `start` with `kw` of solar."""
+    return [QuarterRecord(start + timedelta(minutes=15 * i), {"import": 0.0, "export": 0.0, "load": 0.1, "pv": kw / 4},
+                          {"import": 1.0, "export": 1.0, "load": 1.0, "pv": kw_rec.get("cov", 1.0)}, None,
+                          blocked=kw_rec.get("blocked", False)) for i in range(int(hours * 4))]
+
+
+def june_day():
+    return {local(2026, 6, 15, h): 2.0 for h in range(8, 20)}       # 2 kWh an hour all day
+
+
+def test_a_cloudy_morning_lowers_the_rest_of_today_and_fades():
+    fc = PvForecast(june_day(), ShadeModel(), BXL)
+    now = local(2026, 6, 15, 12)
+    f = fc.observe(quarters(local(2026, 6, 15, 9), 3, 1.0), now)    # half of what was forecast for 3 hours
+    assert f == pytest.approx(0.54, abs=0.02)                        # (pulled a little towards 1)
+    assert fc.corrected(local(2026, 6, 15, 12)) == pytest.approx(2.0 * f, abs=0.01)     # the hour that starts
+    later = fc.corrected(local(2026, 6, 15, 16))                     # 4 hours on: half the correction
+    assert later == pytest.approx(2.0 * (1 + (f - 1) / 2), abs=0.01)
+    assert fc.corrected(local(2026, 6, 15, 10)) == 2.0               # hours that are over are not rewritten
+    assert fc.kwh(local(2026, 6, 16, 8), local(2026, 6, 16, 9)) == 0.0   # (no forecast for tomorrow here)
+
+
+def test_tomorrow_is_not_corrected_by_todays_weather():
+    hourly = {**june_day(), **{local(2026, 6, 16, h): 2.0 for h in range(8, 20)}}
+    fc = PvForecast(hourly, ShadeModel(), BXL)
+    fc.observe(quarters(local(2026, 6, 15, 9), 3, 1.0), local(2026, 6, 15, 12))
+    assert fc.day_total(date(2026, 6, 16)) == pytest.approx(24.0)
+    assert fc.day_total(date(2026, 6, 15)) < 20.0
+
+
+def test_a_clear_day_raises_the_forecast_within_a_limit():
+    fc = PvForecast(june_day(), ShadeModel(), BXL)
+    assert fc.observe(quarters(local(2026, 6, 15, 9), 3, 2.6), local(2026, 6, 15, 12)) == pytest.approx(1.28, abs=0.02)
+    assert fc.observe(quarters(local(2026, 6, 15, 9), 3, 8.0), local(2026, 6, 15, 12)) == 1.6
+    assert fc.observe(quarters(local(2026, 6, 15, 9), 3, 0.0), local(2026, 6, 15, 12)) == 0.3
+
+
+def test_dawn_and_missing_data_say_nothing_about_the_day():
+    shade, now = ShadeModel(), local(2026, 6, 15, 12)
+    hourly = june_day()
+    assert intraday_factor([], hourly, shade, now, BXL) == (1.0, 0.0)
+    dawn = {local(2026, 6, 15, 6): 0.08}
+    f, expected = intraday_factor(quarters(local(2026, 6, 15, 6), 1, 0.0), dawn, shade, local(2026, 6, 15, 7), BXL)
+    assert f > 0.85 and expected == pytest.approx(0.08)
+    # quarters with gaps, with export blocked, or at the export limit: the panels were not free
+    assert intraday_factor(quarters(local(2026, 6, 15, 9), 3, 0.2, cov=0.5), hourly, shade, now, BXL)[0] == 1.0
+    assert intraday_factor(quarters(local(2026, 6, 15, 9), 3, 0.2, blocked=True), hourly, shade, now, BXL)[0] == 1.0
+    clipped = quarters(local(2026, 6, 15, 9), 3, 0.2)
+    for r in clipped:
+        r.kwh["export"] = 5.0 / 4
+    assert intraday_factor(clipped, hourly, shade, now, BXL, export_limit_kw=5.0)[0] == 1.0
+    # yesterday's quarters and the quarter still running do not count
+    assert intraday_factor(quarters(local(2026, 6, 14, 9), 3, 0.2), hourly, shade, now, BXL)[0] == 1.0
+    assert intraday_factor(quarters(local(2026, 6, 15, 12), 0.25, 0.0), hourly, shade, now, BXL)[0] == 1.0
+
+
+def test_the_correction_is_on_top_of_the_learned_shade():
+    shade = ShadeModel()
+    for h in range(8, 20):
+        for _ in range(40):
+            shade.learn(6, h, 0.5, 1.0)                              # trees: half of the forecast, always
+    fc = PvForecast(june_day(), shade, BXL)
+    f = fc.observe(quarters(local(2026, 6, 15, 9), 3, 1.0), local(2026, 6, 15, 12))     # as the shade predicts
+    assert f == pytest.approx(1.0, abs=0.03)
 
 
 def test_forecast_archive_keeps_future_hours_and_prunes():

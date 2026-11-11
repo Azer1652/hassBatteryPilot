@@ -76,6 +76,19 @@ class World:
     def forecast(self, d: date) -> dict[datetime, float]:
         return hourly_from_daily(d, self.clear_kwh(d) * self.cloud(d), LAT, LON, TZ)
 
+    def actual(self, d: date, error: bool) -> dict[datetime, float]:
+        """What the weather really gave (before shade). Without `error` the forecast was right about
+        the day. With it the day is off (about a third either way), and on one day in four the
+        afternoon differs from the morning."""
+        fc = self.forecast(d)
+        if not error:
+            return fc
+        rnd = random.Random(self.seed * 104729 + d.toordinal())
+        cloud = self.cloud(d)
+        am = min(max(cloud * math.exp(rnd.gauss(0, 0.35)), 0.03), 1.0)
+        pm = min(max(cloud * math.exp(rnd.gauss(0, 0.35)), 0.03), 1.0) if rnd.random() < 0.25 else am
+        return {h: v * (am if h.astimezone(TZ).hour < 13 else pm) / cloud for h, v in fc.items()}
+
     def load_kw(self, t_local: datetime) -> float:
         h = t_local.hour + t_local.minute / 60
         kw = 0.38 + (0.15 if t_local.month in (11, 12, 1, 2) else 0)
@@ -130,10 +143,13 @@ class World:
 
 def run(start: date, days: int, opts: Options | None = None, seed: int = 1, price_scale: float = 1.0,
         replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7, block_negative: bool = False,
-        peak_shave: bool = False, solar_hold: bool = False) -> dict:
+        peak_shave: bool = False, solar_hold: bool = False, forecast_error: bool = False,
+        nowcast: bool = True) -> dict:
     """`warmup_days` before `start` are simulated for learning only (like a first install's history).
     `block_negative`: as with the *block negative export* switch on.
-    `peak_shave`: the inverter has a peak-shaving switch. `solar_hold`: a feed-in priority switch."""
+    `peak_shave`: the inverter has a peak-shaving switch. `solar_hold`: a feed-in priority switch.
+    `forecast_error`: the solar forecast is wrong about the day (`World.actual`).
+    `nowcast`: the plan corrects the forecast with the solar measured so far that day, as the app does."""
     o = opts or Options()
     w = World(seed, price_scale)
     shade, load = ShadeModel(), LoadProfile()
@@ -143,12 +159,12 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         d = start + timedelta(days=i)
         if i < 0:
             fc = w.forecast(d)
-            recs = w.day_records(d, fc)
+            recs = w.day_records(d, w.actual(d, forecast_error))
             load.learn_records(recs, TZ)
             continue
         fc = {**w.forecast(d), **w.forecast(d + timedelta(days=1))}
         prices = w.prices(d) + w.prices(d + timedelta(days=1))
-        recs = w.day_records(d, fc)
+        recs = w.day_records(d, w.actual(d, forecast_error))
         key = d.strftime("%Y-%m")
         m = months.setdefault(key, {"days": 0, "pv": 0.0, "pv_fc": 0.0, "load": 0.0, "market": [],
                                     **{k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0,
@@ -158,12 +174,14 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
                                     "same": {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "dyn_c": 0.0}})
         today = [p.eur_mwh for p in prices if p.start.astimezone(TZ).date() == d]
         avg = sum(today) / len(today)
-        pv_fc = PvForecast(fc, shade, TZ).kwh
+        pvf = PvForecast(fc, shade, TZ)
+        pv_fc = pvf.kwh
         for kind in ("fixed", "dynamic"):
             res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h,
                              month_peak_kw=m[kind]["peak_kw"],
                              block_negative=block_negative, peak_shave=peak_shave,
-                             solar_hold=solar_hold)
+                             solar_hold=solar_hold,
+                             on_replan=pvf.observe if nowcast else None)
             soc[kind] = res["soc_end"]
             if kind == "fixed":
                 dyn = tariff("dynamic", o)
@@ -245,10 +263,12 @@ def main():
     ap.add_argument("--block-negative", action="store_true", help="block export at negative sell prices")
     ap.add_argument("--peak-shave", action="store_true", help="the inverter has a peak-shaving switch")
     ap.add_argument("--solar-hold", action="store_true", help="the inverter has a feed-in priority switch")
+    ap.add_argument("--forecast-error", action="store_true", help="the solar forecast is wrong about the day")
+    ap.add_argument("--no-nowcast", action="store_true", help="do not correct the forecast during the day")
     a = ap.parse_args()
     res = run(date.fromisoformat(a.start), a.days, Options(winter_mode=a.winter_mode), seed=a.seed,
               price_scale=a.price_scale, block_negative=a.block_negative, peak_shave=a.peak_shave,
-              solar_hold=a.solar_hold)
+              solar_hold=a.solar_hold, forecast_error=a.forecast_error, nowcast=not a.no_nowcast)
     print(table(res))
 
 
