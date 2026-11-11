@@ -39,6 +39,12 @@ NOW = datetime.combine(TODAY, time(23, 0), TZ)
 LIVE_DAYS = 3                      # days the real app runs before NOW (the planned-vs-actual history)
 
 
+def version() -> str:
+    """The app version in config.yaml, so the demo header never lags behind."""
+    with open(os.path.join(HERE, "..", "battery_pilot", "config.yaml"), encoding="utf-8") as f:
+        return next(line.split('"')[1] for line in f if line.startswith("version:"))
+
+
 def history(days: int, o: Options) -> dict:
     """The synthetic year up to the days the app runs itself, replayed per contract (a few minutes for a year)."""
     print(f"Replaying {days} synthetic days for the history...", flush=True)
@@ -81,7 +87,7 @@ async def main(days: int, port: int, seconds: float | None):
                   peak_shaving=True)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
-    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.3.1 · demo data")
+    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version=f"{version()} · demo data")
     await app.setup()
     fill(app, res)
     print(f"Running the app for {LIVE_DAYS} days...", flush=True)
