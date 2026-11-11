@@ -7,6 +7,10 @@ sidebar.
 
 ![The Battery Pilot page: the 36-hour plan of a winter day, the battery kept for the evening peak by peak shaving](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/plan.png)
 
+The page has tabs under the figures at the top: *Plan*, *Planned vs actual*, *Fixed or
+dynamic*, *Solar*, *Peaks*, *Log* (inverter commands and events) and *Settings*. It opens
+on the tab you used last.
+
 *Demo data. Each bar is one hour or quarter-hour: its height is the price you pay per kWh
 (left axis), its colour what the battery does (blue: grid charge). Green: the battery level
 (right axis); the circle is the night target. Tap or hover over the chart for the details.*
@@ -433,7 +437,7 @@ again at midday.
 
 ### Export and import the settings
 
-The card *Settings: export and import* at the bottom of the Battery Pilot page keeps the
+The *Settings* tab of the Battery Pilot page keeps the
 settings above as a file, and puts a file back.
 
 - **Export settings** downloads `battery-pilot-settings-<date>.json` and shows the same

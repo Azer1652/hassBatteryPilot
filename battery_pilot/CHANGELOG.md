@@ -2,10 +2,13 @@
 
 ## 2.11.0
 
-- **Export and import the settings.** A new card at the bottom of the page: *Export settings*
+- **Export and import the settings.** A new *Settings* tab on the page: *Export settings*
   keeps the settings of the Configuration tab as a file (or as text to copy). An import first
   lists what would change; *Save these settings* saves them, and they are used after you restart
   the app. Settings missing from the file keep their value. What the app learned is not in the file.
+- **Tabs.** The page shows one part at a time: *Plan*, *Planned vs actual*, *Fixed or dynamic*,
+  *Solar*, *Peaks*, *Log* and *Settings*. The figures at the top stay in view on every tab, and the
+  page opens on the tab you used last.
 - The app now asks for access to the Supervisor API (`hassio_api`), to save imported settings.
 
 ## 2.10.1

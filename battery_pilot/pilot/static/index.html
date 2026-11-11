@@ -61,6 +61,11 @@
   .fill button:disabled { opacity: 0.5; cursor: default; }
   .fill p { margin: 0; flex: 1 1 240px; }
   .nav button:disabled { opacity: 0.35; cursor: default; }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; margin: 0 0 14px; padding-bottom: 2px; scrollbar-width: thin; }
+  .tabs button { flex: 0 0 auto; font: inherit; color: var(--muted); background: var(--card); border: 1px solid var(--line);
+                 border-radius: 999px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-color: var(--text); font-weight: 600; }
+  [data-tab][hidden] { display: none; }
   #settext { width: 100%; box-sizing: border-box; margin: 10px 0 0; padding: 8px; font: 12px/1.4 ui-monospace, monospace;
              color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
   .nav span { min-width: 120px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -108,7 +113,9 @@
     <div class="kpis" id="kpis"></div>
   </div>
 
-  <div class="card">
+  <div class="tabs" id="tabs" role="tablist" aria-label="Sections"></div>
+
+  <div class="card" data-tab="plan">
     <h2>Plan for the next 36 hours</h2>
     <div class="legend">
       <span><i class="sw" style="background:var(--charge)"></i>grid charge</span>
@@ -131,7 +138,7 @@
     <p class="muted" id="effnote"></p>
   </div>
 
-  <div class="card" id="histcard">
+  <div class="card" id="histcard" data-tab="history">
     <div class="hhead">
       <h2>Planned vs actual</h2>
       <div class="nav">
@@ -163,7 +170,7 @@
     <div class="scroll"><table id="hdays" class="pick"></table></div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="compare">
     <h2>Fixed or dynamic? Your contract comparison</h2>
     <p class="muted">"Same usage" prices what you actually bought and sold on both contracts.
       "Best battery use" replays each day with the battery strategy that fits each contract (cheap-hour charging,
@@ -175,7 +182,7 @@
   </div>
 
   <div class="grid">
-    <div class="card">
+    <div class="card" data-tab="solar">
       <h2>Solar and tree shade</h2>
       <div class="kpis" id="solar"></div>
       <p class="muted" id="suntoday"></p>
@@ -184,19 +191,19 @@
         Tap or hover over a cell for its value.</p>
       <div class="hchart" id="shade"></div>
     </div>
-    <div class="card">
+    <div class="card" data-tab="peaks">
       <h2>Capacity peaks</h2>
       <div class="hchart" id="peaks"></div>
       <p class="muted" id="peaknote"></p>
     </div>
   </div>
 
-  <div class="grid">
+  <div class="grid" data-tab="log">
     <div class="card"><h2>Inverter commands</h2><ul class="log" id="cmds"></ul></div>
     <div class="card"><h2>Events</h2><ul class="log" id="events"></ul></div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="settings">
     <h2>Settings: export and import</h2>
     <p class="muted">Export keeps the settings of the app's Configuration tab as a file. Import puts a file back:
       you first see what would change, and nothing is used until you restart the app.</p>
@@ -1158,6 +1165,43 @@ async function refresh() {
 const _render = render;
 render = (s) => { last = s; _render(s); };
 window.addEventListener("resize", () => { if (last) _render(last); renderHistory(); });
+
+// ---------------------------------------------------------------- tabs: one card at a time
+const TABS = [["plan", "Plan"], ["history", "Planned vs actual"], ["compare", "Fixed or dynamic"], ["solar", "Solar"],
+              ["peaks", "Peaks"], ["log", "Log"], ["settings", "Settings"]];
+function showTab(name) {
+  const all = name === "all";                           // (#all: every card, for a full-page print or screenshot)
+  if (!all && !TABS.some(([k]) => k === name)) name = "plan";
+  document.querySelectorAll("[data-tab]").forEach((el) => { el.hidden = !all && el.dataset.tab !== name; });
+  document.querySelectorAll("#tabs button").forEach((b) => {
+    const on = b.dataset.show === name;
+    b.setAttribute("aria-selected", on);
+    b.tabIndex = on || (all && b.dataset.show === "plan") ? 0 : -1;
+  });
+  try { if (!all) localStorage.setItem("bp-tab", name); } catch (e) { /* private window: not remembered */ }
+  if (last) _render(last);                              // charts take their width from the card now shown
+  renderHistory();
+}
+$("tabs").innerHTML = TABS.map(([k, label]) =>
+  `<button type="button" role="tab" data-show="${k}" aria-selected="false">${label}</button>`).join("");
+$("tabs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button");
+  if (b) showTab(b.dataset.show);
+});
+$("tabs").addEventListener("keydown", (ev) => {
+  const step = {ArrowRight: 1, ArrowLeft: -1}[ev.key];
+  if (!step) return;
+  const btns = [...document.querySelectorAll("#tabs button")], i = btns.indexOf(document.activeElement);
+  const next = btns[(i + step + btns.length) % btns.length];
+  showTab(next.dataset.show); next.focus(); next.scrollIntoView({block: "nearest", inline: "nearest"});
+  ev.preventDefault();
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+{
+  let start = location.hash.slice(1);
+  try { start = start || localStorage.getItem("bp-tab"); } catch (e) { /* no storage */ }
+  showTab(start || "plan");
+}
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && Date.now() - lastOk > 30000) refresh();
 });

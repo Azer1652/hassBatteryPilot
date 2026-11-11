@@ -122,7 +122,10 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   step `peak_shave`; `controller.decide` switches to peak shaving at the level (leaves it `BUFFER_BAND`
   above) and charges back to it from `BUFFER_GAP` below. That refill is not in the planner or the replay.
   `App.setup` zeroes the option when the peak-shaving switch was not found.
-- Settings export/import (`settings.py`, pure; the page's last card): `GET /api/settings` gives the saved
+- The page (`static/index.html`, one file, no build) shows one `[data-tab]` block at a time (`showTab`, tab
+  kept in `localStorage`, `#<tab>` in the URL selects one, `#all` shows every card: `tools/screenshots.cjs`
+  uses that). Charts take their width from the visible card, so `showTab` renders again.
+- Settings export/import (`settings.py`, pure; the page's *Settings* tab): `GET /api/settings` gives the saved
   options file (`App.options_path`, `saved_options()`); `POST /api/settings/check` and `POST /api/settings`
   run `settings.prepare` (known keys only, types as the Supervisor wants them, merged onto the saved options,
   validated with `config.from_dict`, empty entity overrides left out). Saving is `App.save_options` →
