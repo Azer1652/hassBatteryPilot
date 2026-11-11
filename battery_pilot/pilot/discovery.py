@@ -33,7 +33,9 @@ ENTITIES = {
     "forecast_power_now": ("sensor", [r"^power_production_now$", r"power_production_now"], False, False),
     "forecast_today": ("sensor", [r"^energy_production_today$"], False, False),
     "forecast_tomorrow": ("sensor", [r"^energy_production_tomorrow$"], False, False),
-    "price_sensor": ("sensor", [r"current_electricity_market_price", r"^nordpool", r"electricity_price"], False, False),
+    # ENTSO-e keeps its price list on the "average" sensor (the "current" one had it in old versions)
+    "price_sensor": ("sensor", [r"average_electricity_price$", r"current_electricity_market_price", r"^nordpool",
+                                r"electricity_price"], False, False),
     # never guessed: only the entity named in the settings
     "car_charger_power": ("sensor", [], False, True),
 }

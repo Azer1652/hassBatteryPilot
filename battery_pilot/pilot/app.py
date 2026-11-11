@@ -88,6 +88,7 @@ class App:
         self.efficiency = EfficiencyMeter()
         self.load = LoadProfile()
         self.comparison = Comparison()
+        self._no_prices_told = False
         self.price_slots: list[P.PriceSlot] = []
         self.forecast_archive: dict[str, float] = {}
         self.records: list[QuarterRecord] = []
@@ -674,7 +675,18 @@ class App:
         now = self.clock()
         if "price_sensor" in self.ent_ids:
             try:
-                new = P.parse_state(await self.ha.state(self.ent_ids["price_sensor"]), self.tz)
+                eid = self.ent_ids["price_sensor"]
+                new = P.parse_state(await self.ha.state(eid), self.tz)
+                if not new and P.ENTSOE_CURRENT in eid:      # ENTSO-e: the list is on its average sensor
+                    new = P.parse_state(await self.ha.state(eid.replace(P.ENTSOE_CURRENT, P.ENTSOE_LIST)), self.tz)
+                if new:
+                    self._no_prices_told = False
+                elif not self._no_prices_told:
+                    self._no_prices_told = True
+                    self.event(f"{eid} has no price list in its attributes (prices, prices_today/prices_tomorrow "
+                               "or raw_today/raw_tomorrow): no dynamic prices and no contract comparison. Set "
+                               "price_sensor to the sensor that has the list; for ENTSO-e that is "
+                               "'Average electricity price'.", logging.WARNING)
                 self.price_slots = P.merge(self.price_slots, new, now - timedelta(days=RECORD_DAYS))
             except Exception as e:  # noqa: BLE001
                 self.event(f"Reading prices failed: {e}", logging.WARNING)

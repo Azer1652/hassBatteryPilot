@@ -5,7 +5,8 @@ contract formulas use), sorted by start time, 15 or 60 minutes long.
 
 Supported attribute layouts:
 * ENTSO-e (HACS, JaccoR/hass-entso-e): `prices` or `prices_today` + `prices_tomorrow`,
-  items `{"time": ..., "price": ...}`, usually EUR/kWh.
+  items `{"time": ..., "price": ...}`, usually EUR/kWh. They are attributes of its
+  "Average electricity price" sensor, not of "Current electricity market price".
 * Nord Pool (HACS, custom-components/nordpool): `raw_today` + `raw_tomorrow`,
   items `{"start": ..., "end": ..., "value": ...}`.
 * Generic lists in `forecast` / `data` with a start key and a price key.
@@ -21,6 +22,8 @@ END_KEYS = ("end", "end_time", "endsAt", "till", "to")
 PRICE_KEYS = ("price", "value", "price_per_kwh", "total", "electricity_price")
 LIST_ATTRS = (("prices",), ("raw_today", "raw_tomorrow"), ("prices_today", "prices_tomorrow"),
               ("forecast",), ("data",))
+ENTSOE_CURRENT = "current_electricity_market_price"   # found by older versions of this app: no list on it
+ENTSOE_LIST = "average_electricity_price"
 
 
 @dataclass(frozen=True)

@@ -37,7 +37,8 @@ build + import smoke test.
 
 Data flow: `app.App.step()` every 10 s → `tick()` reads entities → `meter.QuarterMeter` integrates
 power into quarter-hour `QuarterRecord`s → peaks, shadow bill, stored records. Every 5 min
-`refresh()` reads prices (`prices.parse_state`) and the solar forecast (websocket
+`refresh()` reads prices (`prices.parse_state`; ENTSO-e has the list on its *average* sensor, so a
+`current_electricity_market_price` without a list is followed to it, and a sensor without a list is logged once) and the solar forecast (websocket
 `energy/solar_forecast`, else daily totals spread by `solar.hourly_from_daily`), then `replan()`.
 `controller.decide()` turns the current plan step + live readings into one `solis.Solis` command.
 Once a night `nightly()` learns shade and load from yesterday's records and replays yesterday.
@@ -141,7 +142,7 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   higher). `load.LoadProfile`: 7 × 24 kW EMA.
 - `migrate.py`: takes over from Battery Playbook 1.x (turns its automations off, imports
   `sensor.cw_shadow_bill`, removes `battery_playbook_*.yaml` packages after a config check).
-- `helpers.py`: creates the two `input_boolean` helpers over the websocket (no YAML).
+- `helpers.py`: creates the three `input_boolean` helpers over the websocket (no YAML).
 - `history.py`: planned vs actual. `App._log_plan()` keeps per day (`day_logs`) the day-ahead plan
   (the replan at the end of `nightly()`) and the plan at the start of each clock hour; `nightly()`
   closes yesterday into `/data/history/YYYY-MM-DD.json` (60 days) with the measured quarters

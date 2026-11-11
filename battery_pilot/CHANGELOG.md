@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.10.1
+
+- **ENTSO-e prices were not read.** The ENTSO-e integration keeps its price list on the
+  *Average electricity price* sensor; Battery Pilot picked *Current electricity market price*,
+  which has none. The result: no dynamic prices and a comparison that stayed on "collecting
+  data", without a word in the log. The right sensor is now found, a setting that still names
+  the other one is followed to it, and the log warns when a price sensor has no price list.
+
 ## 2.10.0
 
 **A buffer in the battery for short peaks.**

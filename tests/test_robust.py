@@ -250,3 +250,43 @@ async def test_the_monthly_verdict_includes_the_best_battery_use(tmpdata):
     await app.daily_alerts()
     text = alerts(fake, "Contract check 2026-02")[0][2]["message"]
     assert "best battery use for each (20 days)" in text
+
+
+# ---------------------------------------------------------------- the ENTSO-e price list
+def _entsoe(fake, day):
+    """ENTSO-e as it is: the list is an attribute of the average sensor, the current one has none."""
+    from fake_ha import st
+    prices = [{"time": str(day + timedelta(hours=h)), "price": 0.1} for h in range(48)]
+    fake.s["sensor.current_electricity_market_price"] = st(0.1, "EUR/kWh")
+    fake.s["sensor.average_electricity_price"] = st(0.1, "EUR/kWh", prices=prices)
+
+
+async def test_the_entsoe_sensor_with_the_price_list_is_the_one_found(tmpdata):
+    """The app took 'current electricity market price', which has no list: no dynamic prices and a
+    comparison that stayed on 'collecting data', with nothing in the log."""
+    fake = FakeHA(utc(2026, 11, 11, 12, 0))
+    _entsoe(fake, datetime(2026, 11, 11, tzinfo=TZ))
+    app = await started(tmpdata, fake)
+    assert app.ent_ids["price_sensor"] == "sensor.average_electricity_price"
+    await app.refresh()
+    assert len(app.price_slots) == 48 and app.price_slots[0].eur_mwh == 100
+
+
+async def test_a_setting_that_names_the_entsoe_current_sensor_is_followed_to_the_list(tmpdata):
+    fake = FakeHA(utc(2026, 11, 11, 12, 0))
+    _entsoe(fake, datetime(2026, 11, 11, tzinfo=TZ))
+    app = await started(tmpdata, fake, entities={"price_sensor": "sensor.current_electricity_market_price"})
+    await app.refresh()
+    assert len(app.price_slots) == 48
+    assert not any("no price list" in e["text"] for e in app.events)
+
+
+async def test_a_price_sensor_without_a_price_list_is_reported_once(tmpdata):
+    from fake_ha import st
+    fake = FakeHA(utc(2026, 11, 11, 12, 0))
+    fake.s["sensor.nordpool_be"] = st(0.1, "EUR/kWh")
+    app = await started(tmpdata, fake)
+    await app.refresh()
+    await app.refresh()
+    assert app.price_slots == []
+    assert sum("no price list" in e["text"] for e in app.events) == 1
