@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.9.0"
+version: "2.10.0"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -42,6 +42,7 @@ options:
   battery_capacity_kwh: 16
   battery_min_soc: 10
   battery_reserve_soc: 35
+  peak_buffer_pct: 0
   battery_voltage: 51.2
   max_charge_current_a: 50
   max_discharge_current_a: 90
@@ -78,6 +79,7 @@ schema:
   battery_capacity_kwh: float(1,200)
   battery_min_soc: int(0,50)
   battery_reserve_soc: int(0,95)
+  peak_buffer_pct: int(0,50)
   battery_voltage: float(12,1000)
   max_charge_current_a: int(5,500)
   max_discharge_current_a: int(5,500)

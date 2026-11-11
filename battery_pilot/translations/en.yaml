@@ -77,6 +77,9 @@ configuration:
   battery_reserve_soc:
     name: "Battery reserve for export (%)"
     description: "Battery Pilot does not export battery energy below this SOC, except at a price so high that buying it back later still pays; the house can still use the battery down to the minimum."
+  peak_buffer_pct:
+    name: "Peak buffer (% above the minimum)"
+    description: "Kept in the battery for short peaks. At or below minimum + buffer the battery no longer feeds the house; it only gives what the house asks above the import limit (peak shaving), and it is charged back to that level under the import limit after a peak. Needs the inverter's peak-shaving switch. 0: off."
   battery_voltage:
     name: "Battery nominal voltage (V)"
     description: "Used to turn amps into kW when there is no voltage sensor."

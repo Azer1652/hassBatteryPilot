@@ -371,6 +371,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | --- | --- | --- | --- |
 | Battery capacity | `battery_capacity_kwh` | 16 kWh | Energy between 0 and 100 % SOC. |
 | Battery minimum SOC | `battery_min_soc` | 10 % | The inverter's own floor; never planned below. |
+| Peak buffer | `peak_buffer_pct` | 0 % (off) | SOC points above the minimum kept for short peaks. Self-use stops at minimum + buffer; at or below it the inverter is in peak shaving, so the battery only gives what the house asks above the import limit. When a peak has taken 3 points or more, the battery is charged back to that level from the grid, under the import limit. Solar surplus fills it too. Needs the inverter's peak-shaving switch; without it the setting is ignored (a warning in the log). The plan and the comparison count with it. 10 is a good value: on a 16 kWh battery that is 1.6 kWh, about half an hour of a 5 kW load at a 2.3 kW limit. |
 | Battery reserve for export | `battery_reserve_soc` | 35 % | Battery energy is not exported below this, except at a price so high that buying it back later costs less; the house can still use the battery down to the minimum. |
 | Battery nominal voltage | `battery_voltage` | 51.2 V | Amps ↔ kW when there is no voltage sensor (or it reads below 40 V). |
 | Maximum charge current | `max_charge_current_a` | 50 A | Highest charge current Battery Pilot sets. |

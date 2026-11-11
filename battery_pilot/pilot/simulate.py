@@ -1,7 +1,8 @@
 """Energy balance of the house, the battery and the grid for one time step.
 
 `step()` behaves like the inverter does under each command:
-* self_use  - the battery covers the house deficit and stores solar surplus;
+* self_use  - the battery covers the house deficit and stores solar surplus; with a
+              peak buffer (`Battery.buffer_soc`) only down to it, and below it as peak_shave;
 * charge    - charges from grid (and solar) at the current that keeps grid
               import at the import limit, until the target SOC;
 * discharge - discharges at full power (house first, the rest is exported)
@@ -36,12 +37,19 @@ class Battery:
     import_limit_kw: float = 2.3
     export_limit_kw: float = 5.0
     capacity_c_per_kw_month: float = 52.37 / 12 * 100
+    buffer_soc: float = 0.0     # self-use stops here; below it only what is above the import limit (0: the minimum)
 
     @classmethod
     def from_options(cls, o: Options) -> Battery:
         return cls(o.battery_capacity_kwh, o.battery_min_soc, o.battery_reserve_soc, o.max_charge_kw,
                    o.max_discharge_kw, o.charge_efficiency, o.discharge_efficiency, o.wear_cost_c_kwh,
-                   o.import_limit_kw, o.export_limit_kw, o.capacity_tariff_eur_kw_year / 12 * 100)
+                   o.import_limit_kw, o.export_limit_kw, o.capacity_tariff_eur_kw_year / 12 * 100,
+                   o.battery_min_soc + o.peak_buffer_pct if o.peak_buffer_pct > 0 else 0.0)
+
+    @property
+    def self_floor(self) -> float:
+        """The SOC self-use goes down to: the peak buffer when there is one, else the minimum."""
+        return max(self.min_soc, self.buffer_soc)
 
     def kwh(self, soc_points: float) -> float:
         return soc_points * self.capacity_kwh / 100
@@ -100,7 +108,10 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
         pass                                      # the surplus is exported, the battery waits
     else:  # self_use (also charge/discharge that reached their target, or charging paused)
         if net > 0:
-            discharge_dc = min(net / b.eta_d, avail, b.max_discharge_kw * hours)
+            # down to the peak buffer the battery covers the house; below it only what is above the limit
+            free = b.kwh(max(soc - b.self_floor, 0))
+            shave = max(net - limit * hours, 0.0) / b.eta_d if b.self_floor > b.min_soc else 0.0
+            discharge_dc = min(max(min(net / b.eta_d, free), shave), avail, b.max_discharge_kw * hours)
         else:
             charge_dc = min(-net * b.eta_c, room, b.max_charge_kw * hours)
 

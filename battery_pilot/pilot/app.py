@@ -289,6 +289,10 @@ class App:
             low = ((states.get(self.ent_ids["peak_shaving_soc"]) or {}).get("attributes") or {}).get("min")
             if isinstance(low, (int, float)):
                 self._shave_soc = max(self._shave_soc, float(low))
+        if self.o.peak_buffer_pct > 0 and not self.can_peak_shave:
+            self.event("The peak buffer needs the inverter's peak-shaving switch, which was not found: "
+                       "it is off.", logging.WARNING)
+            self.o.peak_buffer_pct = 0
         saved = self._load_inverter()
         if "curtailed_by_us" in saved:
             self.curtailed_by_us = bool(saved["curtailed_by_us"])

@@ -115,6 +115,12 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   replaces the plan's step by `fill_step` (charge to 100 % in the current clock hour; once full
   `peak_shave` when the inverter has it, charging again below `FILL_AGAIN`). The plan is not changed.
   `App._fill` turns the helper off when a car session ends or after `FILL_MAX_H` (`fill_since` is persisted).
+- The peak buffer (`peak_buffer_pct`, off by default; `Battery.buffer_soc`/`self_floor`): self-use stops at
+  minimum + buffer and below it the battery gives only what is above the import limit. `simulate.step`
+  does that in self-use; `optimize` (`self_move`, only with `peak_shave=True`) the same and labels such a
+  step `peak_shave`; `controller.decide` switches to peak shaving at the level (leaves it `BUFFER_BAND`
+  above) and charges back to it from `BUFFER_GAP` below. That refill is not in the planner or the replay.
+  `App.setup` zeroes the option when the peak-shaving switch was not found.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices

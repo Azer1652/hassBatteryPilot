@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.10.0
+
+**A buffer in the battery for short peaks.**
+
+- **New setting** *Peak buffer* (`peak_buffer_pct`, off by default): SOC points above the
+  battery minimum that the house may not use up. 10 is a good value.
+- **How it works.** Self-use stops at minimum + buffer. At or below that level the inverter
+  goes to peak shaving: the grid feeds the house up to the import limit and the battery
+  gives only what is above it. Before, a battery at its minimum left a kettle-and-hob peak
+  to the grid, which sets the capacity tariff.
+- **Refill.** When a peak has taken 3 points or more out of the buffer, it is charged back
+  from the grid with import kept at the import limit. Solar surplus fills it as well.
+- **Needs the inverter's peak-shaving switch.** Without it the setting is ignored and the
+  log says so.
+- The plan, the nightly replay and the comparison count with the buffer: the plan chart
+  shows peak shaving where the battery sits on it. The refill from the grid is not in the
+  plan or the replay.
+- The buffer is taken out of daily use: with 10 %, that share of the battery is no longer
+  cycled.
+
 ## 2.9.0
 
 **A button to fill the battery before the car charges.**

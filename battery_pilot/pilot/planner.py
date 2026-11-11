@@ -277,6 +277,18 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
     low = [-low_c_kwh * max(s - smin, 0) * e for s in levels] if peak_shave else None
     choice: list[list[int | str | None]] = [None] * T  # type: ignore[list-item]   # None: self-use
     shave = [-_shave_kwh(b, sl) / e if peak_shave else 0.0 for sl in slots]   # SOC points, <= 0
+    # The peak buffer: self-use stops there, below it the battery only gives what is above the import limit.
+    sbuf = int(math.ceil(b.self_floor)) if peak_shave else smin
+
+    def self_move(t: int, s: int, lo: int, hi: int) -> tuple[int, float]:
+        """(whole SOC points, exact change) of self-use in slot t from level s."""
+        lo_self = max(min(sbuf - s, 0), lo)
+        ds, x = min(max(whole[t], lo_self), hi), min(max(exact[t], lo_self), hi)
+        if sbuf > smin and exact[t] < -1e-9:
+            y = max(shave[t], lo)
+            if y < x - 1e-9:
+                ds, x = int(round(y)), y
+        return ds, x
     costs: list[dict] = [None] * T  # type: ignore[list-item]
 
     for t in range(T - 1, -1, -1):
@@ -316,8 +328,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         for s in levels:
             lo = max(min(smin - s, 0), -maxd)
             hi = min(100 - s, maxc)
-            ds = min(max(whole[t], lo), hi)           # SOC points self-use moves in this slot
-            x = min(max(exact[t], lo), hi)            # the change its flows are counted for
+            ds, x = self_move(t, s, lo, hi)   # SOC points self-use moves in this slot; the change its flows are counted for
             if x not in self_cost:
                 self_cost[x] = _flow(b, sl, x * e, curtail_negative)[0]
             below = math.floor(x)
@@ -362,11 +373,12 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         d = choice[t][s]
         lo = max(min(smin - s, 0), -int(b.max_discharge_kw * sl.hours / e + 1e-9))
         hi = min(100 - s, int(b.max_charge_kw * sl.hours / e + 1e-9))
-        ds = min(max(whole[t], lo), hi)
+        ds, x = self_move(t, s, lo, hi)
         if d is None:
-            action, d = "self_use", ds
-            cost, imp, exp, cap = _flow(b, sl, min(max(exact[t], lo), hi) * e, curtail_negative)
-        elif d == SHAVE and min(max(exact[t], lo), hi) > 1e-9:
+            # at or below the peak buffer the inverter is in peak shaving, not self-use
+            action, d = (SHAVE if s <= sbuf and sbuf > smin and exact[t] < -1e-9 else "self_use"), ds
+            cost, imp, exp, cap = _flow(b, sl, x * e, curtail_negative)
+        elif d == SHAVE and x > 1e-9:
             action, d = HOLD, 0
             cost, imp, exp, cap = _flow(b, sl, 0.0, curtail_negative)
         elif d == SHAVE:

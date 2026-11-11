@@ -21,6 +21,9 @@ Pure function, so every rule can be tested without Home Assistant:
 * the fill switch - while it is on and the car does not charge: grid charge to 100 % under
               the import limit, then keep the battery (peak shaving when the inverter has it,
               else the hold at the minimum current); it charges again below FILL_AGAIN;
+* the peak buffer - with `peak_buffer_pct` and the peak-shaving switch: where the plan says
+              self-use and the SOC is at or below minimum + buffer, peak shaving; BUFFER_GAP
+              below it, grid charge back to it under the import limit;
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -47,6 +50,8 @@ START_A = 15        # start charging only with some headroom (old playbook)
 ACTIVE = ("charge", "discharge", "peak_shave", "solar_hold", "failed")
 HOLD_SURPLUS_KW = 0.3   # solar hold starts with this much surplus
 HOLD_DWELL_S = 120      # and is not started or ended within this time of the last command
+BUFFER_GAP = 3.0        # the peak buffer is charged again when it is this far below its level
+BUFFER_BAND = 2.0       # and peak shaving at the buffer ends this far above it
 FILL_AGAIN = 95.0       # the fill switch: a full battery is charged again below this SOC
 
 
@@ -162,6 +167,31 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         if abs(want - amps_now) >= 10:
             return Decision("current", want, "pace the export")
         return Decision("none", reason="discharging")
+
+    # The peak buffer: at or below it the battery is kept for what the house asks above the import
+    # limit (peak shaving); used by a peak, it is charged again under the import limit.
+    if can_shave and o.peak_buffer_pct > 0 and not (step.action == "solar_hold" and r.pv_kw >= r.load_kw):
+        level = o.battery_min_soc + o.peak_buffer_pct
+        if r.soc <= level - BUFFER_GAP or (mode in ("charge", "failed") and r.soc < level):
+            refill = Step(r.t.replace(minute=0, second=0, microsecond=0), 1.0, "charge", r.soc, float(level),
+                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            follow = follow_amps(r, o)
+            want = min(follow, paced_amps(refill, r, o, up=True))
+            if mode == "charge":
+                if follow < MIN_A or r.projection_kw > o.import_limit_kw + 0.1:
+                    return Decision("peak_shave", reason="peak buffer: the house needs the room under the limit")
+                if slot_hour != hour:
+                    return Decision("charge", want, "renew the hourly charge slot")
+                if abs(want - amps_now) >= 10:
+                    return Decision("current", want, "follow house load")
+                return Decision("none", reason="charging the peak buffer")
+            if follow >= START_A and r.projection_kw < o.import_limit_kw - 0.2:
+                return Decision("charge", want, f"peak buffer: charge back to {level} %")
+        if r.soc <= level or (mode == "peak_shave" and r.soc < level + BUFFER_BAND):
+            if mode != "peak_shave":
+                return Decision("peak_shave", reason=f"peak buffer: below {level} % the battery only covers "
+                                                     "what is above the import limit")
+            return Decision("none", reason="peak buffer kept (peak shaving)")
 
     if step.action == "peak_shave":
         if mode != "peak_shave":

@@ -61,6 +61,7 @@ class Options:
     battery_capacity_kwh: float = 16.0
     battery_min_soc: int = 10
     battery_reserve_soc: int = 35
+    peak_buffer_pct: int = 0          # SOC points above the minimum kept for peaks (0: off)
     battery_voltage: float = 51.2
     max_charge_current_a: int = 50
     max_discharge_current_a: int = 90
@@ -117,6 +118,8 @@ class Options:
             raise ConfigError("night_start and night_end are the same: the night window would be empty.")
         if not self.battery_min_soc <= self.battery_reserve_soc <= 100:
             raise ConfigError("battery_reserve_soc must be between battery_min_soc and 100.")
+        if not 0 <= self.peak_buffer_pct or self.battery_min_soc + self.peak_buffer_pct > 90:
+            raise ConfigError("peak_buffer_pct: the battery minimum plus the peak buffer must stay at or below 90 %.")
         if self.winter_mode not in ("full_day", "peaks_only"):
             raise ConfigError("winter_mode must be full_day or peaks_only.")
         if self.slot_entities not in ("time_charging", "grid_time_of_use"):

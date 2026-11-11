@@ -359,3 +359,95 @@ async def test_the_page_button_turns_the_helper_on_and_off(tmp_path, aiohttp_cli
     assert (await outside.post("/api/car_fill", json={"on": True})).status == 403
     fake.fail = lambda *a: True
     assert (await client.post("/api/car_fill", json={"on": True})).status == 502
+
+
+# ---------------------------------------------------------------- the peak buffer
+def test_self_use_stops_at_the_peak_buffer_and_only_peaks_go_below_it():
+    from pilot.simulate import Battery
+    from pilot.simulate import step as sim
+    o = Options(battery_min_soc=20, peak_buffer_pct=10)
+    b = Battery.from_options(o)
+    assert b.self_floor == 30 and Battery.from_options(Options()).self_floor == Options().battery_min_soc
+    r = sim(b, 32, "self_use", 0, 1.0, 0.0, 1.0)                 # 1 kW for an hour: only the 2 points above 30
+    assert r.soc == pytest.approx(30) and r.import_kwh > 0.6
+    r = sim(b, 30, "self_use", 0, 0.5, 0.0, 0.25)                # under the limit at the buffer: all from the grid
+    assert r.soc == 30 and r.import_kwh == pytest.approx(0.5)
+    r = sim(b, 30, "self_use", 0, 1.25, 0.0, 0.25)               # 5 kW for a quarter: the grid at its limit
+    assert r.import_kwh == pytest.approx(o.import_limit_kw * 0.25) and 20 < r.soc < 30
+    r = sim(b, 20, "self_use", 0, 1.25, 0.0, 0.25)               # nothing left: the grid takes it
+    assert r.soc == 20 and r.import_kwh == pytest.approx(1.25)
+    assert sim(b, 25, "self_use", 0, 0.0, 1.0, 1.0).soc > 25     # solar fills it again
+
+
+def test_the_controller_keeps_and_refills_the_peak_buffer():
+    o = Options(battery_min_soc=20, peak_buffer_pct=10)
+    calm = dict(load=0.5)
+    assert decide(step("self_use"), rd(soc=31, **calm), o, "self_use", "", 0, True, can_shave=True).command == "none"
+    d = decide(step("self_use"), rd(soc=30, **calm), o, "self_use", "", 0, True, can_shave=True)
+    assert d.command == "peak_shave" and d.reason.startswith("peak buffer")
+    # kept until solar has lifted it clear of the level
+    assert decide(step("self_use"), rd(soc=31, **calm), o, "peak_shave", "", 0, True, can_shave=True).command == "none"
+    assert decide(step("self_use"), rd(soc=33, **calm), o, "peak_shave", "", 0, True, can_shave=True).command == "self_use"
+    # a peak took 3 points: charged back to the level, then kept again
+    d = decide(step("self_use"), rd(soc=27, **calm), o, "peak_shave", "", 0, True, can_shave=True)
+    assert d.command == "charge" and d.reason == "peak buffer: charge back to 30 %"
+    hour = T0.astimezone(TZ).strftime("%H:00:00")
+    assert decide(step("peak_shave"), rd(soc=29, **calm), o, "charge", hour, d.amps, True, can_shave=True).command == "none"
+    assert decide(step("self_use"), rd(soc=30, **calm), o, "charge", hour, d.amps, True, can_shave=True).command == "peak_shave"
+    # not while the house takes the whole limit
+    assert decide(step("self_use"), rd(soc=25, load=4.0), o, "peak_shave", "", 0, True, can_shave=True).command == "none"
+    assert decide(step("self_use"), rd(soc=25, load=4.0), o, "charge", hour, 20, True, can_shave=True).command == "peak_shave"
+    # without the switch or the setting: as before
+    assert decide(step("self_use"), rd(soc=25, **calm), o, "self_use", "", 0, True, can_shave=False).command == "none"
+    assert decide(step("self_use"), rd(soc=25, **calm), Options(), "self_use", "", 0, True, can_shave=True).command == "none"
+    # a planned charge or export is the plan's
+    assert decide(step("charge", 60), rd(soc=25, **calm), o, "self_use", "", 0, True, can_shave=True).reason.startswith("plan")
+
+
+def test_the_plan_stops_at_the_peak_buffer():
+    from pilot.planner import Slot, optimize
+    from pilot.simulate import Battery
+    b = Battery.from_options(Options(battery_min_soc=20, peak_buffer_pct=10))
+    slots = [Slot(T0 + timedelta(hours=i), 1.0, 0.6, 0.0, 30.0, 5.0, None, 5.0 if i == 6 else 0.0) for i in range(10)]
+    steps = optimize(b, slots, 40, peak_shave=True)
+    assert min(s.soc_end for s in steps[:6]) == 30               # the house stops at the buffer
+    assert steps[6].action == "peak_shave" and 20 <= steps[6].soc_end < 30    # the 5 kW quarter comes out of it
+    assert all(s.action == "peak_shave" for s in steps[7:])
+    plain = optimize(b, slots, 40, peak_shave=False)             # no switch: down to the minimum as before
+    assert min(s.soc_end for s in plain) == 20
+
+
+async def test_a_peak_at_the_buffer_stays_at_the_import_limit_and_is_charged_back(tmp_path):
+    peak = utc(2026, 1, 14, 20, 0)
+    load = lambda t: 5.0 if peak <= t < peak + timedelta(minutes=15) else 0.5     # noqa: E731
+    results = {}
+    for name, pct in (("buffer", 10), ("none", 0)):
+        fake = FakeHA(utc(2026, 1, 14, 16, 0), soc=23, load=load, peak_shaving=True)
+        fake.s[CONTROL]["state"] = "on"
+        app = App(Options(battery_min_soc=10, peak_buffer_pct=pct), fake, data_dir=str(tmp_path / name),
+                  clock=lambda fake=fake: fake.now)
+        assert await app.setup()
+        lowest = 100.0
+        while fake.now < utc(2026, 1, 14, 21, 30):
+            await app.step()
+            fake.advance(timedelta(seconds=30))
+            lowest = min(lowest, fake.soc)
+        results[name] = (max(r.kwh["import"] * 4 for r in app.records), lowest, fake.soc, app)
+    top, lowest, end, app = results["buffer"]
+    assert top <= Options().import_limit_kw + 0.15               # the peak came out of the buffer
+    assert 14 < lowest < 20 and end == pytest.approx(20, abs=1.5)    # used, and charged back
+    assert any(e["command"].startswith("peak") or "peak" in e["command"] for e in app.status()["inverter"]["log"])
+    assert results["none"][0] > 4.0 and results["none"][1] <= 11     # before: empty at the peak
+
+
+async def test_the_peak_buffer_is_off_without_the_peak_shaving_switch(tmp_path):
+    fake = FakeHA(utc(2026, 1, 14, 17, 0), soc=24, peak_shaving=False)
+    app = App(Options(peak_buffer_pct=10), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    assert app.o.peak_buffer_pct == 0 and any("peak buffer needs" in e["text"] for e in app.events)
+
+
+def test_the_peak_buffer_must_leave_room():
+    from pilot.config import ConfigError
+    with pytest.raises(ConfigError):
+        Options(battery_min_soc=50, peak_buffer_pct=45).validate()
