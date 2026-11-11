@@ -901,9 +901,10 @@ let render = function (s) {
     + kpi("house, per day", fmt(s.load.daily_kwh) + " kWh");
   shadeChart($("shade"), s.solar.shade, s.solar.shade_kwh);
   peaksChart($("peaks"), s.peaks);
-  $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW. ` +
-    `Break-even market price: night €${s.breakeven.night}/MWh, day €${s.breakeven.day}/MWh` +
-    (s.market_30d !== null ? `; last 30 days €${fmt(s.market_30d, 0)}/MWh.` : ".");
+  $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW.` +
+    (s.breakeven.night === null ? "" :      // (none when the dynamic price does not follow the market)
+      ` Break-even market price: night €${s.breakeven.night}/MWh, day €${s.breakeven.day}/MWh` +
+      (s.market_30d !== null ? `; last 30 days €${fmt(s.market_30d, 0)}/MWh.` : "."));
   const li = (e, text) => `<li><time>${new Date(e.t).toLocaleString([], {timeZone: tz, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"})}</time>${esc(text)}</li>`;
   $("cmds").innerHTML = ((s.inverter && s.inverter.log) || []).map((e) => li(e, e.command)).join("") || '<li class="muted">None yet.</li>';
   $("events").innerHTML = (s.events || []).map((e) => li(e, e.text)).join("");

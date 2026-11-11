@@ -24,13 +24,15 @@ def sun(day, kwh, first=6, last=20):
             kwh * math.sin(math.pi * (h + 0.5 - first) / (last - first)) / 8.9 for h in range(first, last)}
 
 
-async def run(tmpdata, start, end, soc, prices, kwh, load, contract="dynamic", step_s=30):
-    """Run the app with control on; returns (app, fake, the time-of-use writes with their local hour)."""
+async def run(tmpdata, start, end, soc, prices, kwh, load, contract="dynamic", step_s=30, minutes=60, **opts):
+    """Run the app with control on; returns (app, fake, the time-of-use writes with their local hour).
+    `prices(hour)`: EUR/kWh; with `minutes=15` the hour has a fraction (2.25 = 02:15)."""
     day = start.astimezone(TZ).replace(hour=0, minute=0)
     fc = {}
     for i in range(3):
         fc.update(sun(day + timedelta(days=i), kwh))
-    price_list = [{"time": (day + timedelta(hours=h)).isoformat(), "price": prices(h % 24)} for h in range(72)]
+    price_list = [{"time": (day + timedelta(minutes=minutes * k)).isoformat(),
+                   "price": prices(k % 24 if minutes == 60 else k * minutes / 60 % 24)} for k in range(72 * 60 // minutes)]
     fake = FakeHA(start, soc=soc, pv=lambda t: fc.get(t.replace(minute=0, second=0, microsecond=0), 0.0),
                   forecast=fc, prices=price_list, load=load)
     fake.s[CONTROL]["state"] = "on"
@@ -43,7 +45,7 @@ async def run(tmpdata, start, end, soc, prices, kwh, load, contract="dynamic", s
         return await real(domain, service, data)
 
     fake.call = call
-    app = App(Options(contract=contract), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(contract=contract, **opts), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     lo, hi = 100.0, 0.0                                   # lowest SOC while exporting, highest overall
     while fake.now < end:
@@ -101,6 +103,21 @@ async def test_a_wobbling_house_load_lowers_the_charge_current_instead_of_pausin
     target = max(t["soc"] for t in app.plan.targets) if app.plan.targets else 100
     assert hi <= target + 3                                         # and never charged on past the target
     assert any(c[2].get("entity_id") == "number.solis_time_charging_charge_current" for c in fake.calls[5:])
+
+
+async def test_a_charge_over_cheap_quarter_hours_runs_through_the_boundaries(tmpdata):
+    """Quarter-hour prices that all differ, two cheap hours. The plan is redone every 5 minutes, and
+    the minutes left before a boundary are too short to plan a charge in: it stopped the charge
+    before every quarter-hour and started it again."""
+    def quarters(h):
+        return (0.010 if 2 <= h < 4 else 0.100) + 0.002 * (int(h * 4) % 3)
+    app, fake, writes, (_, hi) = await run(tmpdata, utc(2026, 6, 14, 1, 50), utc(2026, 6, 14, 3, 10), 20, quarters, 0,
+                                           lambda t: 0.45, minutes=15, winter_mode="peaks_only")
+    assert app.plan.steps[1].hours == 0.25                          # planned in quarter-hours
+    assert fake.mode() == "charge"
+    assert switches(writes) == 1                                    # on at 02:00 (renewed at 03:00), was 9
+    assert not [w for w in writes if w[1] == "turn_off" and w[0] >= "14 02"]   # and never stopped since
+    assert hi >= 27                                                 # 8 points an hour, as planned, for 70 minutes
 
 
 # ---------------------------------------------------------------- boost and the first plan

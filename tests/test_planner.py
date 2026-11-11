@@ -1,13 +1,14 @@
 """Battery simulator invariants and planner scenarios."""
 import math
 import random
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from pilot.config import Options
-from pilot.planner import Slot, make_plan, night_target, optimize
+from pilot.planner import Slot, make_plan, night_target, night_windows, optimize
 from pilot.prices import PriceSlot
 from pilot.simulate import Battery, step
 from pilot.solar import PvForecast, ShadeModel
@@ -81,6 +82,24 @@ def test_no_arbitrage_when_the_spread_does_not_pay():
     steps = optimize(B, hourly(buy, [5.0] * 24), soc0=50, terminal_c_kwh=24.6)
     assert all(s.action != "charge" for s in steps)
     assert all(s.action != "discharge" for s in steps)
+
+
+@pytest.mark.parametrize("minutes", [15, 60])
+@pytest.mark.parametrize("load,pv", [(0.15, 0), (0.25, 0), (0.30, 0), (0.35, 0), (0.45, 0), (0.60, 0), (0.30, 0.55)])
+def test_self_use_follows_the_energy_balance(minutes, load, pv):
+    """Rounded slot by slot, 0.30 kW in a quarter-hour (0.49 SOC point) never moved the battery and
+    0.35 kW always a whole point: after a night the plan was 24 points off, and it had bought or
+    sold kWh that never crossed the meter."""
+    h = minutes / 60
+    slots = [Slot(T0 + timedelta(minutes=minutes * i), h, load * h, pv * h, 30.0, 5.0) for i in range(12 * 60 // minutes)]
+    steps = optimize(B, slots, soc0=80, terminal_c_kwh=25)
+    assert all(s.action == "self_use" for s in steps)
+    soc = 80.0
+    for s in steps:
+        soc = step(B, soc, "self_use", 0, s.load_kwh, s.pv_kwh, s.hours).soc
+        assert abs(s.soc_end - soc) <= 0.51            # the rounding error does not add up
+    assert sum(s.import_kwh for s in steps) == pytest.approx(0, abs=1e-6)
+    assert sum(s.export_kwh for s in steps) == pytest.approx(0, abs=1e-6)
 
 
 def test_import_limit_and_reserve_are_respected():
@@ -206,6 +225,21 @@ def test_sunny_summer_day_does_not_grid_charge_on_fixed():
     plan = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(30.0), soc=25, market_avg=90)
     assert not plan.winter
     assert all(s.action != "charge" for s in plan.steps)
+
+
+def test_a_night_window_inside_one_day_carries_the_day_after_it():
+    """01:00-06:00 does not cross midnight: the day after it was taken as empty (no solar at all),
+    so every day was a winter day."""
+    o = Options(night_start="01:00", night_end="06:00")
+    now = datetime(2026, 6, 14, 12, 0, tzinfo=BXL).astimezone(timezone.utc)
+    (_, we, de), *_ = night_windows(now, now + timedelta(hours=36), BXL, o)
+    assert we.astimezone(BXL).hour == 6 and de - we == timedelta(hours=19)        # 06:00 until 01:00
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(30.0), soc=50, market_avg=90)
+    assert not plan.winter and plan.targets[0]["solar_kwh"] == pytest.approx(30, abs=1)
+    assert all(s.action != "charge" for s in plan.steps)
+    january = datetime(2026, 1, 14, 12, 0, tzinfo=BXL).astimezone(timezone.utc)
+    dull = make_plan(january, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(1.5), soc=30, market_avg=90)
+    assert dull.winter and dull.targets[0]["applied"]                             # a dull day still is one
 
 
 def test_unknown_forecast_sets_no_winter_target():
@@ -385,10 +419,11 @@ def test_export_waits_for_the_best_prices(prices, minutes, best):
         assert not any(s.action == "discharge" for s in plan.steps if s.start < TOMORROW)
 
 
-@pytest.mark.parametrize("limit,early", [(6.0, False), (2.5, True)])
+@pytest.mark.parametrize("limit,early", [(6.0, False), (2.0, True)])
 def test_fixed_sells_early_only_when_tomorrows_surplus_would_be_curtailed(limit, early):
     """A fixed contract pays the same for export at every hour, so selling early only loses
-    to the battery; unless tomorrow's surplus is more than the export limit lets out."""
+    to the battery; unless tomorrow's surplus is more than the export limit lets out.
+    (At 2 kW the early sale earns about 7 c; at 2.5 kW it is 0.3 c, not worth switching for.)"""
     o = Options(export_limit_kw=limit)
     now = datetime(2026, 6, 14, 17, 0, tzinfo=BXL).astimezone(timezone.utc)
     plan = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.45), _shaded_forecast(40).kwh, soc=95, market_avg=90)
@@ -492,6 +527,28 @@ def test_extreme_negative_price_charges_as_fast_as_possible_above_the_limit():
     o, plan = _spike_plan(lambda t: -8000 if (t.day == 14 and t.hour == 13) else 100)
     assert _hour(plan, 13).import_kwh == pytest.approx(_full_power_kw(o), abs=0.05)
     assert plan.boost and plan.boost["gain_eur"] > plan.boost["peak_cost_eur"] > 0
+
+
+def test_a_trial_level_that_charges_nothing_above_the_limit_is_not_a_boost(monkeypatch):
+    """A higher trial limit also relaxes the peak cover, so its plan can be cheaper without charging
+    above the limit at all. That one used to win the comparison, and the real boost was dropped."""
+    import pilot.planner as planner
+    real, normal_limit, tried = planner.optimize, Options().import_limit_kw, []
+
+    def optimize_(b, slots, soc, *a, **k):
+        if b.import_limit_kw <= normal_limit:
+            return real(b, slots, soc, *a, **k)
+        tried.append(b.import_limit_kw)
+        if len(tried) > 1:
+            return real(b, slots, soc, *a, **k)
+        steps = real(replace(b, import_limit_kw=normal_limit), slots, soc, *a, **k)   # the first trial level:
+        steps[0].cost_c -= 10_000                                                     # the normal plan, far cheaper
+        return steps
+
+    monkeypatch.setattr(planner, "optimize", optimize_)
+    o, plan = _spike_plan(lambda t: -8000 if (t.day == 14 and t.hour == 13) else 100)
+    assert len(tried) > 1
+    assert plan.boost and _hour(plan, 13).import_kwh == pytest.approx(_full_power_kw(o), abs=0.05)
 
 
 def test_the_higher_peak_is_paid_once_however_often_it_is_used():
@@ -607,18 +664,22 @@ def test_one_extreme_quarter_hour_pays_a_whole_month_peak(price, boost):
 
 # ---------------------------------------------------------------- the optimizer, on random days
 def _self_use_cost(b, slots, soc0, terminal, curtail):
-    """What plain self-use costs under the optimizer's own model (same rounding to SOC levels)."""
-    from pilot.planner import _self_delta, _slot_costs
+    """What plain self-use costs under the optimizer's own model: the flows of the exact change,
+    the SOC in whole points with the rounding error carried to the next slot."""
+    from pilot.planner import _flow, _self_delta
     e = b.capacity_kwh / 100
     smin = math.ceil(b.min_soc)
-    s, total = int(min(max(round(soc0), 0), 100)), 0.0
+    s, total, acc, done = int(min(max(round(soc0), 0), 100)), 0.0, 0.0, 0
     for sl in slots:
         maxc = int(b.max_charge_kw * sl.hours / e + 1e-9)
         maxd = int(b.max_discharge_kw * sl.hours / e + 1e-9)
         lo, hi = max(min(smin - s, 0), -maxd), min(100 - s, maxc)
-        ds = int(round(min(max(_self_delta(b, sl, e), lo), hi)))
-        total += _slot_costs(b, sl, e, ds, ds, curtail)[ds][0]
-        s += ds
+        x = _self_delta(b, sl, e)
+        acc += x
+        whole = int(round(acc)) - done
+        done += whole
+        total += _flow(b, sl, min(max(x, lo), hi) * e, curtail)[0]
+        s += min(max(whole, lo), hi)
     return total - terminal * max(s - smin, 0) * e
 
 

@@ -46,6 +46,20 @@ def test_bug3_missing_pv_sensor_does_not_teach_darkness():
     assert m.factor(1, 13) == 1.0
 
 
+def test_an_hour_with_blocked_export_does_not_teach_shade():
+    """Export blocked at a negative price: the inverter held the panels back, the trees did not."""
+    m = ShadeModel()
+    start = local(2026, 6, 14, 13)
+    recs = [QuarterRecord(start + timedelta(minutes=15 * i), {"import": 0, "export": 0, "load": 0.1, "pv": 0.1},
+                          {"import": 1, "export": 1, "load": 1, "pv": 1.0}, blocked=i == 2) for i in range(4)]
+    assert m.learn_records(recs, {start.isoformat(): 4.0}, BXL) == 0
+    assert m.factor(6, 13) == 1.0
+    for r in recs:
+        r.blocked = False
+    assert m.learn_records(recs, {start.isoformat(): 4.0}, BXL) == 1        # (the same hour, not blocked)
+    assert QuarterRecord.from_json(QuarterRecord(start, {}, {}, blocked=True).to_json()).blocked
+
+
 def test_learn_from_quarters_with_archived_forecast():
     m = ShadeModel()
     start = local(2026, 1, 14, 14)

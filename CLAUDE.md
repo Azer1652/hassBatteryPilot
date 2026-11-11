@@ -45,7 +45,11 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 - `planner.optimize()`: dynamic programme over SOC in 1 % levels. Actions are only what a Solis can
   execute: self-use, grid charge (at least `MIN_CHARGE_KW`, at most import limit −
   `CHARGE_HEADROOM_KW`), discharge/export (not below reserve). Costs: buy − sell, wear, penalty above
-  the import limit, `ACTION_COST_C_PER_H`; terminal value for energy left. `make_plan()` adds the
+  the import limit, `ACTION_COST_C_PER_H`; terminal value for energy left. Charge and discharge move
+  whole SOC points; self-use moves a fraction of one per slot, so its rounding error is carried to the
+  next slot (`whole`), it is costed with the flows of the exact change (`_flow`) and the value of the
+  next slot is interpolated. Rounding each slot by itself made the plan drift from the battery, badly
+  on 15-minute slots. `make_plan()` adds the
   winter rule: when the next day's corrected solar < threshold, a soft target (`night_target()`) at
   the end of the night window, and no export. Two rules give way to money: in `extreme_slots()`
   (selling beats buying back at the dearest later price) export is allowed in winter and down to the
@@ -67,12 +71,22 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   `App.healthy`); the add-on linter rejects the old `watchdog` key in `config.yaml`.
 - Steadiness: `optimize(first_action=...)` charges `SWITCH_COST_C` for changing what the previous
   plan is still doing now (`planner.sticky_action`; a finished step is not sticky).
+  `planner.step_to_follow()` is the step `App.tick` hands to the controller: the minutes left before
+  a slot boundary are a first slot too short for one SOC point, which the optimizer can only make
+  self-use (equal prices are merged, different ones are not); a running charge or discharge that the
+  next step continues carries on through it. It never starts one.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
-  tariff are added in `report()`. The replay, like the live plan, blocks export at negative sell
+  tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices
+  is priced on the quarters that have one (`p_imp_day`, `p_imp_night`, `p_exp`), and a day enters the
+  replay totals only when both contracts were replayed. `App.daily_market` (the fixed sell price
+  follows the month's average) is taken from whole days only: the price archive keeps 3 days, and
+  what is left of a day while it is dropped is its evening. The replay, like the live plan, blocks export at negative sell
   prices only when `App.blocks_negative_export` (block switch on and an export-limit entity found).
 - `solar.ShadeModel`: 12 × 24 actual/forecast factors weighted by forecast kWh; skips hours with
-  incomplete PV data. `load.LoadProfile`: 7 × 24 kW EMA.
+  incomplete PV data and hours with a `QuarterRecord.blocked` quarter (export held at 0 by
+  `App._curtail`: the inverter throttles the panels; the replay uses the forecast there when it is
+  higher). `load.LoadProfile`: 7 × 24 kW EMA.
 - `migrate.py`: takes over from Battery Playbook 1.x (turns its automations off, imports
   `sensor.cw_shadow_bill`, removes `battery_playbook_*.yaml` packages after a config check).
 - `helpers.py`: creates the two `input_boolean` helpers over the websocket (no YAML).

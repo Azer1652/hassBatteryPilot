@@ -58,14 +58,16 @@ class ShadeModel:
         return out
 
     def learn_records(self, records: list[QuarterRecord], forecast_archive: dict[str, float], tz: ZoneInfo) -> int:
-        """Learn from closed quarters and the hourly forecast that was archived for them."""
+        """Learn from closed quarters and the hourly forecast that was archived for them.
+        Hours in which export was blocked are skipped: the inverter held the panels back then,
+        and that is not shade."""
         by_hour: dict[datetime, list[QuarterRecord]] = {}
         for r in records:
             by_hour.setdefault(r.start.replace(minute=0), []).append(r)
         n = 0
         for hour, recs in by_hour.items():
             fc = forecast_archive.get(hour.isoformat())
-            if fc is None or len(recs) < 4 or any(r.covered.get("pv", 0) < 0.9 for r in recs):
+            if fc is None or len(recs) < 4 or any(r.covered.get("pv", 0) < 0.9 or r.blocked for r in recs):
                 continue
             local = hour.astimezone(tz)
             n += self.learn(local.month, local.hour, sum(r.kwh["pv"] for r in recs), fc)

@@ -8,6 +8,7 @@ from fake_ha import TZ, FakeHA, utc
 
 from pilot import history as H
 from pilot.app import App
+from pilot.compare import Comparison
 from pilot.config import Options
 from pilot.meter import QuarterRecord
 from pilot.migrate import MARK
@@ -134,13 +135,22 @@ async def test_takes_over_from_battery_playbook(tmp_path, tmpdata):
     assert fake.s["automation.my_own"]["state"] == "on"
     assert not old.exists() and mine.exists()
     assert os.path.exists(os.path.join(tmpdata, "playbook_backup", old.name))
-    oct_ = app.comparison.report("2026-10", Options())
+    o = Options()
+    oct_ = app.comparison.report("2026-10", o)
     assert oct_["bought_kwh"] == 250 and oct_["market_avg_eur_mwh"] == 95
+    # 100 kWh by day, 150 at night, 80 sold at the month's 95 EUR/MWh, the yearly fee and the billed minimum peak
+    fixed = (100 * 30.55 + 150 * 27.18 - 80 * (0.0798 * 95 - 2.72 - 0.19)) / 100 + 65 / 12 + 2.5 * 52.37 / 12
+    assert oct_["same_usage"]["fixed_eur"] == pytest.approx(fixed, abs=0.01)
+    assert oct_["same_usage"]["dynamic_eur"] == pytest.approx(60.5 - 4.2 + 100 / 12 + 2.5 * 52.37 / 12, abs=0.01)
     assert app.load.default_kw == pytest.approx(0.5)
     # second start: nothing to do any more
     app2 = App(Options(), fake, data_dir=tmpdata, config_dir=str(cfg), clock=lambda: fake.now)
     assert await app2.setup()
     assert app2.migrated
+    assert app2.comparison.report("2026-10", o)["same_usage"] == oct_["same_usage"]
+    # a state saved by 2.4.0 has no separate figures for the priced quarters: the taken-over month keeps its bill
+    old_state = {k: v for k, v in app2.comparison.months["2026-10"].items() if not k.startswith("p_")}
+    assert Comparison.from_json({"months": {"2026-10": old_state}}).report("2026-10", o)["same_usage"] == oct_["same_usage"]
 
 
 async def test_failed_config_check_keeps_the_old_files(tmp_path, tmpdata):

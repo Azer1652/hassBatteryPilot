@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.4.1
+
+**A check of the planning and comparison logic.** Seven errors fixed. Most of them only
+showed on a dynamic contract or with quarter-hour prices.
+
+- **The plan follows the battery in self-use.** The battery's change was rounded to whole
+  percents in every slot, so the error always went the same way. On quarter-hour slots a
+  house using 0.30 kW never moved the planned battery (after a night the plan was 24
+  points too high and had "bought" 3.6 kWh that never crossed the meter), and one using
+  0.35 kW emptied it twice as fast. On hourly slots it was up to 4 points. The rounding
+  error is now carried to the next slot and self-use is costed with its real grid flows.
+  This also makes the dynamic side of the nightly comparison plan better when your price
+  sensor gives quarter-hour prices.
+- **A charge is no longer stopped before every price boundary.** The plan is redone every
+  5 minutes, and the minutes left before a boundary were too short to plan a charge in,
+  so the inverter went to self-use and was started again a few minutes later, every
+  quarter-hour (or hour). A running charge or export now carries on into the next step
+  when the plan continues it. Nothing starts early: with the inverter in self-use those
+  minutes stay self-use.
+- **A night window inside one day** (for example 01:00–06:00) made every day a winter
+  day: the day after the window was taken as empty, without solar.
+- **The daily market average** was taken again from what was left of a day while its
+  prices were being dropped after 3 days. With quarter-hour prices that is the dear
+  evening, so the fixed contract's sell price (it follows the month's average), the fixed
+  side of the replay and the break-even alerts were too high. A day's average now comes
+  from the whole day only. Averages stored by an older version from quarter-hour prices
+  are dropped once and rebuilt from the prices of the last days.
+- **Blocked export is not tree shade.** While *Battery Pilot block negative export* holds
+  export at 0, the inverter holds the panels back. Those hours were learned as shade, and
+  the replay took that low output as the day's solar for both contracts. Such
+  quarter-hours are now marked: no shade is learned from them, and the replay uses the
+  shade-corrected forecast when it is higher than what was measured.
+- **The comparison counts the same hours for both contracts.** A day replayed for the
+  fixed contract only (no prices that day) is no longer added to the month. In *same
+  usage*, quarter-hours without any market price (a price sensor added during the month)
+  counted for fixed and not for dynamic; a month with prices is now priced on the
+  quarter-hours that have one, for both.
+- **Charging above the import limit:** a trial level at which nothing charged above the
+  limit could win the comparison, and the real one was dropped.
+- With *Dynamic: buy price × market* at 0 the dashboard and the daily alerts failed
+  (division by zero in the break-even price). There is no break-even then, and it is left
+  out.
+
 ## 2.4.0
 
 **Planned vs actual is easier to read**, on a phone above all:

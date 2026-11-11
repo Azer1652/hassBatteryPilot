@@ -2,9 +2,12 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from pilot.config import Options
 from pilot.controller import Readings, decide, follow_amps, paced_amps
-from pilot.planner import Step
+from pilot.planner import Plan, Step, step_to_follow
+from pilot.simulate import Battery
 
 TZ = ZoneInfo("Europe/Brussels")
 T = datetime(2026, 1, 15, 1, 10, tzinfo=TZ).astimezone(timezone.utc)
@@ -130,3 +133,40 @@ def test_an_export_follows_its_pacing_in_steps_of_ten_amps():
     assert d.command == "none" and d.reason == "discharging"
     d = decide(s, rd(soc=60), OPTS, "discharge", "01:00:00", want + 20, True)
     assert d.command == "current" and d.amps == want
+
+
+# ---------------------------------------------------------------- the minutes before a slot boundary
+def _plan_before_a_boundary(minutes, nxt="charge"):
+    """A plan made `minutes` before 01:15: a short self-use step, then a quarter-hour of `nxt`."""
+    start = T.replace(minute=15) - timedelta(minutes=minutes)
+    short = Step(start, minutes / 60, "self_use", 30, 30, 0, 0, 0.45 * minutes / 60, 0, 14, 5, 0)
+    after = Step(T.replace(minute=15), 0.25, nxt, 30, {"charge": 32, "discharge": 27}.get(nxt, 30), 0, 0, 0.11, 0, 15, 5, 0)
+    return Plan([short, after], start, "dynamic"), start
+
+
+def test_a_charge_is_not_stopped_for_the_minutes_before_a_slot_boundary():
+    """The optimizer cannot fit one SOC point of charging in 3 minutes, so that slot is self-use. With
+    a new plan every 5 minutes the charge was stopped and started again before every price boundary."""
+    plan, t = _plan_before_a_boundary(3)
+    now = rd(t=t + timedelta(minutes=1))
+    assert decide(plan.step_at(t), now, OPTS, "charge", "01:00:00", 30, True).command == "self_use"   # the plan alone
+    step_ = step_to_follow(plan, t, Battery.from_options(OPTS), "charge")
+    assert step_.action == "charge" and step_.start == t and step_.soc_end == 32
+    assert step_.hours == pytest.approx(3 / 60 + 0.25)                 # paced to the next step's target
+    assert decide(step_, now, OPTS, "charge", "01:00:00", 30, True).command == "none"                 # charges on
+
+
+def test_a_short_slot_starts_nothing_and_a_real_pause_is_kept():
+    b = Battery.from_options(OPTS)
+    plan, t = _plan_before_a_boundary(3)
+    assert step_to_follow(plan, t, b, "self_use").action == "self_use"     # not charging now: nothing starts early
+    assert step_to_follow(plan, t, b, "discharge").action == "self_use"    # the plan does not go on with an export
+    plan, t = _plan_before_a_boundary(10)
+    assert step_to_follow(plan, t, b, "charge").action == "self_use"       # 10 minutes can charge: a real pause
+    plan, t = _plan_before_a_boundary(3, nxt="self_use")
+    assert step_to_follow(plan, t, b, "charge").action == "self_use"       # the charge ends at the boundary
+    plan, t = _plan_before_a_boundary(1, nxt="discharge")
+    assert step_to_follow(plan, t, b, "discharge").action == "discharge"   # an export goes on for a minute
+    plan, t = _plan_before_a_boundary(3, nxt="discharge")
+    assert step_to_follow(plan, t, b, "discharge").action == "self_use"    # 3 minutes hold a point of export
+    assert step_to_follow(None, t, b, "charge") is None

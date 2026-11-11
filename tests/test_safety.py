@@ -228,18 +228,29 @@ async def negative_noon(tmpdata, limit_w, restart=False):
         app = App(Options(contract="dynamic"), fake, data_dir=tmpdata, clock=lambda: fake.now)
         assert await app.setup()
     await run_until(app, fake, utc(2026, 6, 14, 14, 5), step_s=30)
-    return [c[2]["value"] for c in fake.calls if c[2].get("entity_id") == "number.solis_export_power_limit"], fake
+    return [c[2]["value"] for c in fake.calls if c[2].get("entity_id") == "number.solis_export_power_limit"], fake, app
 
 
 async def test_a_zero_export_installation_is_never_given_export(tmpdata):
-    writes, fake = await negative_noon(tmpdata, 0)
+    writes, fake, _ = await negative_noon(tmpdata, 0)
     assert writes == [] and fake.s["number.solis_export_power_limit"]["state"] == "0"
 
 
 @pytest.mark.parametrize("restart", [False, True])
 async def test_the_export_limit_found_before_a_block_is_restored(tmpdata, restart):
-    writes, fake = await negative_noon(tmpdata, 3000, restart)
+    writes, fake, _ = await negative_noon(tmpdata, 3000, restart)
     assert writes == [0, 3000]                           # not the 5 kW option: what the installation had
+
+
+@pytest.mark.parametrize("restart", [False, True])
+async def test_quarters_with_blocked_export_are_marked(tmpdata, restart):
+    """With export at 0 the inverter holds the panels back. Those quarters are marked, so their low
+    solar is not learned as shade and not replayed as what the panels could give."""
+    _, _, app = await negative_noon(tmpdata, 3000, restart)
+    marked = {r.start.astimezone(TZ).strftime("%H:%M") for r in app.records if r.blocked}
+    assert marked == {"12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30", "13:45"}
+    saved = {r.start.astimezone(TZ).strftime("%H:%M"): r.to_json() for r in app.records}
+    assert saved["12:00"]["blocked"] is True and "blocked" not in saved["11:45"]      # kept in the state file
 
 
 # ---------------------------------------------------------------- a damaged state file

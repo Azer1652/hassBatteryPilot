@@ -28,17 +28,21 @@ class QuarterRecord:
     covered: dict                         # channel -> fraction of the quarter with data
     soc: float | None = None              # SOC at the start of the quarter
     mode: str | None = None               # inverter mode most of the quarter (shadow: control off)
+    blocked: bool = False                 # export was blocked (negative sell price): the panels were held back
 
     def to_json(self):
         d = {"start": self.start.isoformat(), "kwh": {k: round(v, 5) for k, v in self.kwh.items()},
              "covered": {k: round(v, 3) for k, v in self.covered.items()}, "soc": self.soc}
         if self.mode:
             d["mode"] = self.mode
+        if self.blocked:
+            d["blocked"] = True
         return d
 
     @classmethod
     def from_json(cls, d):
-        return cls(datetime.fromisoformat(d["start"]), d["kwh"], d["covered"], d.get("soc"), d.get("mode"))
+        return cls(datetime.fromisoformat(d["start"]), d["kwh"], d["covered"], d.get("soc"), d.get("mode"),
+                   bool(d.get("blocked")))
 
 
 @dataclass

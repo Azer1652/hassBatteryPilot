@@ -20,7 +20,8 @@ from .helpers import CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
-from .planner import Plan, make_plan, market_at, sticky_action
+from .planner import Plan, Step, make_plan, market_at, step_to_follow, sticky_action
+from .simulate import Battery
 from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
 from .solis import NEEDED as SOLIS_NEEDED
 from .solis import Solis
@@ -105,6 +106,7 @@ class App:
         self.over_since: datetime | None = None
         self.events: list[dict] = []
         self._modes: dict[str, int] = {}  # inverter mode per tick in the current quarter
+        self._blocked = False             # export was blocked by us at some tick in the current quarter
         self.seen_at: datetime | None = None    # last tick with SOC and grid import
         self.blind_reported = False
         self._helper_seen: dict[str, datetime] = {}
@@ -164,6 +166,12 @@ class App:
             return False
         for k, v in loaded.items():
             setattr(self, k, v)
+        if self.daily_market and not s.get("whole_day_averages") and any(p.minutes <= 15 for p in self.price_slots):
+            # Saved before 2.4.1 with quarter-hour prices: each day's average was overwritten with
+            # that of its evening. Forget them; the days still in the price archive are rebuilt.
+            self.daily_market = {}
+            self.event("The stored daily market averages were taken from parts of days (quarter-hour prices); "
+                       "they are rebuilt from the prices of the last days.")
         self.pv = PvForecast({}, self.shade, self.tz)
         return True
 
@@ -176,7 +184,7 @@ class App:
              "daily_market": self.daily_market, "alerts": self.alerts, "last_nightly": self.last_nightly,
              "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us,
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
-             "boost_seen": self.boost_seen}
+             "boost_seen": self.boost_seen, "whole_day_averages": True}
         write_json(self.state_file, s)
 
     # What Battery Pilot left on the inverter, in a small file written at every change: after a
@@ -325,6 +333,7 @@ class App:
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
+        self._blocked = self._blocked or self.curtailed_by_us
         for rec in self.meter.add(now, kw, soc):
             self._quarter_closed(rec)
 
@@ -342,13 +351,15 @@ class App:
         step = self.plan.step_at(now) if self.plan else None
         if self.solis:
             self._reconcile(now, (sts.get("tou_switch") or {}).get("state"))
+            # (a charge or discharge is not stopped for the last minutes before a slot boundary)
+            step = step_to_follow(self.plan, now, Battery.from_options(self.o), self.solis.mode)
             self.decision = decide(step, self.readings, self.o, self.solis.mode, self.solis.slot_hour,
                                    self.solis.amps, self.control_on)
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
         self._modes[mode] = self._modes.get(mode, 0) + 1
-        await self._peak_warning(now, projection)
+        await self._peak_warning(now, projection, step)
 
     def _helper(self, name: str, st, last: bool, now: datetime) -> bool:
         """A helper switch's state; a read that fails keeps the last known state for a minute."""
@@ -473,8 +484,9 @@ class App:
         except Exception as e:  # noqa: BLE001
             self.event(f"Setting the export limit failed: {e}", logging.ERROR)
 
-    async def _peak_warning(self, now: datetime, projection: float):
-        step = self.plan.step_at(now) if self.plan else None
+    async def _peak_warning(self, now: datetime, projection: float, step: Step | None = None):
+        """`step`: the step the controller follows now (default: the plan's step at `now`)."""
+        step = step or (self.plan.step_at(now) if self.plan else None)
         limit = step.limit_kw if step and step.limit_kw is not None else self.o.import_limit_kw   # a planned boost
         if projection > limit + 0.3:
             self.over_since = self.over_since or now
@@ -492,6 +504,9 @@ class App:
         if self._modes:
             rec.mode = max(self._modes, key=self._modes.get)
             self._modes = {}
+        # Export was blocked in this quarter: the inverter held the panels back, so its solar
+        # is not what they could give (not learned as shade, not used as such in the replay).
+        rec.blocked, self._blocked = self._blocked, False       # (the next tick sets it again while it lasts)
         self.peaks.add(rec, self.tz)
         market, known = market_at(self.price_slots, rec.start) if self.price_slots else (None, False)
         self.comparison.add_quarter(rec, market, self.o, self.tz, estimated=market is not None and not known)
@@ -526,13 +541,18 @@ class App:
         self.replan(now)
 
     def _update_daily_market(self, now: datetime):
-        by_day: dict[str, list[float]] = {}
+        """The average market price of each day, from days whose prices are complete. A day that is
+        being dropped from the price archive (or has a gap) keeps the average it had: what is left of
+        it is its evening, which is dearer than the day."""
+        by_day: dict[date, list[tuple[int, float]]] = {}
         for p in self.price_slots:
-            by_day.setdefault(p.start.astimezone(self.tz).date().isoformat(), []).append(p.eur_mwh)
-        today = now.astimezone(self.tz).date().isoformat()
+            by_day.setdefault(p.start.astimezone(self.tz).date(), []).append((p.minutes, p.eur_mwh))
+        today = now.astimezone(self.tz).date()
         for d, vals in by_day.items():
-            if d <= today and len(vals) >= 20:
-                self.daily_market[d] = round(statistics.fmean(vals), 2)
+            start, end = H.day_bounds(d, self.tz)                   # 23 or 25 hours on clock-change days
+            minutes = sum(m for m, _ in vals)
+            if d <= today and minutes >= H.minutes(end, start):
+                self.daily_market[d.isoformat()] = round(sum(m * v for m, v in vals) / minutes, 2)
         for d in sorted(self.daily_market)[:-400]:
             del self.daily_market[d]
 
@@ -699,10 +719,12 @@ class App:
             self.event(f"Replay of {day} skipped: too much data missing.")
             return
         key = day.strftime("%Y-%m")
+        both = len(results) == len(KINDS)
         for kind, res in results.items():
-            self.comparison.add_replay(key, kind, res)
+            if both:          # a day replayed for one contract only would count for that one alone
+                self.comparison.add_replay(key, kind, res)
             self.comparison.sim_soc[kind] = res["soc_end"]
-        if len(results) == len(KINDS):
+        if both:
             self.comparison.month(key)["replay_days"] += 1
             f, d = results["fixed"]["cost_c"] / 100, results["dynamic"]["cost_c"] / 100
             blocked = "; export blocked at negative prices" if block_negative else ""
@@ -749,9 +771,9 @@ class App:
                                  f"Your fixed price ends on {end}. When the new rates arrive, enter them in the app's "
                                  f"settings for a new comparison.{extra}", key=f"renewal-{end}-{mark}")
         avg30 = self.market_avg_30d()
-        if avg30 is not None and self.o.contract == "fixed" and len(self.daily_market) >= 30:
-            night_be = breakeven_eur_mwh(self.o.fixed_night_rate, self.o)
-            day_be = breakeven_eur_mwh(self.o.fixed_day_rate, self.o)
+        night_be = breakeven_eur_mwh(self.o.fixed_night_rate, self.o)
+        day_be = breakeven_eur_mwh(self.o.fixed_day_rate, self.o)
+        if avg30 is not None and night_be is not None and self.o.contract == "fixed" and len(self.daily_market) >= 30:
             state = "below" if avg30 < night_be else ("above" if avg30 > day_be else "between")
             last = self.alerts.get("breakeven-state")
             if state != "between" and state != last:
@@ -845,6 +867,8 @@ class App:
     def status(self) -> dict:
         now = self.clock()
         r = self.readings
+        night_be = breakeven_eur_mwh(self.o.fixed_night_rate, self.o)
+        day_be = breakeven_eur_mwh(self.o.fixed_day_rate, self.o)
         return {
             "version": self.version, "now": now.isoformat(), "tz": str(self.tz), "problem": self.problem,
             "mode": "active" if self.control_on else "shadow", "contract": self.o.contract,
@@ -864,8 +888,8 @@ class App:
                       "rolling_kw": self.peaks.rolling_average(self.o.capacity_min_kw)},
             "comparison": self.comparison.summary(self.o, now, self.tz),
             "market_30d": self.market_avg_30d(),
-            "breakeven": {"night": round(breakeven_eur_mwh(self.o.fixed_night_rate, self.o)),
-                          "day": round(breakeven_eur_mwh(self.o.fixed_day_rate, self.o))},
+            "breakeven": {"night": None if night_be is None else round(night_be),
+                          "day": None if day_be is None else round(day_be)},
             "events": list(reversed(self.events[-30:])),
         }
 

@@ -79,8 +79,9 @@ Home Assistant once and uninstall the Battery Playbook app.
 | Fixed day/night contract | Buying at night to use by day does not pay after losses and wear, so it only grid-charges for the winter target. |
 | Dynamic contract | Also charges in cheap hours and exports in expensive ones, when the spread beats losses + wear, filling the battery completely when the sale pays for all of it. The best-paid slots get full power first. |
 | Price spike (very low or very high) | Charges above the import limit, as fast as the battery takes, when that earns more than the higher capacity peak costs, priced as Fluvius bills it: the month's highest quarter-hour (at least the billed minimum) counts once in the 12-month average, so a peak this month already has costs nothing extra. At a price so high that buying the energy back later costs less, it also sells below the reserve, down to the battery minimum, even in winter. The plan card says when and why. |
-| Negative sell price | With **Battery Pilot block negative export** on and an export-limit entity, export is set to 0. |
+| Negative sell price | With **Battery Pilot block negative export** on and an export-limit entity, export is set to 0. The inverter then holds the panels back; those quarter-hours are not learned as shade. |
 | Quarter-hour heading over the limit | Charging pauses; the battery helps the house. You get a phone warning when a peak is coming (above the higher limit while the plan pays for one). |
+| The minutes before a new price | The plan is redone every 5 minutes. A charge or export that the plan continues after the next price boundary carries on through the last minutes before it, without stopping and starting again. Nothing starts early in those minutes. |
 
 Charge and discharge commands only cover the current clock hour, and Battery Pilot puts
 the inverter back in self-use when it stops, when its measurements are lost and when
@@ -90,14 +91,19 @@ the inverter back in self-use when it stops, when its measurements are lost and 
 
 - **Same usage:** every quarter-hour, what you actually bought and sold is priced on
   both contracts. It is exact, but your battery behaved as it does on your current
-  contract.
+  contract. In a month that has market prices for only part of its quarter-hours (the
+  price sensor was added during the month), both contracts are priced on the
+  quarter-hours that have one.
 - **Best battery use:** every night, yesterday is replayed with your measured
   consumption and solar. For each contract the planner decides every hour as it would
   have on that contract (cheap-hour charging, export, selling surplus solar, the
   winter night target). A simulated battery follows its commands, and wear is
   included. With *Battery Pilot block negative export* on (and an export-limit
   entity), the replay also blocks export whenever that contract's sell price is
-  negative, as Battery Pilot would; otherwise those exports cost money. This answers:
+  negative, as Battery Pilot would; otherwise those exports cost money. While export
+  was really blocked the inverter held your panels back, so for those quarter-hours the
+  replay takes the shade-corrected forecast when it is higher than what was measured. A
+  day counts only when both contracts could be replayed. This answers:
   what would each contract have cost me, with the battery used the best way for it?
 
 Both include the contract fees and the capacity tariff. The sidebar page shows every
@@ -166,7 +172,7 @@ log says which setting to fill in.
 | `house_load_power` | `household_load_power`, `house_load` or `load_power` | required | Grid-charge current that keeps import under the limit (it follows the house load), learning your consumption pattern and your usual quarter-hour peaks, the night target, and the nightly replay. | Battery Pilot does not start. |
 | `battery_soc` | `battery_soc` | required | Planning from the battery's real state, stopping a charge or export at its target, the nightly replay's starting point. | Battery Pilot does not start. |
 | `grid_export_power` | `grid_export_power` or `export_power` (not an export *limit*) | optional | kWh sold, in the "same usage" bill. | Sold kWh count as 0 in the comparison. |
-| `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark. |
+| `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
 | `battery_voltage_sensor` | `battery_voltage` | optional | Turning amps into kW for the charge current and the plan. | The *Battery nominal voltage* setting is used. |
 
 Power sensors can be in W or kW: the unit is read from the entity.
@@ -304,7 +310,7 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 | Dynamic contract fee | `dynamic_yearly_fee_eur` | 100 €/year | Added in the comparison. |
 | Grid fees and taxes | `grid_fees_c_kwh` | 11.96 c/kWh | Added to every bought kWh on both contracts. Update each January. |
 | Injection fee | `injection_fee_c_kwh` | 0.19 c/kWh | Subtracted from every sold kWh on both contracts. |
-| Night tariff starts | `night_start` | 22:00 | Night rate, and the window for winter night charging. |
+| Night tariff starts | `night_start` | 22:00 | Night rate, and the window for winter night charging. The window may cross midnight (22:00–07:00) or lie inside one day (01:00–06:00). |
 | Night tariff ends | `night_end` | 07:00 | On winter days the battery reaches its night target by this time. |
 | Weekend is night tariff | `weekend_is_night` | on | The night rate all weekend (Flanders). |
 

@@ -41,6 +41,8 @@ def _month(t: datetime, tz: ZoneInfo) -> str:
 
 def _blank():
     return {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "market_sum": 0.0, "market_n": 0,
+            # the same three for the quarters that have a market price (what both contracts are priced on)
+            "p_imp_day": 0.0, "p_imp_night": 0.0, "p_exp": 0.0,
             "dyn_c": 0.0, "quarters": 0, "replay": {k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0,
                                                         "discharged": 0.0, "grid_charged": 0.0, "peak_kw": 0.0}
                        for k in KINDS},
@@ -55,6 +57,12 @@ class Comparison:
 
     def month(self, key: str) -> dict:
         m = self.months.setdefault(key, _blank())
+        if "p_exp" not in m:                              # saved before 2.4.1: the share that had a price
+            n, quarters = m.get("market_n", 0), m.get("quarters", 0)
+            # (a month taken over from Battery Playbook has a market average and no quarters: all of it)
+            share = min(n / quarters, 1.0) if quarters else (1.0 if n else 0.0)
+            for k in ("imp_day", "imp_night", "exp"):
+                m["p_" + k] = m.get(k, 0.0) * share
         for k, v in _blank().items():                     # older state files: add new fields
             m.setdefault(k, v)
         return m
@@ -63,17 +71,17 @@ class Comparison:
     def add_quarter(self, rec: QuarterRecord, market: float | None, o: Options, tz: ZoneInfo,
                     estimated: bool = False) -> None:
         """`market`: the quarter's market price; `estimated` when it had none and the planner's
-        estimate is used (the price the day before), so both contracts price the same usage."""
+        estimate is used (the price the day before), so both contracts price the same usage.
+        A quarter without any price (no price data at all) counts for the kWh and the peak only:
+        once the month has prices, both contracts are priced on the quarters that have one."""
         if rec.covered.get("import", 0) < 0.5:
             return
         m = self.month(_month(rec.start, tz))
         local = (rec.start + timedelta(minutes=7, seconds=30)).astimezone(tz)
         imp = rec.kwh.get("import", 0.0)
         exp = rec.kwh.get("export", 0.0) if rec.covered.get("export", 0) >= 0.5 else 0.0
-        if is_night(local, o):
-            m["imp_night"] += imp
-        else:
-            m["imp_day"] += imp
+        when = "imp_night" if is_night(local, o) else "imp_day"
+        m[when] += imp
         m["exp"] += exp
         m["quarters"] += 1
         m["peak_kw"] = max(m["peak_kw"], imp * 4)
@@ -81,6 +89,8 @@ class Comparison:
             m["market_sum"] += market
             m["market_n"] += 1
             m["estimated"] += estimated
+            m["p_" + when] += imp
+            m["p_exp"] += exp
             dyn = tariff("dynamic", o)
             m["dyn_c"] += imp * dyn.buy(local, market) - exp * dyn.sell(local, market)
 
@@ -97,8 +107,9 @@ class Comparison:
         avg = m["market_sum"] / m["market_n"] if m["market_n"] else None
         fixed = tariff("fixed", o)
         fixed_sell = fixed.sell(None, None, avg if avg is not None else 0.0)
-        fixed_energy = (m["imp_day"] * (o.fixed_day_rate + o.grid_fees_c_kwh)
-                        + m["imp_night"] * (o.fixed_night_rate + o.grid_fees_c_kwh) - m["exp"] * fixed_sell) / 100
+        p = "p_" if m["market_n"] else ""        # with prices: the same quarters as the dynamic side
+        fixed_energy = (m[p + "imp_day"] * (o.fixed_day_rate + o.grid_fees_c_kwh)
+                        + m[p + "imp_night"] * (o.fixed_night_rate + o.grid_fees_c_kwh) - m[p + "exp"] * fixed_sell) / 100
         cap = capacity_month_eur(m["peak_kw"], o)
         out = {
             "month": key,
@@ -197,6 +208,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:
             load_kwh, pv_kwh = r.kwh["load"], r.kwh["pv"]
+            if r.blocked:       # the panels were held back: what was measured is the least they could give
+                pv_kwh = max(pv_kwh, pv_forecast(r.start, r.start + timedelta(minutes=15)))
         else:
             load_kwh = load.kwh(r.start, r.start + timedelta(minutes=15), tz)
             pv_kwh = pv_forecast(r.start, r.start + timedelta(minutes=15))

@@ -64,9 +64,8 @@ def import_history(states: dict, comparison) -> list[str]:
             if key in comparison.months:
                 continue
             acc = comparison.month(key)
-            acc["imp_day"] = float(m.get("imp_day", 0))
-            acc["imp_night"] = float(m.get("imp_night", 0))
-            acc["exp"] = float(m.get("exp", 0))
+            for k in ("imp_day", "imp_night", "exp"):      # (the whole month had a market price)
+                acc[k] = acc["p_" + k] = float(m.get(k, 0))
             acc["market_sum"] = float(m.get("belpex", 0))
             acc["market_n"] = 1
             acc["dyn_c"] = (float(m.get("dyn_imp", 0)) - float(m.get("dyn_exp", 0))) * 100

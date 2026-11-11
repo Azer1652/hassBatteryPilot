@@ -82,8 +82,11 @@ def tariff(kind: str, opts: Options) -> Tariff:
     return FixedTariff(opts) if kind == "fixed" else DynamicTariff(opts)
 
 
-def breakeven_eur_mwh(fixed_rate: float, opts: Options) -> float:
-    """Market price (EUR/MWh) below which a dynamic kWh is cheaper than this fixed rate."""
+def breakeven_eur_mwh(fixed_rate: float, opts: Options) -> float | None:
+    """Market price (EUR/MWh) below which a dynamic kWh is cheaper than this fixed rate.
+    None when the dynamic price does not follow the market (multiplier 0): there is none."""
+    if opts.dynamic_buy_mult <= 0:
+        return None
     vat = 1 + opts.dynamic_vat_pct / 100
     return (fixed_rate / vat - opts.dynamic_buy_add) / opts.dynamic_buy_mult
 

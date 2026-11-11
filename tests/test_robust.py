@@ -1,6 +1,7 @@
 """Gaps in what Home Assistant provides: missing prices, a forecast outage, a slow answer,
 and alerts on days the app was not running."""
 import asyncio
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -78,6 +79,51 @@ async def test_prices_that_cannot_be_read_keep_the_ones_already_known(tmpdata):
     await app.refresh()
     assert app.price_slots == known and app.plan is not None
     assert any("Reading prices failed" in e["text"] for e in app.events)
+
+
+def _evening_dear(first_day, days, minutes):
+    """Price list (EUR/kWh) from `first_day`: 0.05 until 17:00, 0.20 after. The day's average is 93.75 EUR/MWh."""
+    return [{"time": (first_day + timedelta(minutes=minutes * k)).isoformat(),
+             "price": 0.05 if (k * minutes // 60) % 24 < 17 else 0.20} for k in range(days * 24 * 60 // minutes)]
+
+
+@pytest.mark.parametrize("minutes", [15, 60])
+async def test_a_days_market_average_is_not_redone_from_what_is_left_of_the_day(tmpdata, minutes):
+    """Prices are kept for 3 days. While a day was being dropped, its average was taken again from
+    the hours still there: its dear evening. With quarter-hour prices 93.75 became 137.5, then 200.
+    That average sets the fixed contract's sell price and the break-even alerts."""
+    day = datetime(2026, 11, 5, tzinfo=TZ)
+    fake = FakeHA(utc(2026, 11, 5, 12, 0), prices=_evening_dear(day, 2, minutes))
+    app = await started(tmpdata, fake)
+    assert app.daily_market == {"2026-11-05": 93.75}                   # (tomorrow is not a day yet)
+    for hour, minute in ((3, 0), (12, 0), (18, 30), (19, 30)):
+        fake.now = utc(2026, 11, 8, hour, minute)
+        fake.s["sensor.current_electricity_market_price"]["attributes"]["prices"] = \
+            _evening_dear(day + timedelta(days=3), 2, minutes)       # the sensor lists today and tomorrow
+        await app.refresh()
+        assert app.daily_market["2026-11-05"] == 93.75
+        assert app.daily_market["2026-11-08"] == 93.75
+        assert app.market_avg_month(fake.now) == pytest.approx(93.75)
+
+
+@pytest.mark.parametrize("minutes,marked,kept", [(15, False, False), (60, False, True), (15, True, True)])
+async def test_averages_taken_from_parts_of_days_are_dropped_once(tmpdata, minutes, marked, kept):
+    """A state saved before the fix, with quarter-hour prices: its daily averages are the evenings."""
+    day = datetime(2026, 11, 5, tzinfo=TZ)
+    fake = FakeHA(utc(2026, 11, 5, 12, 0), prices=_evening_dear(day, 2, minutes))
+    app = await started(tmpdata, fake)
+    app.save_state()
+    with open(app.state_file, encoding="utf-8") as f:
+        state = json.load(f)
+    assert state["whole_day_averages"] is True
+    state["daily_market"] = {"2026-11-01": 200.0, "2026-11-02": 200.0}
+    if not marked:
+        del state["whole_day_averages"]
+    with open(app.state_file, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    again = await started(tmpdata, fake)
+    assert ("2026-11-01" in again.daily_market) is kept
+    assert again.daily_market["2026-11-05"] == 93.75                   # rebuilt from the prices still stored
 
 
 # ---------------------------------------------------------------- the solar forecast
@@ -167,6 +213,32 @@ async def test_market_break_even_alerts_once_per_crossing(tmpdata):
     await app.daily_alerts()
     await app.daily_alerts()
     assert len(alerts(fake, "Market above your fixed day rate")) == 1
+
+
+async def test_a_dynamic_price_that_does_not_follow_the_market_has_no_break_even(tmpdata):
+    """Multiplier 0 was a division by zero: no dashboard, and the daily alerts failed every round."""
+    fake = FakeHA(utc(2026, 3, 31, 9, 30))
+    app = await started(tmpdata, fake, dynamic_buy_mult=0)
+    app.daily_market = {(date(2026, 3, 1) + timedelta(days=d)).isoformat(): 40.0 for d in range(30)}
+    await app.daily_alerts()
+    assert app.status()["breakeven"] == {"night": None, "day": None}
+    assert not alerts(fake, "Market below your fixed night rate")
+
+
+async def test_a_day_replayed_for_one_contract_only_is_not_added_to_the_month(tmpdata):
+    """Without prices only the fixed contract is replayed. Those days were added to the fixed side of
+    the month, and not counted: a later day with prices then compared 2 days of fixed with 1 of dynamic."""
+    fake = FakeHA(utc(2026, 3, 11, 12, 0))
+    app = await started(tmpdata, fake)
+    one = {"cost_c": 300.0, "imp": 10.0, "exp": 0.0, "charged": 2.0, "discharged": 2.0, "grid_charged": 0.0,
+           "peak_kw": 2.0, "soc_end": 40.0}
+    app._apply_replay(date(2026, 3, 9), {"fixed": dict(one)})
+    m = app.comparison.month("2026-03")
+    assert m["replay_days"] == 0 and m["replay"]["fixed"]["cost_c"] == 0
+    assert app.comparison.sim_soc == {"fixed": 40.0}                   # its simulated battery still carries over
+    app._apply_replay(date(2026, 3, 10), {"fixed": dict(one), "dynamic": dict(one, cost_c=250.0)})
+    assert m["replay_days"] == 1
+    assert (m["replay"]["fixed"]["cost_c"], m["replay"]["dynamic"]["cost_c"]) == (300.0, 250.0)
 
 
 async def test_the_monthly_verdict_includes_the_best_battery_use(tmpdata):
