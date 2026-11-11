@@ -104,6 +104,7 @@ schema:
   peak_shaving_switch: str?
   peak_shaving_limit: str?
   peak_shaving_soc: str?
+  feed_in_priority_switch: str?
   forecast_power_now: str?
   forecast_today: str?
   forecast_tomorrow: str?

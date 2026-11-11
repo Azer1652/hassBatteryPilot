@@ -13,6 +13,9 @@ Pure function, so every rule can be tested without Home Assistant:
               step's own floor, when the plan sells below it at an extreme price);
 * peak_shave - the inverter's own peak-shaving mode at the import limit: the
               grid feeds the house, the battery only what is above the limit;
+* solar_hold - the inverter's feed-in priority while there is solar surplus: it is
+              exported, the battery waits; without surplus back to self-use (the
+              battery may not feed the house in that mode);
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -36,7 +39,9 @@ START_A = 15        # start charging only with some headroom (old playbook)
 
 # Modes that are ours to end: control off, a stop or lost measurements return the inverter to
 # self-use (failed: a command of ours may have half-applied).
-ACTIVE = ("charge", "discharge", "peak_shave", "failed")
+ACTIVE = ("charge", "discharge", "peak_shave", "solar_hold", "failed")
+HOLD_SURPLUS_KW = 0.3   # solar hold starts with this much surplus
+HOLD_DWELL_S = 120      # and is not started or ended within this time of the last command
 
 
 @dataclass
@@ -53,7 +58,7 @@ class Readings:
 
 @dataclass
 class Decision:
-    command: str             # none | charge | discharge | current | self_use | peak_shave
+    command: str             # none | charge | discharge | current | self_use | peak_shave | solar_hold
     amps: int = 0
     reason: str = ""
 
@@ -79,7 +84,7 @@ def paced_amps(step: Step, r: Readings, o: Options, up: bool) -> int:
 
 
 def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str, amps_now: int,
-           control_on: bool) -> Decision:
+           control_on: bool, mode_age_s: float = 1e9) -> Decision:
     hour = r.t_local.strftime("%H:00:00")
     if not control_on:
         if mode in ACTIVE:
@@ -132,6 +137,18 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         if mode != "peak_shave":
             return Decision("peak_shave", reason="plan: peak shaving (the battery is kept for later)")
         return Decision("none", reason="peak shaving")
+
+    if step.action == "solar_hold":
+        surplus = r.pv_kw - r.load_kw
+        if mode == "solar_hold":
+            if surplus >= 0 or mode_age_s < HOLD_DWELL_S:
+                return Decision("none", reason="solar hold: surplus goes to the grid")
+            return Decision("self_use", reason="no solar surplus: the battery feeds the house")
+        if surplus >= HOLD_SURPLUS_KW and (mode != "self_use" or mode_age_s >= HOLD_DWELL_S):
+            return Decision("solar_hold", reason="plan: solar surplus to the grid (room kept for later)")
+        if mode != "self_use":
+            return Decision("self_use", reason="solar hold waits for surplus")
+        return Decision("none", reason="solar hold waits for surplus")
 
     if mode != "self_use":
         why = "target reached" if step.action != "self_use" else "plan: self-use"

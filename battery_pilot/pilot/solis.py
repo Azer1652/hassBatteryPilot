@@ -10,6 +10,9 @@ Peak shaving (optional, when the integration has the switch): the inverter's own
 mode in which the grid feeds the house up to a set power and the battery only
 gives what is above it. Time of use is off then; every other command turns the
 peak-shaving switch off again.
+
+Solar hold (optional, when the integration has the feed-in priority switch): solar
+surplus goes to the grid and not into the battery. Handled like peak shaving.
 """
 from __future__ import annotations
 
@@ -21,7 +24,8 @@ log = logging.getLogger(__name__)
 
 NEEDED = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current",
           "charge_start", "charge_end", "discharge_start", "discharge_end")
-OPTIONAL = ("export_limit", "peak_shaving_switch", "peak_shaving_limit", "peak_shaving_soc")
+OPTIONAL = ("export_limit", "peak_shaving_switch", "peak_shaving_limit", "peak_shaving_soc",
+            "feed_in_priority_switch")
 
 
 def hour_slot(t_local: datetime) -> tuple[str, str]:
@@ -34,11 +38,12 @@ def hour_slot(t_local: datetime) -> tuple[str, str]:
 class Solis:
     ha: object                      # HA client
     entities: dict                  # key -> entity_id
-    mode: str = "unknown"           # what we last told it: self_use | charge | discharge | peak_shave,
+    mode: str = "unknown"           # what we last told it: self_use | charge | discharge | peak_shave | solar_hold,
                                     # unknown (nothing yet) or failed (a command failed half-way)
     slot_hour: str = ""             # local hour the slot was set for
     amps: int = 0
     shave: bool | None = None       # the peak-shaving switch as we last set it (None: not known)
+    hold: bool | None = None        # the feed-in priority switch as we last set it (None: not known)
     shave_set: tuple | None = None  # (limit, SOC) last written for peak shaving: written again only when changed
     shave_limit_per_kw: float = 1000.0   # the limit number is in W (1000) or kW (1)
     log: list = field(default_factory=list)   # recent commands for the dashboard
@@ -59,10 +64,26 @@ class Solis:
         if "peak_shaving_switch" in self.entities and self.shave is not False:
             await self._call("switch", "turn_off", "peak_shaving_switch")
             self.shave = False
+        if "feed_in_priority_switch" in self.entities and self.hold is not False:
+            await self._call("switch", "turn_off", "feed_in_priority_switch")
+            self.hold = False
+
+    async def solar_hold(self, t_local: datetime):
+        """Solar surplus to the grid, not into the battery (the inverter's feed-in priority)."""
+        await self._call("switch", "turn_off", "tou_switch")
+        if "peak_shaving_switch" in self.entities and self.shave is not False:
+            await self._call("switch", "turn_off", "peak_shaving_switch")
+            self.shave = False
+        await self._call("switch", "turn_on", "feed_in_priority_switch")
+        self.mode, self.slot_hour, self.amps, self.hold = "solar_hold", "", 0, True
+        self._note(t_local, "solar hold: surplus to the grid")
 
     async def peak_shave(self, t_local: datetime, limit_kw: float, soc: float):
         """Grid up to `limit_kw`, the battery above it; `soc`: the level the inverter keeps in the battery."""
         await self._call("switch", "turn_off", "tou_switch")
+        if "feed_in_priority_switch" in self.entities and self.hold is not False:
+            await self._call("switch", "turn_off", "feed_in_priority_switch")
+            self.hold = False
         limit = round(limit_kw * self.shave_limit_per_kw, 2 if self.shave_limit_per_kw < 10 else 0)
         if self.shave_set != (limit, soc):
             if "peak_shaving_limit" in self.entities:

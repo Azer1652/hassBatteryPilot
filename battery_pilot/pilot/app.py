@@ -117,6 +117,7 @@ class App:
         self._cmd_failures = 0
         self._tou_mismatch = 0
         self._shave_mismatch = 0
+        self._hold_mismatch = 0
         self._shave_soc = float(opts.battery_min_soc)
         self._inverter_saved: dict | None = None
         self._forecast_out = False
@@ -340,7 +341,7 @@ class App:
     async def tick(self):
         now = self.clock()
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_soc",
-                "battery_voltage", "tou_switch", "peak_shaving_switch")
+                "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch")
         sts = await self._states(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), return_exceptions=True)
         self.control_on = self._helper("control", helpers[0], self.control_on, now)
@@ -366,11 +367,13 @@ class App:
         step = self.plan.step_at(now) if self.plan else None
         if self.solis:
             self._reconcile(now, (sts.get("tou_switch") or {}).get("state"),
-                            (sts.get("peak_shaving_switch") or {}).get("state"))
+                            (sts.get("peak_shaving_switch") or {}).get("state"),
+                            (sts.get("feed_in_priority_switch") or {}).get("state"))
             # (a charge or discharge is not stopped for the last minutes before a slot boundary)
             step = step_to_follow(self.plan, now, Battery.from_options(self.o), self.solis.mode)
             self.decision = decide(step, self.readings, self.o, self.solis.mode, self.solis.slot_hour,
-                                   self.solis.amps, self.control_on)
+                                   self.solis.amps, self.control_on,
+                                   (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9)
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
@@ -423,22 +426,29 @@ class App:
             self.decision = Decision("self_use", reason="measurements unavailable")
             await self._apply(self.decision, local)
 
-    def _reconcile(self, now: datetime, tou: str | None, shave: str | None = None):
+    def _reconcile(self, now: datetime, tou: str | None, shave: str | None = None, hold: str | None = None):
         """Read the time-of-use and peak-shaving switches back: if something else changed one, the
         next command corrects it."""
         s = self.solis
         settling = self._cmd_at is not None and (now - self._cmd_at).total_seconds() < TOU_SETTLE_S
         if not self.control_on or tou not in ("on", "off") or settling:
-            self._tou_mismatch = self._shave_mismatch = 0
+            self._tou_mismatch = self._shave_mismatch = self._hold_mismatch = 0
             return
-        wrong = (tou == "on" and s.mode in ("self_use", "peak_shave")) \
+        wrong = (tou == "on" and s.mode in ("self_use", "peak_shave", "solar_hold")) \
             or (tou == "off" and s.mode in ("charge", "discharge"))
         self._tou_mismatch = self._tou_mismatch + 1 if wrong else 0
         if self._tou_mismatch >= 2:
             self._tou_mismatch = 0
             s.mode = "failed" if tou == "on" else "self_use"
             self.event(f"The inverter's time-of-use switch is {tou}, not what Battery Pilot set; correcting it.")
-        wrong = (shave == "on" and s.mode in ("self_use", "charge", "discharge")) \
+        wrong = (hold == "on" and s.mode in ("self_use", "charge", "discharge", "peak_shave")) \
+            or (hold == "off" and s.mode == "solar_hold")
+        self._hold_mismatch = self._hold_mismatch + 1 if wrong else 0
+        if self._hold_mismatch >= 2:
+            self._hold_mismatch = 0
+            s.mode, s.hold = ("failed", None) if hold == "on" else ("self_use", False)
+            self.event(f"The inverter's feed-in priority switch is {hold}, not what Battery Pilot set; correcting it.")
+        wrong = (shave == "on" and s.mode in ("self_use", "charge", "discharge", "solar_hold")) \
             or (shave == "off" and s.mode == "peak_shave")
         self._shave_mismatch = self._shave_mismatch + 1 if wrong else 0
         if self._shave_mismatch >= 2:
@@ -448,7 +458,7 @@ class App:
             self.event(f"The inverter's peak-shaving switch is {shave}, not what Battery Pilot set; correcting it.")
 
     async def _apply(self, d: Decision, local: datetime):
-        if d.command not in ("charge", "discharge", "current", "self_use", "peak_shave"):
+        if d.command not in ("charge", "discharge", "current", "self_use", "peak_shave", "solar_hold"):
             return
         self._cmd_at = self.clock()
         try:
@@ -458,6 +468,8 @@ class App:
                 await self.solis.discharge(local, d.amps)
             elif d.command == "current":
                 await self.solis.set_current(local, d.amps)
+            elif d.command == "solar_hold":
+                await self.solis.solar_hold(local)
             elif d.command == "peak_shave":
                 await self.solis.peak_shave(local, self.o.import_limit_kw, self._shave_soc)
             else:
@@ -467,7 +479,7 @@ class App:
                 self.problem = None
         except Exception as e:  # noqa: BLE001
             self.solis.mode = "failed"        # its state is not known: the next tick sends the command again
-            self.solis.shave = self.solis.shave_set = None
+            self.solis.shave = self.solis.shave_set = self.solis.hold = None
             self._cmd_failures += 1
             now, key = self.clock(), "cmdfail:" + d.command
             last = self._last.get(key)
@@ -482,6 +494,11 @@ class App:
     def can_peak_shave(self) -> bool:
         """The inverter's peak-shaving switch was found: the plan may leave the house on the grid."""
         return "peak_shaving_switch" in self.ent_ids
+
+    @property
+    def can_solar_hold(self) -> bool:
+        """The inverter's feed-in priority switch was found: the plan may put solar charging off."""
+        return "feed_in_priority_switch" in self.ent_ids
 
     @property
     def blocks_negative_export(self) -> bool:
@@ -636,7 +653,7 @@ class App:
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz),
                               month_peak_kw=self.peaks.month_peak(now, self.tz), current_action=current,
-                              peak_shave=self.can_peak_shave)
+                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
         self._log_plan(now)
         boost, seen = self.plan.boost, self.boost_seen
         # The plan is redone every few minutes while a boost runs: announce a window once, unless
@@ -744,7 +761,7 @@ class App:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
             res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
                              block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
-                             peak_shave=self.can_peak_shave)
+                             peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
             if res is None:
                 return None
             results[kind] = res

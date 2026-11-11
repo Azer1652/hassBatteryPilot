@@ -178,7 +178,7 @@ class Comparison:
 def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo, prices: list[PriceSlot],
                load: LoadProfile, pv_forecast, soc0: float, market_avg: float | None,
                replan_every_h: int = 1, block_negative: bool = False, month_peak_kw: float = 0.0,
-               peak_shave: bool = False) -> dict | None:
+               peak_shave: bool = False, solar_hold: bool = False) -> dict | None:
     """Replay one day of measured quarters on a contract with its battery strategy.
 
     `pv_forecast(t0, t1)` is the (shade-corrected) forecast the app had; the plan uses
@@ -188,6 +188,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     `month_peak_kw`: this contract's highest quarter-hour so far this month (the plan may charge
     above the import limit when that pays more than a higher peak costs).
     `peak_shave`: the inverter has a peak-shaving switch, so the plan may use it.
+    `solar_hold`: it has a feed-in priority switch, so the plan may put solar charging off.
     """
     recs = sorted(records, key=lambda r: r.start)
     good = [r for r in recs if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5]
@@ -206,7 +207,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
                              peak_kw=lambda a, z: load.peak_kw(a, z, tz),
                              month_peak_kw=max(month_peak_kw, out["peak_kw"]),
                              current_action=sticky_action(plan, r.start, soc, o.battery_reserve_soc),
-                             peak_shave=peak_shave)
+                             peak_shave=peak_shave, solar_hold=solar_hold)
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:

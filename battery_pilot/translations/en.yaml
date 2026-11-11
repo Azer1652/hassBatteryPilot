@@ -155,6 +155,9 @@ configuration:
   peak_shaving_limit:
     name: "Peak-shaving grid power entity"
     description: "Leave empty to find it automatically (number …peak_max_usable_grid_power). Battery Pilot sets it to the import limit when it switches peak shaving on."
+  feed_in_priority_switch:
+    name: "Feed-in priority switch entity"
+    description: "Leave empty to find it automatically (switch …feed_in_priority). With it, Battery Pilot can send solar surplus to the grid first and keep room in the battery for hours in which the surplus cannot be sold (negative price, export limit)."
   peak_shaving_soc:
     name: "Peak-shaving baseline SOC entity"
     description: "Leave empty to find it automatically (number …peak_baseline_soc). Battery Pilot sets it to the battery minimum, so the inverter does not refill the battery from the grid by itself."

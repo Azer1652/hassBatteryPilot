@@ -8,7 +8,10 @@ slot the battery can only do what the Solis can be told to do:
 * discharge - discharge on top of the house deficit and export the rest;
 * peak_shave - (only with the inverter's peak-shaving switch) the grid covers the
               house up to the import limit and the battery only what is above it:
-              the way to keep what is in the battery for a dearer hour.
+              the way to keep what is in the battery for a dearer hour;
+* solar_hold - (only with the inverter's feed-in priority switch) solar surplus is
+              exported and not stored: the way to keep room in the battery for hours
+              in which the surplus cannot be sold (negative price, export limit).
 
 The cost of a slot is what is bought minus what is sold, plus battery wear,
 plus a penalty for grid import above the import limit (the capacity tariff).
@@ -102,7 +105,7 @@ class Slot:
 class Step:
     start: datetime
     hours: float
-    action: str              # self_use | charge | discharge | peak_shave
+    action: str              # self_use | charge | discharge | peak_shave | solar_hold
     soc_start: float
     soc_end: float
     import_kwh: float
@@ -221,20 +224,24 @@ def _cheapest(after: list[float], s: int, own: tuple, held: tuple | None, charge
     return best, best_d
 
 
-PASSIVE = ("self_use", "peak_shave")    # no time-of-use slot: going from one to the other is one switch
+PASSIVE = ("self_use", "peak_shave", "solar_hold")   # no time-of-use slot: going between them is one switch
 SHAVE = "peak_shave"
+HOLD = "solar_hold"
 
 
 def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, float] | None = None,
              allow_export: bool = True, curtail_negative: bool = False,
              terminal_c_kwh: float = 0.0, extreme: frozenset[int] = frozenset(),
-             first_action: str | None = None, peak_shave: bool = False) -> list[Step]:
+             first_action: str | None = None, peak_shave: bool = False,
+             solar_hold: bool = False) -> list[Step]:
     """Cheapest sequence of actions. `targets[i]` = minimum SOC at the end of slot i.
 
     In the `extreme` slots the battery may be exported even when `allow_export` is False,
     and down to its minimum instead of the reserve. `first_action`: what is being done now;
     doing something else in the first slot costs SWITCH_COST_C. `peak_shave`: the inverter
-    has a peak-shaving switch, so a slot can also leave the house on the grid."""
+    has a peak-shaving switch, so a slot can also leave the house on the grid. `solar_hold`: it has
+    a feed-in priority switch, so a slot with solar surplus can also export it all and keep the
+    battery's room for later (a negative sell price, or more surplus than may be exported)."""
     if not slots:
         return []
     targets = targets or {}
@@ -302,6 +309,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
             # comes an hour at a time: a cost here would put the change off at every replan.
             return 0.0 if action in PASSIVE and first_action in PASSIVE else SWITCH_COST_C
         sw_self, sw_charge, sw_dis, sw_shave = (switch(a) for a in ("self_use", "charge", "discharge", SHAVE))
+        can_hold = solar_hold and not (curtail_negative and sl.sell < 0)   # export blocked: nothing to gain
         act = ACTION_COST_C_PER_H * sl.hours
         cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
         floor = smin if t in extreme else sres
@@ -325,18 +333,23 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
                     pt = y - fl
                 else:
                     y = None
+            holding = can_hold and x > 1e-9       # the battery would charge from solar: it can also wait
+            if holding:
+                y, fl, pt = 0.0, 0, 0.0
+                if y not in shave_cost:
+                    shave_cost[y] = _flow(b, sl, 0.0, curtail_negative)[0]
 
             own = (self_cost[x] + risk + sw_self, s + below, part)
             held = None if y is None else (shave_cost[y] + risk + sw_shave, s + fl, pt)
             charges = range(max(ds, 0) + cmin, hi + 1)
             exports = range(max(lo, floor - s), min(ds, 0)) if allow_export or t in extreme else range(0)
             extra = (act + risk + sw_charge, act + risk + sw_dis, cap_kwh)
-            pays = False
+            pays = holding     # holding solar leaves less in the battery: no second valuation needed
             if low is not None:
                 cur_low[s], _ = _cheapest(low, s, own, held, charges, exports, table, extra)
                 # peak shaving only where it beats self-use on the low valuation
-                pays = held is not None and (held[0] + between(low, held[1], held[2])
-                                             < own[0] + between(low, own[1], own[2]) - 1e-9)
+                pays = pays or (held is not None and (held[0] + between(low, held[1], held[2])
+                                                      < own[0] + between(low, own[1], own[2]) - 1e-9))
             cur[s], ch[s] = _cheapest(nxt, s, own, held if pays else None, charges, exports, table, extra)
         choice[t] = ch
         nxt = cur
@@ -353,6 +366,9 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         if d is None:
             action, d = "self_use", ds
             cost, imp, exp, cap = _flow(b, sl, min(max(exact[t], lo), hi) * e, curtail_negative)
+        elif d == SHAVE and min(max(exact[t], lo), hi) > 1e-9:
+            action, d = HOLD, 0
+            cost, imp, exp, cap = _flow(b, sl, 0.0, curtail_negative)
         elif d == SHAVE:
             y = max(shave[t], lo)
             action, d = SHAVE, int(round(y))
@@ -461,11 +477,12 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
               curtail_negative: bool = False, horizon_h: int = 36,
               forecast_until: datetime | None = None, peak_kw: LoadFn | None = None,
               month_peak_kw: float = 0.0, current_action: str | None = None,
-              peak_shave: bool = False) -> Plan:
+              peak_shave: bool = False, solar_hold: bool = False) -> Plan:
     """`forecast_until`: end of the solar forecast; nights after it get no winter target.
     `month_peak_kw`: the highest quarter-hour import so far this month (for the capacity cost).
     `current_action`: what the previous plan is still doing now (see `sticky_action`).
-    `peak_shave`: the inverter's peak-shaving switch was found, so the plan may use it."""
+    `peak_shave`: the inverter's peak-shaving switch was found, so the plan may use it.
+    `solar_hold`: its feed-in priority switch was found, so solar charging can be put off."""
     b = Battery.from_options(o)
     end = now + timedelta(hours=horizon_h)
     minutes = 60
@@ -537,11 +554,11 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
     allow_export = not (winter and o.winter_mode == "full_day")
     extreme = extreme_slots(b, slots)
     steps = optimize(b, slots, soc, targets, allow_export, curtail_negative, terminal, extreme, current_action,
-                     peak_shave)
+                     peak_shave, solar_hold)
     boost = None
     if o.capacity_tariff_eur_kw_year > 0 and steps:
         steps, boost = _boost(b, o, slots, soc, targets, allow_export, curtail_negative, terminal, extreme,
-                              steps, now, tz, month_peak_kw, current_action, peak_shave)
+                              steps, now, tz, month_peak_kw, current_action, peak_shave, solar_hold)
     return Plan(steps, now, tariff.kind, target_info, winter, allow_export, boost)
 
 
@@ -628,7 +645,8 @@ def _money_c(b: Battery, steps: list[Step], terminal_c_kwh: float) -> float:
 def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict, allow_export: bool,
            curtail_negative: bool, terminal: float, extreme: frozenset[int], normal: list[Step],
            now: datetime, tz: ZoneInfo, month_peak_kw: float,
-           current_action: str | None = None, peak_shave: bool = False) -> tuple[list[Step], dict | None]:
+           current_action: str | None = None, peak_shave: bool = False,
+           solar_hold: bool = False) -> tuple[list[Step], dict | None]:
     """Try charging above the import limit; keep it only when it beats the normal plan after the capacity cost."""
     free_now = max(month_peak_kw, o.capacity_min_kw)
     free_later = o.capacity_min_kw
@@ -663,7 +681,7 @@ def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict,
         if bound - max(level - free_now, 0.0) * rate < BOOST_MIN_GAIN_C:
             continue
         steps = optimize(replace(b, import_limit_kw=level), slots, soc, targets, allow_export, curtail_negative,
-                         terminal, extreme, current_action, peak_shave)
+                         terminal, extreme, current_action, peak_shave, solar_hold)
         cap = limit - CHARGE_HEADROOM_KW
         for st in steps:                # only the steps that charge above the normal limit follow the higher one
             if st.action == "charge" and st.import_kwh / st.hours > cap + 0.05:
