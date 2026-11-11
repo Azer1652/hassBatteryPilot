@@ -15,10 +15,12 @@ Two views, kept per month:
   Battery wear (wear cost x kWh discharged) is included, because a strategy
   that cycles more wears the battery more.
 
-Contract fees and the capacity tariff are added at report time.
+Contract fees and the capacity tariff are added at report time, for the part of the month
+the amounts cover (the quarter-hours with a price, or the days replayed).
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -37,6 +39,11 @@ KINDS = ("fixed", "dynamic")
 
 def _month(t: datetime, tz: ZoneInfo) -> str:
     return t.astimezone(tz).strftime("%Y-%m")
+
+
+def _month_days(key: str) -> int:
+    year, month = key.split("-")
+    return calendar.monthrange(int(year), int(month))[1]
 
 
 def _blank():
@@ -110,7 +117,12 @@ class Comparison:
         p = "p_" if m["market_n"] else ""        # with prices: the same quarters as the dynamic side
         fixed_energy = (m[p + "imp_day"] * (o.fixed_day_rate + o.grid_fees_c_kwh)
                         + m[p + "imp_night"] * (o.fixed_night_rate + o.grid_fees_c_kwh) - m[p + "exp"] * fixed_sell) / 100
-        cap = capacity_month_eur(m["peak_kw"], o)
+        # Fees and the capacity tariff count for the part of the month that is in the bill: a few
+        # priced hours against a whole month of fees made the contract with the lower fee look cheaper.
+        days = _month_days(key)
+        counted = m["market_n"] if p else m["quarters"]
+        share = min(counted / (days * 96), 1.0) if m["quarters"] else 1.0     # (taken over from Playbook: whole month)
+        cap = capacity_month_eur(m["peak_kw"], o) * share
         out = {
             "month": key,
             "market_avg_eur_mwh": round(avg, 1) if avg is not None else None,
@@ -118,20 +130,23 @@ class Comparison:
             "sold_kwh": round(m["exp"], 1),
             "peak_kw": round(m["peak_kw"], 2),
             "same_usage": {
-                "fixed_eur": round(fixed_energy + o.fixed_yearly_fee_eur / 12 + cap, 2),
-                "dynamic_eur": round(m["dyn_c"] / 100 + o.dynamic_yearly_fee_eur / 12 + cap, 2)
+                "fixed_eur": round(fixed_energy + o.fixed_yearly_fee_eur / 12 * share + cap, 2),
+                "dynamic_eur": round(m["dyn_c"] / 100 + o.dynamic_yearly_fee_eur / 12 * share + cap, 2)
                 if m["market_n"] else None,
             },
+            "days": round(days * share, 1),          # days of the month the same-usage amounts cover
+            "month_days": days,
             "replay_days": m["replay_days"],
             "estimated_quarters": m["estimated"],
             "with_strategy": None,
         }
         if m["replay_days"]:
             ws = {}
+            part = min(m["replay_days"] / days, 1.0)         # the replayed days' part of the month
             for kind in KINDS:
                 r = m["replay"][kind]
                 fee = (o.fixed_yearly_fee_eur if kind == "fixed" else o.dynamic_yearly_fee_eur) / 12
-                ws[kind] = {"eur": round(r["cost_c"] / 100 + fee + capacity_month_eur(r["peak_kw"], o), 2),
+                ws[kind] = {"eur": round(r["cost_c"] / 100 + (fee + capacity_month_eur(r["peak_kw"], o)) * part, 2),
                             "bought_kwh": round(r["imp"], 1), "sold_kwh": round(r["exp"], 1),
                             "battery_in_kwh": round(r["charged"], 1), "battery_out_kwh": round(r["discharged"], 1),
                             "grid_charged_kwh": round(r.get("grid_charged", 0.0), 1),

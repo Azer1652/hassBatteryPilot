@@ -129,7 +129,10 @@ the inverter back in self-use when it stops, when its measurements are lost and 
   day counts only when both contracts could be replayed. This answers:
   what would each contract have cost me, with the battery used the best way for it?
 
-Both include the contract fees and the capacity tariff. The sidebar page shows every
+Both include the contract fees and the capacity tariff, for the part of the month the
+amounts cover: a month that is not complete (the current one, or the month you installed
+the app or added prices) shows "3.2 of 30 days" and carries the fees of those days only.
+A few days say little yet. The sidebar page shows every
 month; the sensor `sensor.battery_pilot_contract_comparison` holds the 12-month
 difference (negative means dynamic is cheaper).
 

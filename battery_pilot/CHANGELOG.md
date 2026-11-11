@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.2
+
+- **The comparison no longer favours the contract with the lower yearly fee in a month that has
+  only just started.** Contract fees and the capacity tariff were counted for the whole month
+  from the first priced quarter-hour, so a few hours of energy stood against a month of fees:
+  the dynamic contract looked € 4 cheaper while its energy cost more. They now count for the days
+  the amounts cover, and a month that is not complete says so ("3.2 of 30 days").
+
 ## 2.11.1
 
 - **Default rates brought up to Eneco's November 2026 card** (Zon & Wind Dynamisch, Fluvius

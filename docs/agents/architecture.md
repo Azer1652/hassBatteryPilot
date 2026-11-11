@@ -136,7 +136,9 @@ replaces the plan's step by `fill_step` (charge to 100 % in the current clock ho
 
 `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
 (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
-tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices
+tariff are added in `report()`, for the share of the month the amounts cover (priced quarters, or
+replayed days, over the calendar month; a month taken over from Playbook counts whole): a full month
+of fees against a few priced hours made the contract with the lower fee look cheaper. Both contracts must cover the same hours: a month with market prices
 is priced on the quarters that have one (`p_imp_day`, `p_imp_night`, `p_exp`), and a day enters the
 replay totals only when both contracts were replayed. `App.daily_market` (the fixed sell price
 follows the month's average) is taken from whole days only: the price archive keeps 3 days, and

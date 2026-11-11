@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.11.1"
+version: "2.11.2"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery

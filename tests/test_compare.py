@@ -130,7 +130,43 @@ def test_same_usage_prices_both_contracts_on_the_quarters_that_have_a_price():
     r = none.report("2026-06", o)                                     # no prices at all: the fixed bill only
     assert r["same_usage"]["dynamic_eur"] is None
     energy = 6.0 * (o.fixed_night_rate + o.grid_fees_c_kwh) / 100 - 2.4 * FixedTariff(o).sell(None, None, 0.0) / 100
-    assert r["same_usage"]["fixed_eur"] == pytest.approx(energy + o.fixed_yearly_fee_eur / 12 + 2.5 * 52.37 / 12, abs=0.01)
+    share = 24 / (30 * 96)                    # 24 quarter-hours of June: fees and capacity tariff for that part
+    assert r["same_usage"]["fixed_eur"] == pytest.approx(
+        energy + (o.fixed_yearly_fee_eur / 12 + 2.5 * 52.37 / 12) * share, abs=0.01)
+
+
+def test_fees_count_for_the_part_of_the_month_that_is_in_the_bill():
+    """A few priced hours against a whole month of fees: the contract with the lower yearly fee
+    looked cheaper by that fee (4 EUR a month) although its energy cost more."""
+    o = Options(fixed_yearly_fee_eur=65, dynamic_yearly_fee_eur=15)
+    c = Comparison()
+    for h in range(8):                                             # one evening with prices, market at 350 EUR/MWh
+        c.add_quarter(_quarter(h), 350.0, o, BXL)
+    r = c.report("2026-06", o)
+    assert r["days"] == pytest.approx(8 / 96, abs=0.05) and r["month_days"] == 30
+    assert r["same_usage"]["dynamic_eur"] > r["same_usage"]["fixed_eur"]      # the dearer energy decides
+    assert r["same_usage"]["fixed_eur"] < 1.0                                  # not a month of fees
+    full = Comparison()
+    m = full.month("2026-06")
+    m.update(quarters=30 * 96, market_n=30 * 96, market_sum=100.0 * 30 * 96)
+    whole = full.report("2026-06", o)                                         # a whole month: the whole fees
+    assert whole["days"] == 30
+    assert whole["same_usage"]["fixed_eur"] == pytest.approx(65 / 12 + 2.5 * 52.37 / 12, abs=0.01)
+    assert whole["same_usage"]["dynamic_eur"] == pytest.approx(15 / 12 + 2.5 * 52.37 / 12, abs=0.01)
+
+
+def test_replayed_days_carry_their_part_of_the_fees():
+    o = Options()
+    c = Comparison()
+    key = "2026-06"
+    for kind in ("fixed", "dynamic"):
+        c.add_replay(key, kind, {"cost_c": 300.0, "imp": 10.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0,
+                                 "grid_charged": 0.0, "peak_kw": 2.0})
+    c.month(key)["replay_days"] = 3
+    ws = c.report(key, o)["with_strategy"]
+    part = 3 / 30
+    assert ws["fixed"]["eur"] == pytest.approx(3.0 + (o.fixed_yearly_fee_eur / 12 + 2.5 * 52.37 / 12) * part, abs=0.01)
+    assert ws["dynamic"]["eur"] == pytest.approx(3.0 + (o.dynamic_yearly_fee_eur / 12 + 2.5 * 52.37 / 12) * part, abs=0.01)
 
 
 def test_a_month_saved_before_priced_quarters_were_kept_apart_is_unchanged():
