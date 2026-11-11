@@ -76,6 +76,7 @@ def evening(h):
     return 0.21 if 18 <= h < 22 else 0.02 if 11 <= h < 17 else 0.095
 
 
+@pytest.mark.slow
 async def test_an_evening_export_is_not_switched_back_and_forth(tmpdata):
     """It flipped 7 times in one hour before the switch cost."""
     app, fake, writes, (lo, _) = await run(tmpdata, utc(2026, 6, 14, 17, 30), utc(2026, 6, 14, 23, 0), 90, evening, 35,
@@ -86,6 +87,7 @@ async def test_an_evening_export_is_not_switched_back_and_forth(tmpdata):
     assert any(c[1] == "set_value" and "discharge_current" in c[2]["entity_id"] for c in fake.calls)   # it did sell
 
 
+@pytest.mark.slow
 async def test_prices_near_break_even_do_not_make_the_inverter_hop(tmpdata):
     _, _, writes, _ = await run(tmpdata, utc(2026, 6, 14, 6, 0), utc(2026, 6, 14, 18, 0), 50,
                                 lambda h: [0.09, 0.11, 0.10, 0.12, 0.095, 0.115][h % 6], 20, lambda t: 0.45)
@@ -93,6 +95,7 @@ async def test_prices_near_break_even_do_not_make_the_inverter_hop(tmpdata):
     assert switches(writes) <= 6
 
 
+@pytest.mark.slow
 async def test_a_wobbling_house_load_lowers_the_charge_current_instead_of_pausing(tmpdata):
     """Cooking on and off every two minutes during a winter night charge."""
     wobble = lambda t: 0.8 if (t.minute // 2) % 2 == 0 else 1.1   # noqa: E731
@@ -137,6 +140,7 @@ async def negative_noon_with_a_high_month_peak(tmpdata, end):
     return app, fake
 
 
+@pytest.mark.slow
 async def test_a_boost_is_announced_once_and_stays_within_the_paid_peak(tmpdata):
     app, fake = await negative_noon_with_a_high_month_peak(tmpdata, utc(2026, 3, 10, 14, 30))
     announced = [e for e in app.events if e["text"].startswith("Plan: charging above the import limit")]
@@ -144,6 +148,7 @@ async def test_a_boost_is_announced_once_and_stays_within_the_paid_peak(tmpdata)
     assert app.peaks.month_peak(fake.now, TZ) <= 3.6 + 0.15          # the meter agrees with what was paid for
 
 
+@pytest.mark.slow
 async def test_a_restart_during_a_boost_keeps_charging_above_the_limit_without_a_new_announcement(tmpdata):
     app, fake = await negative_noon_with_a_high_month_peak(tmpdata, utc(2026, 3, 10, 12, 20))
     app.save_state()

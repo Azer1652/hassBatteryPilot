@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(python -m ruff check:*)",
+      "Bash(ruff check:*)",
+      "Bash(python tools/check.py:*)",
+      "Bash(python tools/plan_probe.py:*)",
+      "Bash(python tools/yearsim.py:*)",
+      "Bash(python tools/release.py --dry-run:*)",
+      "Bash(python tools/demo_dashboard.py:*)",
+      "Bash(bash tools/page.sh:*)",
+      "Bash(node tools/pagecheck.cjs:*)",
+      "Bash(node tools/screenshots.cjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)"
+    ]
+  }
+}

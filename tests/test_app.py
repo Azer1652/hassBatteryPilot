@@ -38,6 +38,7 @@ def tmpdata(tmp_path):
     return str(tmp_path / "data")
 
 
+@pytest.mark.slow
 async def test_winter_night_charges_to_target_under_the_import_limit(tmpdata):
     start = utc(2026, 1, 14, 21, 0)
     spike = (utc(2026, 1, 15, 1, 32), utc(2026, 1, 15, 1, 42))
@@ -323,6 +324,7 @@ async def test_unreachable_home_assistant_is_explained_once(tmpdata, caplog):
     assert await app.setup() and app.problem is None
 
 
+@pytest.mark.slow
 async def test_history_planned_vs_actual(tmpdata):
     """A day is kept with the day-ahead plan, the plan of every hour and what really happened."""
     fc = {**winter_forecast(datetime(2026, 3, 10), 12), **winter_forecast(datetime(2026, 3, 11), 12)}

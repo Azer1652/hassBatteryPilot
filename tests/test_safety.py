@@ -94,6 +94,7 @@ async def test_when_self_use_also_fails_it_keeps_trying(tmpdata):
     assert fake.s[TOU]["state"] == "off"
 
 
+@pytest.mark.slow
 async def test_a_lost_house_load_sensor_does_not_stop_the_night_charge(tmpdata):
     app, fake = await charging_night(tmpdata)
     target = app.plan.targets[0]["soc"]

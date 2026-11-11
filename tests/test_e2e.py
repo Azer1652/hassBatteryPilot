@@ -98,6 +98,7 @@ async def test_an_extreme_price_sells_below_the_reserve_through_the_solis(tmpdat
 
 
 # ---------------------------------------------------------------- a disappointing sun
+@pytest.mark.slow
 async def test_when_the_sun_disappoints_the_dear_evening_is_still_covered(tmpdata, monkeypatch):
     """The evening before, the battery was sold for a 35 kWh day; only half of it comes. The replans
     see the battery fill more slowly and keep it for the dear evening instead of selling more."""
@@ -139,6 +140,7 @@ async def test_a_cloudy_day_lowers_what_the_plan_expects_from_the_afternoon(tmpd
 
 # ---------------------------------------------------------------- the DST nights
 @pytest.mark.parametrize("night,hours", [(date(2026, 3, 28), 23), (date(2026, 10, 24), 25)])
+@pytest.mark.slow
 async def test_a_winter_night_charge_across_a_clock_change(tmpdata, night, hours):
     day = night + timedelta(days=1)
     fake = FakeHA(datetime.combine(night, datetime.min.time().replace(hour=22), TZ).astimezone(timezone.utc), soc=20,
@@ -208,6 +210,7 @@ async def shaving_night(tmpdata, **opts):
     return app, fake, log
 
 
+@pytest.mark.slow
 async def test_a_winter_night_in_peak_shaving_keeps_the_battery_for_the_day(tmpdata):
     app, fake, log = await shaving_night(tmpdata)
     assert not app.plan.targets[0]["applied"] and not app.plan.targets[0]["pays"]      # no night filling
@@ -256,6 +259,7 @@ async def test_peak_shaving_is_ended_when_the_measurements_are_lost(tmpdata):
     assert fake.s[SHAVE]["state"] == "off"
 
 
+@pytest.mark.slow
 async def test_a_peak_shaving_switch_changed_by_something_else_is_corrected(tmpdata):
     app, fake, _ = await shaving_night(tmpdata)
     fake.s[SHAVE]["state"] = "off"                        # someone switched it off

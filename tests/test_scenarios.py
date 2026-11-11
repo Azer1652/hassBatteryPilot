@@ -17,6 +17,7 @@ from fake_ha import RATES_EARLY_2026  # noqa: E402
 from pilot.config import Options  # noqa: E402
 
 LIMIT = Options().import_limit_kw
+pytestmark = pytest.mark.slow       # whole simulated weeks: left out of `python tools/check.py --fast`
 
 
 def week(start, **kw):

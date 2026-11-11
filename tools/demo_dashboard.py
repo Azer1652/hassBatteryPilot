@@ -114,8 +114,11 @@ async def main(days: int, port: int, seconds: float | None):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=365)
+    ap.add_argument("--days", type=int, default=365,
+                    help="days of synthetic history (a year takes about 5 minutes; the screenshots need it)")
+    ap.add_argument("--quick", action="store_true",
+                    help="3 days of history: ready in about 20 s, enough to look at or check the page")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--seconds", type=float, default=None, help="stop after this many seconds")
     a = ap.parse_args()
-    asyncio.run(main(a.days, a.port, a.seconds))
+    asyncio.run(main(3 if a.quick else a.days, a.port, a.seconds))

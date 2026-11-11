@@ -106,12 +106,15 @@ low winter sun behind trees. On the right are the monthly peaks against the impo
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-pytest                                   # the whole suite, including simulated nights and weeks
+pip install -r requirements-dev.txt ruff
+python tools/check.py                    # lint and the whole suite (--fast skips the slow tests)
+python tools/plan_probe.py --help        # print the plan for a situation you describe
 python tools/yearsim.py                  # a synthetic year: monthly costs for both contracts
-python tools/demo_dashboard.py           # the dashboard with demo data on http://127.0.0.1:8765/
-node tools/screenshots.cjs               # regenerate docs/screenshots (needs Playwright)
+python tools/demo_dashboard.py --quick   # the page with demo data on http://127.0.0.1:8765/
+bash tools/page.sh                       # check the page in a real browser (needs Playwright)
+node tools/screenshots.cjs               # regenerate docs/screenshots (after the full demo)
 ```
 
 CI runs ruff, the tests on Python 3.12 and 3.13, the Home Assistant add-on linter and an
-image build. See [CLAUDE.md](CLAUDE.md) for the architecture.
+image build. [CLAUDE.md](CLAUDE.md) is the starting point for anyone changing the code, human or
+agent; the architecture, recipes and known traps are in [docs/agents](docs/agents).

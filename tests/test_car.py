@@ -172,6 +172,7 @@ async def session(tmp_path, name, soc=60, peak_shaving=True, **opts):
     return app, fake, highest[0], run
 
 
+@pytest.mark.slow
 async def test_the_cars_peak_is_shaved_while_the_battery_lasts(tmp_path):
     app, fake, peak, run = await session(tmp_path, "on", car_min_kw=3.5)
     texts = [e["text"] for e in app.events]
@@ -304,6 +305,7 @@ async def fill_day(tmp_path, peak_shaving=True):
     return app, fake, run
 
 
+@pytest.mark.slow
 async def test_the_fill_switch_fills_the_battery_before_the_car_and_ends_with_it(tmp_path):
     app, fake, run = await fill_day(tmp_path)
     await app.set_fill(True)
@@ -323,6 +325,7 @@ async def test_the_fill_switch_fills_the_battery_before_the_car_and_ends_with_it
     assert app.status()["car"]["fill"] is False and app.fill_since == ""
 
 
+@pytest.mark.slow
 async def test_the_fill_switch_ends_after_a_day_or_by_hand_and_needs_control(tmp_path):
     app, fake, run = await fill_day(tmp_path, peak_shaving=False)
     fake.load_fn = lambda t: 0.4                                    # the car never comes
@@ -417,6 +420,7 @@ def test_the_plan_stops_at_the_peak_buffer():
     assert min(s.soc_end for s in plain) == 20
 
 
+@pytest.mark.slow
 async def test_a_peak_at_the_buffer_stays_at_the_import_limit_and_is_charged_back(tmp_path):
     peak = utc(2026, 1, 14, 20, 0)
     load = lambda t: 5.0 if peak <= t < peak + timedelta(minutes=15) else 0.5     # noqa: E731
