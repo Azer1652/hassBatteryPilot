@@ -5,7 +5,9 @@
 * charge    - charges from grid (and solar) at the current that keeps grid
               import at the import limit, until the target SOC;
 * discharge - discharges at full power (house first, the rest is exported)
-              until the target SOC or the reserve.
+              until the target SOC or the reserve;
+* peak_shave - the grid covers the house up to the import limit, the battery
+              only what is above it; solar surplus is stored as in self-use.
 
 It is used to replay a plan against measured load and solar (the contract
 comparison), to work out the night target, and by the tests.
@@ -91,6 +93,8 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
         discharge_dc = min(b.max_discharge_kw * hours, b.kwh(soc - floor))
         if net > 0:   # the house deficit also comes out of the battery, down to the minimum
             discharge_dc = max(discharge_dc, min(net / b.eta_d, avail, b.max_discharge_kw * hours))
+    elif action == "peak_shave" and net > 0:
+        discharge_dc = min(max(net - limit * hours, 0.0) / b.eta_d, avail, b.max_discharge_kw * hours)
     else:  # self_use (also charge/discharge that reached their target, or charging paused)
         if net > 0:
             discharge_dc = min(net / b.eta_d, avail, b.max_discharge_kw * hours)

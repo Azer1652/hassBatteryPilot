@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fake_ha import TZ, FakeHA, utc
+from fake_ha import CHEAP_NIGHT, TZ, FakeHA, utc
 
 from pilot.app import App
 from pilot.config import Options
@@ -126,7 +126,7 @@ async def test_a_winter_night_charge_across_a_clock_change(tmpdata, night, hours
     fake = FakeHA(datetime.combine(night, datetime.min.time().replace(hour=22), TZ).astimezone(timezone.utc), soc=20,
                   forecast={**dull(day), **dull(day + timedelta(days=1))})
     log = recorded(fake)
-    app = await start(tmpdata, fake)
+    app = await start(tmpdata, fake, weekend_is_night=False, **CHEAP_NIGHT)   # (both nights are Saturdays)
     target = app.plan.targets[0]
     assert target["winter"]
     await run(app, fake, datetime.combine(day, datetime.min.time().replace(hour=7, minute=30), TZ).astimezone(timezone.utc),
@@ -173,3 +173,87 @@ async def test_a_recorder_that_cannot_be_read_does_not_stop_the_first_start(tmpd
     app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     assert any("Could not read history" in e["text"] for e in app.events)
+
+
+# ---------------------------------------------------------------- peak shaving
+SHAVE = "switch.solis_peak_shaving_mode"
+
+
+async def shaving_night(tmpdata, **opts):
+    """A winter night on the default rates, a nearly empty battery: it is kept for the day."""
+    day = date(2026, 1, 14)
+    fake = FakeHA(utc(2026, 1, 13, 21, 30), soc=16, load=lambda t: 0.3, peak_shaving=True,
+                  forecast={**dull(day), **dull(day + timedelta(days=1))})
+    log = recorded(fake)
+    app = await start(tmpdata, fake, **opts)
+    await run(app, fake, utc(2026, 1, 13, 23, 0))
+    return app, fake, log
+
+
+async def test_a_winter_night_in_peak_shaving_keeps_the_battery_for_the_day(tmpdata):
+    app, fake, log = await shaving_night(tmpdata)
+    assert not app.plan.targets[0]["applied"] and not app.plan.targets[0]["pays"]      # no night filling
+    assert app.solis.mode == "peak_shave" and fake.mode() == "peak_shave"
+    assert fake.s["number.solis_peak_max_usable_grid_power"]["state"] == "2300.0"      # the import limit, in W
+    assert fake.s["number.solis_peak_baseline_soc"]["state"] == "10.0"                 # never refilled by the inverter
+    assert fake.s["switch.solis_time_of_use"]["state"] == "off"
+    soc = fake.soc
+    await run(app, fake, utc(2026, 1, 14, 6, 55))
+    assert fake.soc == pytest.approx(soc, abs=0.5)                # the grid fed the house all night
+    assert fake.import_kw == pytest.approx(0.3, abs=0.05)
+    assert all(s.action != "charge" for s in app.plan.steps)
+    await run(app, fake, utc(2026, 1, 14, 8, 0))
+    assert fake.mode() == "self_use" and fake.s[SHAVE]["state"] == "off"               # the day rate: used now
+    assert fake.soc < soc - 1
+    numbers = [d for _, dom, _, d in log if dom == "number" and "peak" in d["entity_id"]]
+    assert len(numbers) == 2                                      # limit and SOC are written once, not every hour
+    assert not [e for e in app.events if e["text"].startswith("Error")]
+
+
+async def test_peak_shaving_is_ended_when_the_app_stops_or_control_goes_off(tmpdata):
+    app, fake, _ = await shaving_night(tmpdata)
+    await app.shutdown()
+    assert fake.s[SHAVE]["state"] == "off" and app.solis.mode == "self_use"
+
+    app, fake, _ = await shaving_night(tmpdata)
+    fake.s[CONTROL]["state"] = "off"
+    await run(app, fake, fake.now + timedelta(minutes=2))
+    assert fake.s[SHAVE]["state"] == "off"
+
+
+async def test_a_crash_while_peak_shaving_is_cleaned_up_at_the_next_start(tmpdata):
+    app, fake, _ = await shaving_night(tmpdata)
+    assert fake.s[SHAVE]["state"] == "on"
+    fake.s[CONTROL]["state"] = "off"                      # (so the new start does not switch it on again)
+    app2 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app2.setup()
+    assert fake.s[SHAVE]["state"] == "off"
+    assert any("set back to self-use" in e["text"] for e in app2.events)
+
+
+async def test_peak_shaving_is_ended_when_the_measurements_are_lost(tmpdata):
+    app, fake, _ = await shaving_night(tmpdata)
+    fake.override["sensor.solis_battery_soc"] = "unavailable"
+    await run(app, fake, fake.now + timedelta(minutes=3))
+    assert fake.s[SHAVE]["state"] == "off"
+
+
+async def test_a_peak_shaving_switch_changed_by_something_else_is_corrected(tmpdata):
+    app, fake, _ = await shaving_night(tmpdata)
+    fake.s[SHAVE]["state"] = "off"                        # someone switched it off
+    await run(app, fake, fake.now + timedelta(minutes=3))
+    assert fake.s[SHAVE]["state"] == "on"
+    await run(app, fake, utc(2026, 1, 14, 8, 0))
+    assert fake.s[SHAVE]["state"] == "off"
+    fake.s[SHAVE]["state"] = "on"                         # and on, while the plan is self-use
+    await run(app, fake, fake.now + timedelta(minutes=3))
+    assert fake.s[SHAVE]["state"] == "off"
+
+
+async def test_without_the_peak_shaving_switch_nothing_changes(tmpdata):
+    fake = FakeHA(utc(2026, 1, 13, 21, 30), soc=16, load=lambda t: 0.3,
+                  forecast={**dull(date(2026, 1, 14)), **dull(date(2026, 1, 15))})
+    app = await start(tmpdata, fake)
+    await run(app, fake, utc(2026, 1, 13, 23, 0))
+    assert not app.can_peak_shave and app.solis.mode == "self_use"
+    assert all(s.action != "peak_shave" for s in app.plan.steps)

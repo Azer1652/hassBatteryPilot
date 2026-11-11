@@ -11,6 +11,8 @@ Pure function, so every rule can be tested without Home Assistant:
               slot ends (at most HOLD_OVER points above the target);
 * discharge - discharge towards the step's SOC, never below the reserve (or the
               step's own floor, when the plan sells below it at an extreme price);
+* peak_shave - the inverter's own peak-shaving mode at the import limit: the
+              grid feeds the house, the battery only what is above the limit;
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -32,6 +34,11 @@ MIN_A = 10          # below this, charging is paused (old playbook)
 START_A = 15        # start charging only with some headroom (old playbook)
 
 
+# Modes that are ours to end: control off, a stop or lost measurements return the inverter to
+# self-use (failed: a command of ours may have half-applied).
+ACTIVE = ("charge", "discharge", "peak_shave", "failed")
+
+
 @dataclass
 class Readings:
     t: datetime              # UTC
@@ -46,7 +53,7 @@ class Readings:
 
 @dataclass
 class Decision:
-    command: str             # none | charge | discharge | current | self_use
+    command: str             # none | charge | discharge | current | self_use | peak_shave
     amps: int = 0
     reason: str = ""
 
@@ -75,7 +82,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
            control_on: bool) -> Decision:
     hour = r.t_local.strftime("%H:00:00")
     if not control_on:
-        if mode in ("charge", "discharge", "failed"):     # (failed: a command of ours may have half-applied)
+        if mode in ACTIVE:
             return Decision("self_use", reason="Battery Pilot control is off")
         return Decision("none", reason="shadow mode: control is off")
     if step is None:
@@ -120,6 +127,11 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         if abs(want - amps_now) >= 10:
             return Decision("current", want, "pace the export")
         return Decision("none", reason="discharging")
+
+    if step.action == "peak_shave":
+        if mode != "peak_shave":
+            return Decision("peak_shave", reason="plan: peak shaving (the battery is kept for later)")
+        return Decision("none", reason="peak shaving")
 
     if mode != "self_use":
         why = "target reached" if step.action != "self_use" else "plan: self-use"

@@ -7,14 +7,14 @@
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
-    --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --soc: #1b9e5a; --warn: #c23b2b;
+    --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --shave: #17919c; --soc: #1b9e5a; --warn: #c23b2b;
     --plan: #6250d6; --pv: #eda100; --house: #c2477e;
     --ok-bg: #e8f5ee; --warn-bg: #fdecea; --shadow-bg: #fff6e0;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #111418; --card: #1b2027; --text: #e6e9ee; --muted: #9aa3b2; --line: #2c333d;
-      --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --soc: #30a86a; --warn: #ff6b5a;
+      --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --shave: #2fa9b4; --soc: #30a86a; --warn: #ff6b5a;
       --plan: #9085e9; --pv: #c98500; --house: #c85593;
       --ok-bg: #16301f; --warn-bg: #3a1c19; --shadow-bg: #3a3017;
     }
@@ -106,6 +106,7 @@
       <span><i class="sw" style="background:var(--charge)"></i>grid charge</span>
       <span><i class="sw" style="background:var(--discharge)"></i>discharge / export</span>
       <span><i class="sw" style="background:var(--self)"></i>self-use</span>
+      <span id="shaveleg" hidden><i class="sw" style="background:var(--shave)"></i>peak shaving</span>
       <span><i class="ln" style="border-color:var(--soc)"></i>battery SOC (right axis)</span>
       <span id="plantarget" hidden><i class="ring"></i>night target</span>
     </div>
@@ -273,7 +274,8 @@ function chartTip(el, c) {
   if (cur === null) delete tipAt[el.id];
 }
 
-const ACTIONS = {charge: "grid charge", discharge: "discharge / export", self_use: "self-use"};
+const ACTIONS = {charge: "grid charge", discharge: "discharge / export", self_use: "self-use",
+                 peak_shave: "peak shaving (grid feeds the house, battery kept)"};
 
 function planChart(el, plan) {
   if (!plan || !plan.steps.length) {
@@ -291,7 +293,8 @@ function planChart(el, plan) {
   const pmax = Math.max(1, ...prices), pmin = Math.min(0, ...prices);
   const yp = (p) => top + (pmax - p) / (pmax - pmin) * (H - top - bottom);
   const ys = (soc) => top + (100 - soc) / 100 * (H - top - bottom);
-  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self")}, soc = css("--soc");
+  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"),
+               peak_shave: css("--shave")}, soc = css("--soc");
   let g = "";
   steps.forEach((s, i) => {
     const [a, b] = span[i], y = yp(Math.max(s.buy, 0)), y0 = yp(0);
@@ -573,7 +576,8 @@ function histChart(el, doc, kind) {
           <text x="${left - 5}" y="${ys(v) + 4}" text-anchor="end">${v}%</text>`;
   }
   // what was planned and what the inverter did
-  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"), shadow: line};
+  const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"),
+               peak_shave: css("--shave"), shadow: line};
   for (const [a, b, act] of plannedActions(doc, kind)) {
     g += `<rect x="${xm(a)}" y="${yA}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="2" fill="${col[act] || col.self_use}"/>`;
   }
@@ -676,7 +680,7 @@ function histLegend(doc, kind) {
   if (doc.live) h += sw("ln dot", `border-color:${css("--plan")}`, "after now: the current plan");
   const seen = new Set([...plannedActions(doc, kind).map((r) => r[2]), ...doc.measured.mode.filter(Boolean)]);
   const strips = [["charge", "--charge", "grid charge"], ["discharge", "--discharge", "discharge / export"],
-    ["self_use", "--self", "self-use"], ["shadow", "--line", "control off (shadow)"]].filter(([k]) => seen.has(k));
+    ["self_use", "--self", "self-use"], ["peak_shave", "--shave", "peak shaving"], ["shadow", "--line", "control off (shadow)"]].filter(([k]) => seen.has(k));
   return h + "</div><div>" + strips.map(([, v, label]) => sw("sw", `background:${css(v)}`, label)).join("") + "</div>";
 }
 
@@ -880,7 +884,7 @@ let render = function (s) {
   const r = s.readings || {}, pr = s.prices || {}, step = s.plan && s.plan.steps[0];
   $("kpis").innerHTML = [
     kpi("battery", r.soc === undefined ? "–" : fmt(r.soc, 0) + " %"),
-    kpi("now", step ? step.action.replace("_", "-") : "–"),
+    kpi("now", step ? (step.action === "peak_shave" ? "peak shaving" : step.action.replace("_", "-")) : "–"),
     kpi("house", fmt(r.load_kw, 2) + " kW"), kpi("solar", fmt(r.pv_kw, 2) + " kW"),
     kpi("grid import", fmt(r.import_kw, 2) + " kW"),
     kpi("this quarter-hour", fmt(r.projection_kw, 2) + " kW"),
@@ -888,11 +892,15 @@ let render = function (s) {
   ].join("");
   importLimit = s.peaks.limit_kw;
   planChart($("plan"), s.plan);
+  $("shaveleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "peak_shave"));
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`
     : t.applied === false
-      ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery keeps enough for your usual peaks (winter strategy: peaks only).`
+      ? `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery keeps enough for your usual peaks ` +
+        (t.pays === false && t.winter_mode !== "peaks_only"
+          ? "and is not filled at night: after the losses of charging and discharging and the battery wear, the night price is not below the day price."
+          : "(winter strategy: peaks only).")
       : `Winter day ahead (${t.solar_kwh} kWh solar after shade): the battery is charged towards ${t.soc} % by the end of the night, ` +
         `as far as the import limit allows. No export in winter, except at prices so high that buying back later costs less.`;
   $("plannote").textContent = [note, planExtras(s.plan)].filter(Boolean).join(" ");

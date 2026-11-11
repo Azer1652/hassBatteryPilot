@@ -44,14 +44,23 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 
 - `planner.optimize()`: dynamic programme over SOC in 1 % levels. Actions are only what a Solis can
   execute: self-use, grid charge (at least `MIN_CHARGE_KW`, at most import limit −
-  `CHARGE_HEADROOM_KW`), discharge/export (not below reserve). Costs: buy − sell, wear, penalty above
+  `CHARGE_HEADROOM_KW`), discharge/export (not below reserve), and `peak_shave` when the inverter's
+  peak-shaving switch was found (`App.can_peak_shave`, passed as `peak_shave=` to `make_plan`,
+  `optimize` and `replay_day`): the grid feeds the house up to the import limit, the battery gives
+  only what is above it (`_shave_kwh`). It has no action cost and no switch cost against self-use,
+  and is chosen over self-use only when it also wins on a second valuation (`low`) in which energy
+  left at the end is worth what the cheapest hour saves: with the normal terminal value alone the
+  battery was held all night before sunny days, which cost money in `yearsim`. Costs: buy − sell, wear, penalty above
   the import limit, `ACTION_COST_C_PER_H`; terminal value for energy left. Charge and discharge move
   whole SOC points; self-use moves a fraction of one per slot, so its rounding error is carried to the
   next slot (`whole`), it is costed with the flows of the exact change (`_flow`) and the value of the
   next slot is interpolated. Rounding each slot by itself made the plan drift from the battery, badly
   on 15-minute slots. `make_plan()` adds the
   winter rule: when the next day's corrected solar < threshold, a soft target (`night_target()`) at
-  the end of the night window, and no export. Two rules give way to money: in `extreme_slots()`
+  the end of the night window, and no export. The target is set only when `night_charge_pays()`
+  (cheapest night buy / eta_c < mean day buy × eta_d − wear): with the default day/night rates it
+  does not, and a forced refill also made the plan hold the battery with a day-rate trickle charge
+  in the evening. Tests that need a winter night charge use `fake_ha.CHEAP_NIGHT`. Two rules give way to money: in `extreme_slots()`
   (selling beats buying back at the dearest later price) export is allowed in winter and down to the
   minimum (`Step.reserve`); `_boost()` re-plans with higher import limits and keeps one only when it
   beats the normal plan after the capacity cost, priced once per month above
@@ -64,7 +73,11 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 - `solis.py` sets slot 1 to the current clock hour only (charge or discharge); `controller` renews
   them each hour. The Solis repeats slots daily, so `App` records what it left on the inverter
   (`/data/inverter.json`) and returns it to self-use at the next start; `Solis.mode` is `failed`
-  after a failed command (treated as possibly active). `tick()` stops a charge/discharge after
+  after a failed command (treated as possibly active). `Solis.peak_shave()` turns time of use off,
+  writes the limit and the baseline SOC (battery minimum; only when changed) and turns the
+  peak-shaving switch on; every other command turns it off (`_shave_off`). `peak_shave` is in
+  `controller.ACTIVE` with charge, discharge and failed: control off, blind, stop and restart
+  return to self-use, and `_reconcile` reads that switch back too. `tick()` stops a charge/discharge after
   `BLIND_S` without SOC/import (or a frozen SOC), keeps helper states through short read failures,
   and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
   Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop stalls,

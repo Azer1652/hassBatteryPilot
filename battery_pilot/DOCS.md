@@ -5,7 +5,7 @@ little as possible, and tells you whether a fixed or a dynamic electricity contr
 would be cheaper for your house. It runs all the time and has its own page in the
 sidebar.
 
-![The Battery Pilot page: the 36-hour plan with a winter night charged to its target](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/plan.png)
+![The Battery Pilot page: the 36-hour plan of a winter day, the battery kept for the evening peak by peak shaving](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/plan.png)
 
 *Demo data. Each bar is one hour or quarter-hour: its height is the price you pay per kWh
 (left axis), its colour what the battery does (blue: grid charge). Green: the battery level
@@ -71,12 +71,14 @@ Home Assistant once and uninstall the Battery Playbook app.
 
 | Situation | What the battery does |
 | --- | --- |
-| Dull day ahead (winter), strategy `full_day` | Charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin, but never more than the night window can charge under the import limit. No battery export, except at a price so high that buying the energy back later costs less. |
+| Dull day ahead (winter), strategy `full_day` | When the night price is low enough to pay for it (see *Winter strategy*): charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin, but never more than the night window can charge under the import limit. No battery export, except at a price so high that buying the energy back later costs less. |
 | Dull day ahead (winter), strategy `peaks_only` | Only enough charge to cover your usual quarter-hour peaks (cooking, kettle) under the import limit, plus whatever the prices make worth it. |
+| Dull day ahead (winter), night charging does not pay | No night target: the battery is not filled at a loss. It keeps enough for your usual peaks, as with `peaks_only`. |
+| Peak shaving (when the inverter has the switch) | In hours where the battery's energy is worth more later (a dearer hour of the plan, or a peak it must cover), the inverter is put in its **peak-shaving mode**: the grid feeds the house up to the *Grid import limit* and the battery only gives what is above it. Typical: the night hours on a day/night contract when the battery cannot carry both the night and the day. It is never used just to end the plan with a fuller battery. |
 | Any day | The battery keeps enough energy for the quarter-hour peaks Battery Pilot has learned for each weekday and hour, topping up shortly before if needed. |
 | Sunny day ahead | No grid charging: the sun fills the battery. |
 | Sunny day ahead that fills the battery anyway | What the house won't need before the sun covers it (shade-corrected) is sold beforehand, when the room is worth more than the sale. On a dynamic contract it sells in the best-paid hours or quarter-hours first, at full power, never below *Battery reserve for export*, and even buys the house's night energy back when the evening price beats it. On a fixed contract the injection price is the same every hour, so it only sells early when tomorrow's surplus would exceed the export limit. |
-| Fixed day/night contract | Buying at night to use by day does not pay after losses and wear, so it only grid-charges for the winter target. |
+| Fixed day/night contract | Buying at night to use by day only happens when the night rate, after the losses of charging and discharging and the battery wear, is below the day rate. With the default rates it is not: no night charging, in summer or in winter. |
 | Dynamic contract | Also charges in cheap hours and exports in expensive ones, when the spread beats losses + wear, filling the battery completely when the sale pays for all of it. The best-paid slots get full power first. |
 | Price spike (very low or very high) | Charges above the import limit, as fast as the battery takes, when that earns more than the higher capacity peak costs, priced as Fluvius bills it: the month's highest quarter-hour (at least the billed minimum) counts once in the 12-month average, so a peak this month already has costs nothing extra. At a price so high that buying the energy back later costs less, it also sells below the reserve, down to the battery minimum, even in winter. The plan card says when and why. |
 | Negative sell price | With **Battery Pilot block negative export** on and an export-limit entity, export is set to 0. The inverter then holds the panels back; those quarter-hours are not learned as shade. |
@@ -197,6 +199,9 @@ Power sensors can be in W or kW: the unit is read from the entity.
 | `charge_start`, `charge_end` | time `…charge_start…slot_1`, `…charge_end…slot_1` | required |
 | `discharge_start`, `discharge_end` | time `…discharge_start…slot_1`, `…discharge_end…slot_1` | required |
 | `export_limit` | number `export_power_limit` / `export…limit` | optional: only for blocking export at negative prices |
+| `peak_shaving_switch` | switch `…peak_shaving_mode` / `…peak_shaving…` | optional: without it the plan never uses peak shaving |
+| `peak_shaving_limit` | number `…peak_max_usable_grid_power` | optional: the grid power the inverter shaves to; without it the inverter's own value is used |
+| `peak_shaving_soc` | number `…peak_baseline_soc` | optional: the battery level the inverter keeps while peak shaving; without it the inverter's own value is used |
 
 Slot entities come in two sets on Solis Modbus (`time_charging` and
 `grid_time_of_use`); the *Solis slot entities* setting picks which one. When several
@@ -226,7 +231,8 @@ entities match, the one with `solis` in its name wins.
 | Discharge (export) | The plan says export in this slot. | Discharge slot 1 = the current clock hour, charge slot 1 = 00:00–00:00, discharge current, *time of use* on. |
 | Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only. |
 | Renew | At every new clock hour while still charging or exporting. | The same as Charge / Discharge for the new hour. |
-| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, or the app stops. | *Time of use* off. Everything else is left as it is. |
+| Peak shaving | The plan says peak shaving in this slot (only when the peak-shaving switch was found). | *Time of use* off, peak-shaving grid power = *Grid import limit*, peak-shaving baseline SOC = *Battery minimum SOC* (so the inverter does not refill the battery from the grid by itself; or the lowest value the entity accepts), *peak-shaving mode* on. The two numbers are written only when they change. |
+| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Time of use* off, and *peak-shaving mode* off when Battery Pilot switched it on. Everything else is left as it is. |
 | Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to the value it had before (at most *Normal export limit*) when the price is positive again. An installation already at 0 W (zero export) is left alone. |
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
@@ -349,7 +355,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
 | Winter day when solar is below | `winter_solar_threshold_kwh` | 12 kWh | A day whose shade-corrected forecast is below this is a winter day. |
-| Winter strategy | `winter_mode` | full_day | `full_day`: on winter days fill the battery at night to carry the day, no battery export. `peaks_only`: keep only enough for your usual peaks (see below). |
+| Winter strategy | `winter_mode` | full_day | `full_day`: on winter days fill the battery at night to carry the day when the night price pays for it, no battery export. `peaks_only`: never a night target, keep only enough for your usual peaks (see below). |
 | Night target safety margin | `safety_margin_pct` | 30 % | SOC points added to what the day needs, for `full_day`. Raise it if the battery runs empty before night on cloudy days. |
 
 ### Inverter and alerts
@@ -364,18 +370,31 @@ reads* above; leave them empty to let Battery Pilot find them.
 
 ### Winter strategy
 
-`full_day` (the default) is what Battery Playbook did: on a dull day the battery is filled
-overnight to carry the whole day. On a day/night contract where the night rate is only a
-few cents cheaper, that loses money: about 10 % of every kWh is lost in charging and
-discharging, plus battery wear. `peaks_only` keeps just enough for your capacity peaks and
-was cheaper in the year simulation (see the changelog), with nearly the same peaks. Try it
-once Battery Pilot has learned your peaks (a week or two).
+`full_day` (the default): on a dull day the battery is filled overnight to carry the whole
+day, **when that pays**. A kWh bought at night and used by day is charged and discharged
+(about 10 % is lost with the default *Round-trip efficiency*) and wears the battery
+(*Battery wear cost*). The night target is set only when
+
+    cheapest night price ÷ charge efficiency  <  average day price × discharge efficiency − wear
+
+With the default rates (30.55 c by day, 27.18 c at night, 90 %, 2 c) that is 28.7 c against
+27.0 c: night charging loses money, so there is no night target and the battery is kept
+for your peaks. The plan card says so. On a contract with a much cheaper night, or on a
+dynamic contract with cheap night hours, the target applies as before. Battery export
+stays off on winter days either way.
+
+`peaks_only` never sets a night target, whatever the prices, and allows battery export on
+winter days too.
+
+With the inverter's **peak-shaving switch** (see *Solis controls*), a battery that is kept
+for the peaks is not emptied by the house first: at night the grid feeds the house and the
+battery waits for the dearer day hours and for the peaks.
 
 ## Sensors it publishes
 
 | Entity | State | Main attributes |
 | --- | --- | --- |
-| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge` or `discharge` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
+| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge` or `peak_shave` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Shade-corrected solar forecast for today (kWh) | `forecast_kwh` (before correction) |
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |

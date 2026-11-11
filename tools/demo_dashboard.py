@@ -34,7 +34,7 @@ from pilot.app import App  # noqa: E402
 from pilot.config import Options  # noqa: E402
 from pilot.web import make_web  # noqa: E402
 
-TODAY = date(2026, 11, 9)          # a Monday in November: a dull day, tree shade, winter night charging
+TODAY = date(2026, 11, 9)          # a Monday in November: a dull day, tree shade, the battery kept for the peaks
 NOW = datetime.combine(TODAY, time(23, 0), TZ)
 LIVE_DAYS = 3                      # days the real app runs before NOW (the planned-vs-actual history)
 
@@ -42,7 +42,7 @@ LIVE_DAYS = 3                      # days the real app runs before NOW (the plan
 def history(days: int, o: Options) -> dict:
     """The synthetic year up to the days the app runs itself, replayed per contract (a few minutes for a year)."""
     print(f"Replaying {days} synthetic days for the history...", flush=True)
-    return yearsim.run(TODAY - timedelta(days=days), days - LIVE_DAYS + 1, o)
+    return yearsim.run(TODAY - timedelta(days=days), days - LIVE_DAYS + 1, o, peak_shave=True)
 
 
 def fill(app: App, res: dict) -> None:
@@ -77,7 +77,8 @@ async def main(days: int, port: int, seconds: float | None):
         return fc.get(hour, 0.0) * yearsim.true_shade(local.month, local.hour) * weather[local.date()]
 
     start = datetime.combine(TODAY - timedelta(days=LIVE_DAYS), time(16, 0), TZ).astimezone(timezone.utc)
-    fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices)
+    fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices,
+                  peak_shaving=True)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
     app = App(o, fake, data_dir=data, clock=lambda: fake.now, version="2.3.1 · demo data")

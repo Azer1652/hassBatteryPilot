@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.5.0
+
+**No night charging that loses money, and the Solis peak-shaving mode.**
+
+- **A winter night is only filled when it pays.** On a dull day the battery was charged to
+  the night target whatever it cost. On a day/night contract with a few cents between the
+  rates that loses money: with the default rates a night kWh costs 28.7 c by the time it
+  comes out of the battery (two conversions, plus wear) against 27.0 c saved by day. The
+  target is now set only when the night price, after losses and wear, is below the day
+  price. Otherwise the battery is kept for your peaks, and the plan card says why. A
+  contract with a cheap enough night, or a dynamic contract, keeps its target.
+- **No more small charge at the day rate in the evening.** With the refill compulsory,
+  every kWh the battery gave in the evening had to be bought back at night at a loss, so
+  the plan "held" the battery with a minimum grid charge at 17-18h, at the day rate. That
+  came from the forced target and is gone with it.
+- **Peak shaving.** When the Solis Modbus integration has the peak-shaving switch
+  (`…peak_shaving_mode`), the plan can use the inverter's own peak-shaving mode: the grid
+  feeds the house up to the *Grid import limit* and the battery only gives what is above
+  it. The plan uses it in hours where the battery's energy is worth more later: the night
+  hours when the battery cannot carry both the night and the day, and to keep the energy
+  for a cooking peak instead of letting the house empty the battery and topping it up
+  again. It sets the peak-shaving grid power to the import limit and the baseline SOC to
+  the battery minimum, so the inverter never refills from the grid by itself. Stopping the
+  app, switching control off, lost measurements and a restart all end it, as for a charge.
+  The dashboard shows it in its own colour. In the simulated year it lowers a winter
+  week's bill a little on both contracts and changes nothing in summer. Without the
+  switch nothing changes.
+- New optional entity settings: `peak_shaving_switch`, `peak_shaving_limit`,
+  `peak_shaving_soc` (found automatically).
+
 ## 2.4.1
 
 **A check of the planning and comparison logic.** Seven errors fixed. Most of them only

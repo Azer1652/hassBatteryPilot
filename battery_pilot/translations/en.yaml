@@ -94,10 +94,10 @@ configuration:
     description: "Extra SOC on top of what the day needs on winter days. Raise it if the battery runs empty before night on cloudy days."
   winter_solar_threshold_kwh:
     name: "Winter day when solar is below (kWh)"
-    description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day and no battery energy is exported (except at a price so high that buying it back later costs less)."
+    description: "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day (when that pays after losses and wear) and no battery energy is exported (except at a price so high that buying it back later costs less)."
   winter_mode:
     name: "Winter strategy"
-    description: "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin), no export. peaks_only: keep only enough for your usual quarter-hour peaks (cheaper when night power is not much cheaper than day power)."
+    description: "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin) when the night price is low enough to pay for the losses and wear, no export. peaks_only: never a night target, keep only enough for your usual quarter-hour peaks."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
@@ -149,6 +149,15 @@ configuration:
   export_limit:
     name: "Export power limit entity"
     description: "Leave empty to find it automatically. Needed to block export at negative prices."
+  peak_shaving_switch:
+    name: "Peak-shaving switch entity"
+    description: "Leave empty to find it automatically (switch …peak_shaving_mode). With it, Battery Pilot can let the grid feed the house up to the import limit and keep the battery for a dearer hour or for your peaks."
+  peak_shaving_limit:
+    name: "Peak-shaving grid power entity"
+    description: "Leave empty to find it automatically (number …peak_max_usable_grid_power). Battery Pilot sets it to the import limit when it switches peak shaving on."
+  peak_shaving_soc:
+    name: "Peak-shaving baseline SOC entity"
+    description: "Leave empty to find it automatically (number …peak_baseline_soc). Battery Pilot sets it to the battery minimum, so the inverter does not refill the battery from the grid by itself."
   forecast_power_now:
     name: "Forecast power now entity"
     description: "Forecast.Solar's 'power production now'. Leave empty to find it automatically. Used to learn shade from history."

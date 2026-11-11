@@ -183,6 +183,25 @@ def test_finds_a_full_solis_setup():
     assert found["export_limit"].entity_id == "number.solis_export_power_limit"
 
 
+def test_finds_the_peak_shaving_entities_when_the_integration_has_them():
+    found, missing = discovery.resolve_all(Options(), SOLIS)
+    assert missing == [] and found["peak_shaving_switch"].entity_id is None       # optional
+    states = SOLIS | {
+        "switch.solis_s6_eh1p_peak_shaving_mode": _state(),
+        "number.solis_s6_eh1p_peak_max_usable_grid_power": _state("W"),
+        "sensor.solis_s6_eh1p_peak_max_usable_grid_power": _state("W"),      # the integration has both
+        "number.solis_s6_eh1p_peak_baseline_soc": _state("%"),
+        "sensor.solis_s6_eh1p_peak_baseline_soc": _state("%"),
+    }
+    found, missing = discovery.resolve_all(Options(), states)
+    assert missing == []
+    assert found["peak_shaving_switch"].entity_id == "switch.solis_s6_eh1p_peak_shaving_mode"
+    assert found["peak_shaving_limit"].entity_id == "number.solis_s6_eh1p_peak_max_usable_grid_power"
+    assert found["peak_shaving_soc"].entity_id == "number.solis_s6_eh1p_peak_baseline_soc"
+    assert found["battery_soc"].entity_id == "sensor.solis_battery_soc"           # and nothing else is confused
+    assert found["grid_import_power"].entity_id == "sensor.solis_grid_import_power"
+
+
 def test_slot_set_switch_picks_the_other_entities():
     found, _ = discovery.resolve_all(Options(slot_entities="grid_time_of_use"), SOLIS)
     assert found["discharge_end"].entity_id == "time.solis_grid_time_of_use_discharge_end_slot_1"

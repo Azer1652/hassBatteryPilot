@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fake_ha import TZ, FakeHA, utc
+from fake_ha import CHEAP_NIGHT, TZ, FakeHA, utc
 
 from pilot.app import App
 from pilot.config import Options
@@ -97,7 +97,7 @@ async def test_a_wobbling_house_load_lowers_the_charge_current_instead_of_pausin
     """Cooking on and off every two minutes during a winter night charge."""
     wobble = lambda t: 0.8 if (t.minute // 2) % 2 == 0 else 1.1   # noqa: E731
     app, fake, writes, (_, hi) = await run(tmpdata, utc(2026, 1, 14, 22, 0), utc(2026, 1, 15, 7, 0), 20,
-                                           lambda h: 0.1, 3, wobble, contract="fixed")
+                                           lambda h: 0.1, 3, wobble, contract="fixed", **CHEAP_NIGHT)
     assert most_switches_in_an_hour(writes) <= 2                    # was 4
     assert switches(writes) <= 6                                    # was 9
     target = max(t["soc"] for t in app.plan.targets) if app.plan.targets else 100

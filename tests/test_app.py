@@ -4,7 +4,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fake_ha import TZ, FakeHA, utc
+from fake_ha import CHEAP_NIGHT, TZ, FakeHA, utc
 
 from pilot import history as H
 from pilot.app import App
@@ -45,7 +45,7 @@ async def test_winter_night_charges_to_target_under_the_import_limit(tmpdata):
     fc = {**winter_forecast(datetime(2026, 1, 14), 3), **winter_forecast(datetime(2026, 1, 15), 3)}
     fake = FakeHA(start, soc=30, load=load, forecast=fc)
     fake.s[CONTROL]["state"] = "on"
-    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     target = app.plan.targets[0]
     assert target["winter"] and target["soc"] >= 60
@@ -76,7 +76,7 @@ async def test_shadow_mode_never_touches_the_inverter(tmpdata):
     start = utc(2026, 1, 14, 21, 0)
     fc = winter_forecast(datetime(2026, 1, 15), 3)
     fake = FakeHA(start, soc=30, forecast=fc)
-    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     await run_until(app, fake, utc(2026, 1, 15, 2, 0), step_s=60)
     assert fake.solis_calls() == []
@@ -88,7 +88,7 @@ async def test_switching_control_off_returns_to_self_use(tmpdata):
     start = utc(2026, 1, 14, 22, 30)
     fake = FakeHA(start, soc=20, forecast=winter_forecast(datetime(2026, 1, 15), 2))
     fake.s[CONTROL]["state"] = "on"
-    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     await run_until(app, fake, utc(2026, 1, 15, 3, 30), step_s=60)
     assert fake.mode() == "charge"
@@ -298,7 +298,7 @@ async def test_plan_counts_on_blocking_only_when_the_inverter_can_block(tmpdata,
 async def test_stopping_the_app_while_charging_returns_to_self_use(tmpdata):
     fake = FakeHA(utc(2026, 1, 14, 23, 0), soc=20, forecast=winter_forecast(datetime(2026, 1, 15), 2))
     fake.s[CONTROL]["state"] = "on"
-    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     while fake.mode() != "charge" and fake.now < utc(2026, 1, 15, 7, 0):
         await app.step()

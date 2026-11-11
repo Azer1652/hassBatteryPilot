@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fake_ha import TZ, FakeHA, utc
+from fake_ha import CHEAP_NIGHT, TZ, FakeHA, utc
 
 from pilot.app import CMD_PROBLEM, App
 from pilot.config import Options
@@ -36,7 +36,7 @@ async def charging_night(tmpdata, control=True):
     """A dull January night: the plan grid-charges from 23:00. Returns (app, fake) once charging."""
     fake = FakeHA(utc(2026, 1, 14, 23, 0), soc=20, forecast=winter_forecast(datetime(2026, 1, 15), 2))
     fake.s[CONTROL]["state"] = "on" if control else "off"
-    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     while fake.mode() != "charge":
         assert fake.now < utc(2026, 1, 15, 7, 0)
@@ -168,7 +168,7 @@ async def test_a_crash_while_charging_is_cleaned_up_at_the_next_start(tmpdata):
     app, fake = await charging_night(tmpdata)
     # The app dies without shutdown(); it comes back with control switched off.
     fake.s[CONTROL]["state"] = "off"
-    app2 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    app2 = App(Options(**CHEAP_NIGHT), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app2.setup()
     assert fake.s[TOU]["state"] == "off" and warnings(app2, "had stopped while the inverter")
     fake.now += timedelta(days=1)

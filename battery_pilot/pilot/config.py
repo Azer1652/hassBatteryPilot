@@ -16,7 +16,8 @@ ENTITY_KEYS = (
     "grid_import_power", "grid_export_power", "house_load_power", "pv_power",
     "battery_soc", "battery_voltage", "tou_switch", "grid_charge_switch",
     "charge_current", "discharge_current", "charge_start", "charge_end",
-    "discharge_start", "discharge_end", "export_limit", "forecast_power_now",
+    "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",
+    "peak_shaving_soc", "forecast_power_now",
     "forecast_today", "forecast_tomorrow", "price_sensor",
 )
 # Option name of each override where it differs from the entity key

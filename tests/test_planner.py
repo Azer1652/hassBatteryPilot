@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from pilot.config import Options
-from pilot.planner import Slot, make_plan, night_target, night_windows, optimize
+from pilot.planner import Slot, Step, make_plan, night_target, night_windows, optimize
 from pilot.prices import PriceSlot
 from pilot.simulate import Battery, step
 from pilot.solar import PvForecast, ShadeModel
@@ -200,9 +200,12 @@ def _flat_load(kw):
     return lambda t0, t1: kw * (t1 - t0).total_seconds() / 3600
 
 
+CHEAP_NIGHT = {"fixed_night_rate": 8.0}     # low enough for night charging to pay after losses and wear
+
+
 def test_winter_day_charges_at_night_on_fixed():
     now = datetime(2026, 1, 14, 20, 0, tzinfo=BXL).astimezone(timezone.utc)
-    o = Options()
+    o = Options(**CHEAP_NIGHT)
     plan = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(3.0), soc=25, market_avg=90)
     assert plan.winter and not plan.allow_export
     t = plan.targets[0]
@@ -230,7 +233,7 @@ def test_sunny_summer_day_does_not_grid_charge_on_fixed():
 def test_a_night_window_inside_one_day_carries_the_day_after_it():
     """01:00-06:00 does not cross midnight: the day after it was taken as empty (no solar at all),
     so every day was a winter day."""
-    o = Options(night_start="01:00", night_end="06:00")
+    o = Options(night_start="01:00", night_end="06:00", **CHEAP_NIGHT)
     now = datetime(2026, 6, 14, 12, 0, tzinfo=BXL).astimezone(timezone.utc)
     (_, we, de), *_ = night_windows(now, now + timedelta(hours=36), BXL, o)
     assert we.astimezone(BXL).hour == 6 and de - we == timedelta(hours=19)        # 06:00 until 01:00
@@ -272,7 +275,7 @@ def test_dynamic_plan_uses_quarter_hours_and_arbitrage_in_summer():
 def test_unreachable_night_target_is_capped_so_no_day_rate_charging_before_the_window():
     """Demo finding: a 100 % target the night window cannot deliver made the plan buy at the day rate at 20:00."""
     now = datetime(2026, 11, 9, 16, 0, tzinfo=BXL).astimezone(timezone.utc)
-    o = Options()
+    o = Options(**CHEAP_NIGHT)
     evening = lambda t0, t1: (1.4 if 17 <= t0.astimezone(BXL).hour < 22 else 0.55) * (t1 - t0).total_seconds() / 3600
     plan = make_plan(now, BXL, o, FixedTariff(o), [], evening, _bell(1.5), soc=38, market_avg=90)
     t = plan.targets[0]
@@ -727,3 +730,128 @@ def test_a_boost_is_only_kept_when_it_clearly_pays(seed):
     if plan.boost:
         assert plan.boost["gain_eur"] - plan.boost["peak_cost_eur"] >= 0.24
         assert plan.boost["limit_kw"] > o.import_limit_kw
+
+
+# ---------------------------------------------------------------- night charging that does not pay
+def _evening_load(t0, t1):
+    h = t0.astimezone(BXL).hour
+    return (1.4 if 17 <= h < 20 else 0.3 if h < 7 or h >= 22 else 0.55) * (t1 - t0).total_seconds() / 3600
+
+
+@pytest.mark.parametrize("efficiency", [90, 85])
+def test_no_winter_night_charge_when_the_night_rate_does_not_pay(efficiency):
+    """A dull November day on the default day/night rates (3.4 c apart). The 70 % night target was
+    forced: the plan bought at night what losses and wear make dearer than the day rate, and with
+    that refill compulsory it "held" the battery with a small grid charge at 17-18h, at the day rate."""
+    from pilot.planner import night_charge_pays
+    o = Options(round_trip_efficiency_pct=efficiency)
+    now = datetime(2026, 11, 11, 7, 33, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], _evening_load, _bell(2.7), soc=68, market_avg=90)
+    t = plan.targets[0]
+    assert plan.winter and t["winter"] and not t["pays"] and not t["applied"]
+    assert not plan.allow_export                                   # the winter no-export rule stays
+    assert all(s.action == "self_use" for s in plan.steps)
+    b = Battery.from_options(o)
+    slots = [Slot(s.start, s.hours, 0, 0, s.buy, s.sell) for s in plan.steps]
+    ws, we = (datetime.fromisoformat(t[k]) for k in ("window_start", "window_end"))
+    assert not night_charge_pays(b, slots, ws, we, we + timedelta(hours=15))
+    assert night_charge_pays(replace(b, eta_c=1.0, eta_d=1.0, wear_c_kwh=0.0), slots, ws, we, we + timedelta(hours=15))
+
+
+def test_a_night_rate_that_pays_still_gets_its_winter_target():
+    o = Options(**CHEAP_NIGHT)
+    now = datetime(2026, 11, 11, 7, 33, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], _evening_load, _bell(2.7), soc=68, market_avg=90)
+    t = plan.targets[0]
+    assert t["pays"] and t["applied"]
+    window = [s for s in plan.steps if datetime.fromisoformat(t["window_start"]) <= s.start
+              < datetime.fromisoformat(t["window_end"])]
+    assert any(s.action == "charge" for s in window)
+    assert all(s.action != "charge" for s in plan.steps if s not in window)    # and never at the day rate
+
+
+# ---------------------------------------------------------------- peak shaving
+def test_peak_shaving_keeps_the_battery_for_the_dear_hours():
+    """Four cheap hours, then dear ones, and a battery too small for both: with the inverter's
+    peak-shaving switch the grid feeds the house in the cheap hours."""
+    slots = hourly([27] * 4 + [31] * 6, [3] * 10, load=[0.3] * 4 + [0.6] * 6)
+    plain = optimize(B, slots, 14)
+    assert all(s.action == "self_use" for s in plain)
+    held = optimize(B, slots, 14, peak_shave=True)
+    assert [s.action for s in held[:4]] == ["peak_shave"] * 4
+    assert held[3].soc_end == 14 and held[0].import_kwh == pytest.approx(0.3)
+    assert all(s.action == "self_use" for s in held[4:])
+    assert sum(s.cost_c for s in held) < sum(s.cost_c for s in plain) - 1
+
+
+def test_the_battery_is_not_held_for_the_value_of_what_is_left_alone():
+    """Energy left at the end is valued at a typical price, above the night rate. Holding the
+    battery all night just for that (also before a sunny day) cost money in the year simulation."""
+    slots = hourly([27] * 6 + [31] * 3, [3] * 9, load=0.3)
+    steps = optimize(B, slots, 80, terminal_c_kwh=26.5, peak_shave=True)
+    assert all(s.action == "self_use" for s in steps)
+
+
+def test_peak_shaving_covers_a_load_above_the_import_limit():
+    slots = hourly([27] + [31] * 3, [3] * 4, load=[3.0, 2.0, 2.0, 2.0])
+    s = optimize(B, slots, 20, peak_shave=True)[0]
+    assert s.action == "peak_shave"
+    assert s.import_kwh == pytest.approx(B.import_limit_kw)                 # the grid up to the limit
+    assert s.soc_end == pytest.approx(20 - (3.0 - B.import_limit_kw) / B.eta_d / 0.16, abs=0.6)
+    r = step(B, 50, "peak_shave", 0, 3.0, 0.0, 1.0)
+    assert r.import_kwh == pytest.approx(B.import_limit_kw) and r.discharge_dc_kwh == pytest.approx(0.7 / B.eta_d)
+    assert step(B, 50, "peak_shave", 0, 1.0, 0.0, 1.0).discharge_dc_kwh == 0          # idle under the limit
+    assert step(B, 50, "peak_shave", 0, 0.5, 2.0, 1.0).charge_dc_kwh == pytest.approx(1.5 * B.eta_c)   # sun is stored
+    assert step(B, 10, "peak_shave", 0, 3.0, 0.0, 1.0).import_kwh == pytest.approx(3.0)          # empty: the grid
+
+
+def test_peak_shaving_keeps_the_energy_for_the_cooking_peak():
+    """A battery near its minimum and a 4 kW cooking peak tonight. In self-use the house empties
+    the battery first and it must be topped up again; peak shaving keeps what is there."""
+    o = Options(winter_mode="peaks_only")
+    now = datetime(2026, 1, 14, 10, 0, tzinfo=BXL).astimezone(timezone.utc)
+    peak = lambda t0, t1: 4.0 if t0.astimezone(BXL).hour == 18 else 0.8   # noqa: E731
+    kw = dict(soc=14, market_avg=90, peak_kw=peak)
+    plain = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(1.0), **kw)
+    held = make_plan(now, BXL, o, FixedTariff(o), [], _flat_load(0.55), _bell(1.0), peak_shave=True, **kw)
+    assert all(s.action != "peak_shave" for s in plain.steps)
+    at18 = lambda p: next(s for s in p.steps if s.start.astimezone(BXL).hour == 18)   # noqa: E731
+    assert at18(plain).soc_start >= 14 and at18(held).soc_start >= 14           # both have it for the peak
+    bought = lambda p: sum(s.import_kwh for s in p.steps if s.action == "charge")   # noqa: E731
+    assert any(s.action == "charge" for s in plain.steps)
+    assert any(s.action == "peak_shave" for s in held.steps)
+    assert bought(held) < bought(plain)
+
+
+def test_sticky_and_following_know_peak_shaving():
+    from pilot.planner import Plan, step_to_follow, sticky_action
+    mk = lambda action, start, hours, a, z: Step(start, hours, action, a, z, 0, 0, 0.05, 0, 27, 5, 0)   # noqa: E731
+    plan = Plan([mk("peak_shave", T0, 0.1, 40, 40), mk("charge", T0 + timedelta(minutes=6), 1.0, 40, 50)], T0, "fixed")
+    assert sticky_action(plan, T0, 40, 35) == "peak_shave"
+    assert step_to_follow(plan, T0, B, "charge").action == "charge"       # a running charge carries on
+    assert step_to_follow(plan, T0, B, "self_use").action == "peak_shave"
+    # going between self-use and peak shaving costs nothing: the gain of holding comes hour by hour
+    slots = hourly([27] * 2 + [31] * 6, [3] * 8, load=[0.3] * 2 + [0.6] * 6)
+    assert optimize(B, slots, 13, first_action="self_use", peak_shave=True)[0].action == "peak_shave"
+
+
+# ---------------------------------------------------------------- selling before a day with too much sun
+def test_dynamic_sells_in_the_dear_evening_before_a_day_with_more_sun_than_fits():
+    """Tomorrow's sun fills the battery and more. Tonight's dear hour pays more than tomorrow's
+    midday: the battery is sold down tonight. Before a dull day at the same prices it is kept."""
+    o = Options(winter_mode="peaks_only")
+    day = datetime(2026, 6, 14, 0, 0, tzinfo=BXL)
+    prices = []
+    for h in range(72):
+        t = day + timedelta(hours=h)
+        prices.append(PriceSlot(t.astimezone(timezone.utc), (t + timedelta(hours=1)).astimezone(timezone.utc),
+                                160 if t.hour == 20 else 90))
+    now = datetime(2026, 6, 14, 18, 0, tzinfo=BXL).astimezone(timezone.utc)
+    sold = lambda p: sum(s.export_kwh for s in p.steps if s.action == "discharge")   # noqa: E731
+    sunny = make_plan(now, BXL, o, DynamicTariff(o), prices, _flat_load(0.4), _bell(40.0), soc=90)
+    assert sold(sunny) > 3
+    at20 = next(s for s in sunny.steps if s.start.astimezone(BXL).hour == 20)
+    assert at20.action == "discharge" and at20.export_kwh > 3                      # most of it in the dear hour
+    assert min(s.soc_end for s in sunny.steps if s.action == "discharge") >= o.battery_reserve_soc
+    dull = make_plan(now, BXL, o, DynamicTariff(o), prices, _flat_load(0.4), _bell(1.0), soc=90)
+    assert sold(dull) == 0

@@ -13,6 +13,9 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Europe/Brussels")
 V = 51.2
 CAP = 16.0
+# A fixed contract whose night rate is low enough for night charging to pay after losses and wear:
+# with the default rates it does not, and a winter night then gets no charge target.
+CHEAP_NIGHT = {"fixed_night_rate": 8.0}
 
 
 def st(state, unit=None, **attrs):
@@ -24,7 +27,7 @@ def st(state, unit=None, **attrs):
 
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
-                 prices=None, with_helpers=True):
+                 prices=None, with_helpers=True, peak_shaving=False):
         self.now = now
         self.soc = soc
         self.load_fn = load
@@ -55,6 +58,10 @@ class FakeHA:
             "time.solis_time_charging_discharge_end_slot_1": st("00:00:00"),
             "sensor.power_production_now": st(0, "W"),
         }
+        if peak_shaving:        # the Solis peak-shaving mode: grid up to the set power, the battery above it
+            s["switch.solis_peak_shaving_mode"] = st("off")
+            s["number.solis_peak_max_usable_grid_power"] = st(5000, "W")
+            s["number.solis_peak_baseline_soc"] = st(50, "%")
         if prices is not None:
             s["sensor.current_electricity_market_price"] = st(0.1, "€/kWh", prices=prices)
         if with_helpers:
@@ -138,7 +145,8 @@ class FakeHA:
     def mode(self):
         local = self.now.astimezone(TZ)
         if self.s["switch.solis_time_of_use"]["state"] != "on":
-            return "self_use"
+            shaving = self.s.get("switch.solis_peak_shaving_mode", {}).get("state") == "on"
+            return "peak_shave" if shaving else "self_use"
         if self._in_slot("charge", local) and self.s["switch.solis_allow_grid_to_charge_the_battery"]["state"] == "on":
             return "charge"
         if self._in_slot("discharge", local):
@@ -161,6 +169,13 @@ class FakeHA:
                       avail / h if h else 9e9)
             batt = -dis
             grid = net - dis * 0.97
+        elif mode == "peak_shave" and net > 0:
+            limit = float(self.s["number.solis_peak_max_usable_grid_power"]["state"]) / 1000
+            dis = min(max(net - limit, 0) / 0.97, 4.6, avail / h if h else 9e9)
+            batt, grid = -dis, net - dis * 0.97
+            if self.soc < float(self.s["number.solis_peak_baseline_soc"]["state"]):   # refilled from the grid
+                ch = min(max(limit - net, 0) * 0.97, 2.56, room / h if h else 9e9)
+                batt, grid = ch, net + ch / 0.97
         else:
             if net > 0:
                 dis = min(net / 0.97, 4.6, avail / h if h else 9e9)

@@ -34,9 +34,16 @@ def summer():
     return week("2026-07-06")
 
 
-def test_winter_fixed_charges_at_night_and_keeps_peaks_low(winter):
+CHEAP_NIGHT = Options(fixed_night_rate=8.0)      # a night rate low enough to pay for losses and wear
+
+
+def test_winter_fixed_charges_at_night_when_it_pays_and_keeps_peaks_low(winter):
     _, m = winter
-    assert m["fixed"]["grid_charged"] > 7 * 4          # several kWh every winter night
+    _, cheap = week("2026-01-12", opts=CHEAP_NIGHT)
+    assert cheap["fixed"]["grid_charged"] > 7 * 4      # several kWh every winter night
+    assert cheap["fixed"]["peak_kw"] <= LIMIT + 0.05
+    # The default rates: the night is 3.4 c cheaper, less than losses and wear. No night filling.
+    assert m["fixed"]["grid_charged"] < 7 * 2.5        # only what the peaks need
     assert m["fixed"]["peak_kw"] <= LIMIT + 0.05
     assert m["dynamic"]["peak_kw"] <= LIMIT + 0.05
     assert m["nobat"]["peak_kw"] > 3                    # without the battery the cooking spike hits the grid
@@ -77,13 +84,28 @@ def test_comparison_follows_the_market(scale, cheaper):
     assert (d < f) if cheaper == "dynamic" else (f < d)
 
 
-def test_peaks_only_winter_mode_is_cheaper_and_still_shaves(winter):
-    _, full = winter
-    _, peaks = week("2026-01-12", opts=Options(winter_mode="peaks_only"))
-    o = Options()
-    assert peaks["fixed"]["grid_charged"] < full["fixed"]["grid_charged"] / 2
+def test_peaks_only_winter_mode_never_fills_at_night_and_still_shaves():
+    _, full = week("2026-01-12", opts=CHEAP_NIGHT)
+    _, peaks = week("2026-01-12", opts=Options(winter_mode="peaks_only", fixed_night_rate=8.0))
+    assert peaks["dynamic"]["grid_charged"] < full["dynamic"]["grid_charged"] + 1
     assert peaks["fixed"]["peak_kw"] <= LIMIT + 0.1
-    assert yearsim.month_eur(peaks, "fixed", o) < yearsim.month_eur(full, "fixed", o)
+    assert peaks["dynamic"]["peak_kw"] <= LIMIT + 0.1
+
+
+def test_peak_shaving_saves_in_winter_and_changes_nothing_in_summer(winter, summer):
+    """With the inverter's peak-shaving switch the battery is kept for the peaks instead of being
+    emptied by the house and topped up again."""
+    o = Options()
+    _, m = winter
+    _, shave = week("2026-01-12", peak_shave=True)
+    assert shave["fixed"]["grid_charged"] < m["fixed"]["grid_charged"] / 2
+    assert shave["fixed"]["peak_kw"] <= LIMIT + 0.05 and shave["dynamic"]["peak_kw"] <= LIMIT + 0.05
+    for kind in ("fixed", "dynamic"):
+        assert yearsim.month_eur(shave, kind, o) < yearsim.month_eur(m, kind, o)
+    _, s = summer
+    _, s_shave = week("2026-07-06", peak_shave=True)
+    for kind in ("fixed", "dynamic"):
+        assert yearsim.month_eur(s_shave, kind, o) <= yearsim.month_eur(s, kind, o) + 0.01
 
 
 def test_price_spikes_make_dynamic_cheaper_and_never_dearer(monkeypatch):

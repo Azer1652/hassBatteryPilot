@@ -129,9 +129,11 @@ class World:
 
 
 def run(start: date, days: int, opts: Options | None = None, seed: int = 1, price_scale: float = 1.0,
-        replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7, block_negative: bool = False) -> dict:
+        replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7, block_negative: bool = False,
+        peak_shave: bool = False) -> dict:
     """`warmup_days` before `start` are simulated for learning only (like a first install's history).
-    `block_negative`: as with the *block negative export* switch on."""
+    `block_negative`: as with the *block negative export* switch on.
+    `peak_shave`: the inverter has a peak-shaving switch."""
     o = opts or Options()
     w = World(seed, price_scale)
     shade, load = ShadeModel(), LoadProfile()
@@ -160,7 +162,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         for kind in ("fixed", "dynamic"):
             res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h,
                              month_peak_kw=m[kind]["peak_kw"],
-                             block_negative=block_negative)
+                             block_negative=block_negative, peak_shave=peak_shave)
             soc[kind] = res["soc_end"]
             if kind == "fixed":
                 dyn = tariff("dynamic", o)
@@ -240,9 +242,10 @@ def main():
     ap.add_argument("--price-scale", type=float, default=1.0)
     ap.add_argument("--winter-mode", default="full_day", choices=["full_day", "peaks_only"])
     ap.add_argument("--block-negative", action="store_true", help="block export at negative sell prices")
+    ap.add_argument("--peak-shave", action="store_true", help="the inverter has a peak-shaving switch")
     a = ap.parse_args()
     res = run(date.fromisoformat(a.start), a.days, Options(winter_mode=a.winter_mode), seed=a.seed,
-              price_scale=a.price_scale, block_negative=a.block_negative)
+              price_scale=a.price_scale, block_negative=a.block_negative, peak_shave=a.peak_shave)
     print(table(res))
 
 

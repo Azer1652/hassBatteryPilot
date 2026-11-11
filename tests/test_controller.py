@@ -170,3 +170,20 @@ def test_a_short_slot_starts_nothing_and_a_real_pause_is_kept():
     plan, t = _plan_before_a_boundary(3, nxt="discharge")
     assert step_to_follow(plan, t, b, "discharge").action == "self_use"    # 3 minutes hold a point of export
     assert step_to_follow(None, t, b, "charge") is None
+
+
+# ---------------------------------------------------------------- peak shaving
+def test_a_peak_shaving_step_switches_the_inverter_to_peak_shaving_once():
+    d = decide(step("peak_shave", 30), rd(), OPTS, "self_use", "", 0, control_on=True)
+    assert d.command == "peak_shave"
+    assert decide(step("peak_shave", 30), rd(), OPTS, "peak_shave", "", 0, control_on=True).command == "none"
+    assert decide(step("peak_shave", 30), rd(), OPTS, "failed", "", 0, control_on=True).command == "peak_shave"
+    assert decide(step("peak_shave", 30), rd(), OPTS, "charge", "01:00:00", 30, control_on=True).command == "peak_shave"
+
+
+def test_peak_shaving_ends_with_the_step_and_with_control():
+    assert decide(step("self_use", 30), rd(), OPTS, "peak_shave", "", 0, control_on=True).command == "self_use"
+    assert decide(step("charge", 60), rd(), OPTS, "peak_shave", "", 0, control_on=True).command == "charge"
+    assert decide(None, rd(), OPTS, "peak_shave", "", 0, control_on=True).command == "self_use"
+    assert decide(step("peak_shave", 30), rd(), OPTS, "peak_shave", "", 0, control_on=False).command == "self_use"
+    assert decide(step("peak_shave", 30), rd(), OPTS, "self_use", "", 0, control_on=False).command == "none"

@@ -6,19 +6,21 @@ contract, the solar forecast and the capacity tariff. It also tells you whether 
 **fixed or a dynamic contract** would be cheaper for your house, using your own
 measured energy.
 
-![The 36-hour battery plan: a winter night charged to its target under the import limit](docs/screenshots/plan.png)
+![The 36-hour battery plan: a winter day with the battery kept for the evening peak by peak shaving](docs/screenshots/plan.png)
 
-*Demo data. Blue bars are hours the battery is grid-charged, green is the battery
-level. The dull day ahead means the battery is filled by the end of the night.*
+*Demo data. Teal bars are hours in the inverter's peak-shaving mode: the grid feeds the
+house and the battery (the green line) is kept for the evening cooking peak. On these
+day/night rates, filling the battery at night would cost more than it saves.*
 
 ## What it does
 
-- **Plans the battery for the next 36 hours**: self-use, grid charge or export in each
-  hour or quarter-hour. It weighs your contract's prices, battery losses and wear.
+- **Plans the battery for the next 36 hours**: self-use, grid charge, export or the
+  inverter's peak-shaving mode in each hour or quarter-hour. It weighs your contract's prices, battery losses and wear.
 - **Keeps your capacity-tariff peak low.** Grid charging follows the house load under
   the import limit, and the battery keeps enough energy for your usual cooking peaks.
 - **Handles winter.** On a dull day ahead the battery is charged at night to carry the
-  house.
+  house, when the night price is low enough to pay for the losses and the wear.
+  Otherwise it is kept for your peaks.
 - **Learns the shade of your trees** for every month and hour, and corrects the solar
   forecast with it.
 - **Shows planned vs actual**, day by day: the battery level and solar the plan expected
