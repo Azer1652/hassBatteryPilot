@@ -22,7 +22,9 @@
   The plan keeps using the *Round-trip efficiency* setting: change it yourself when the
   measured value stays 3 points or more away.
 - New optional entity setting: `feed_in_priority_switch` (found automatically).
-- Year simulation: TODO
+- Year simulation (synthetic year, peak shaving on): the fixed contract stays at €948; dynamic goes
+  from €861-862 to €856 with solar hold. It only gains on days that start with a low battery and
+  have a long midday with a negative sell price.
 
 ## 2.5.0
 
