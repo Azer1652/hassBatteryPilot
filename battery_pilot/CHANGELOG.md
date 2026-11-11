@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.0
+
+- **Export and import the settings.** A new card at the bottom of the page: *Export settings*
+  keeps the settings of the Configuration tab as a file (or as text to copy). An import first
+  lists what would change; *Save these settings* saves them, and they are used after you restart
+  the app. Settings missing from the file keep their value. What the app learned is not in the file.
+- The app now asks for access to the Supervisor API (`hassio_api`), to save imported settings.
+
 ## 2.10.1
 
 - **ENTSO-e prices were not read.** The ENTSO-e integration keeps its price list on the

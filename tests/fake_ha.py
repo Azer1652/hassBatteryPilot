@@ -34,6 +34,8 @@ class FakeHA:
         self.pv_fn = pv
         self.forecast = forecast or {}          # {UTC hour: kWh}
         self.calls: list[tuple[str, str, dict]] = []
+        self.supervisor_calls: list[tuple] = []     # (method, path, body) sent to the Supervisor
+        self.supervisor_error: str | None = None    # set: the Supervisor refuses
         self.published: dict[str, dict] = {}
         self.check_ok = True
         self.history_data: dict = {}
@@ -93,6 +95,12 @@ class FakeHA:
         if v is not None and eid in self.override:
             v = {**v, "state": self.override[eid]}
         return None if v is None else {"entity_id": eid, **v}
+
+    async def supervisor(self, method, path, body=None):
+        if self.supervisor_error:
+            raise RuntimeError(self.supervisor_error)
+        self.supervisor_calls.append((method, path, body))
+        return {"result": "ok"}
 
     async def services(self):
         return [{"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}}]

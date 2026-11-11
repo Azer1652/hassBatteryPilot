@@ -61,6 +61,8 @@
   .fill button:disabled { opacity: 0.5; cursor: default; }
   .fill p { margin: 0; flex: 1 1 240px; }
   .nav button:disabled { opacity: 0.35; cursor: default; }
+  #settext { width: 100%; box-sizing: border-box; margin: 10px 0 0; padding: 8px; font: 12px/1.4 ui-monospace, monospace;
+             color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
   .nav span { min-width: 120px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
   .legend i.ln { width: 16px; height: 0; border-top: 2px solid; display: inline-block; }
   .legend i.ln.dash, .tip i.dash { border-top-style: dashed; }
@@ -192,6 +194,24 @@
   <div class="grid">
     <div class="card"><h2>Inverter commands</h2><ul class="log" id="cmds"></ul></div>
     <div class="card"><h2>Events</h2><ul class="log" id="events"></ul></div>
+  </div>
+
+  <div class="card">
+    <h2>Settings: export and import</h2>
+    <p class="muted">Export keeps the settings of the app's Configuration tab as a file. Import puts a file back:
+      you first see what would change, and nothing is used until you restart the app.</p>
+    <div class="fill">
+      <button id="expbtn" type="button">Export settings</button>
+      <button id="copybtn" type="button">Copy</button>
+      <button id="filebtn" type="button">Choose a file to import</button>
+      <button id="checkbtn" type="button">Check import</button>
+      <input id="impfile" type="file" accept=".json,application/json" hidden>
+    </div>
+    <textarea id="settext" rows="8" spellcheck="false" aria-label="Settings as JSON"
+      placeholder="Exported settings appear here. To import, choose a file or paste settings here, then press Check import."></textarea>
+    <p class="muted" id="setnote" role="status"></p>
+    <ul class="log" id="setchanges"></ul>
+    <div class="fill"><button id="savebtn" type="button" hidden>Save these settings</button></div>
   </div>
 </main>
 <script>
@@ -974,6 +994,84 @@ function goDay(d) {
 }
 $("hprev").addEventListener("click", () => goDay(-1));
 $("fillbtn").addEventListener("click", toggleFill);
+
+// ---------------------------------------------------------------- settings: export and import
+const setNote = (t) => { $("setnote").textContent = t; };
+const showVal = (v) => (v === null || v === undefined || v === "") ? "(empty)" : String(v);
+function clearImport() { $("setchanges").innerHTML = ""; $("savebtn").hidden = true; }
+
+async function exportSettings() {
+  clearImport();
+  try {
+    const r = await fetch("api/settings");
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    const doc = await r.json(), text = JSON.stringify(doc, null, 2);
+    $("settext").value = text;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], {type: "application/json"}));
+    a.download = `battery-pilot-settings-${(doc.exported || "").slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    setNote("Exported. If no file was downloaded, press Copy and keep the text below.");
+  } catch (e) { setNote(`Export failed: ${e.message || e}`); }
+}
+
+async function copySettings() {
+  const t = $("settext");
+  if (!t.value) { setNote("Nothing to copy yet: press Export settings first."); return; }
+  try { await navigator.clipboard.writeText(t.value); setNote("Copied."); }
+  catch (e) { t.select(); setNote("Select the text below and copy it."); }
+}
+
+async function sendSettings(path) {
+  let body;
+  try { body = JSON.parse($("settext").value); }
+  catch (e) { throw new Error("The text below is not a settings file (not valid JSON)."); }
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+
+function listChanges(d) {
+  $("setchanges").innerHTML = d.changes.map((c) =>
+    `<li><b>${esc(c.key)}</b>: ${esc(showVal(c.old))} → ${esc(showVal(c.new))}</li>`).join("");
+  return d.ignored.length ? ` Not Battery Pilot settings, skipped: ${d.ignored.join(", ")}.` : "";
+}
+
+async function checkImport() {
+  clearImport();
+  if (!$("settext").value.trim()) { setNote("Choose a file or paste settings below first."); return; }
+  try {
+    const d = await sendSettings("api/settings/check"), skipped = listChanges(d);
+    $("savebtn").hidden = !d.changes.length;
+    setNote((d.changes.length ? `${d.changes.length} setting(s) would change. Nothing is saved yet.`
+                              : "These settings are the same as the saved ones.") + skipped);
+  } catch (e) { setNote(e.message || String(e)); }
+}
+
+async function saveImport() {
+  $("savebtn").disabled = true;
+  try {
+    const d = await sendSettings("api/settings"), skipped = listChanges(d);
+    $("savebtn").hidden = true;
+    setNote(`Saved ${d.changes.length} setting(s). Restart the app to use them (Settings → Apps → Battery Pilot → Restart).` + skipped);
+  } catch (e) { setNote(e.message || String(e)); }
+  $("savebtn").disabled = false;
+}
+
+$("expbtn").addEventListener("click", exportSettings);
+$("copybtn").addEventListener("click", copySettings);
+$("filebtn").addEventListener("click", () => $("impfile").click());
+$("impfile").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  $("settext").value = await f.text();
+  ev.target.value = "";
+  checkImport();
+});
+$("checkbtn").addEventListener("click", checkImport);
+$("savebtn").addEventListener("click", saveImport);
+$("settext").addEventListener("input", clearImport);
 $("hnext").addEventListener("click", () => goDay(1));
 const pick = (e) => { const tr = e.target.closest("tr[data-day]"); if (tr) loadHistory(tr.dataset.day); };
 $("hdays").addEventListener("click", pick);

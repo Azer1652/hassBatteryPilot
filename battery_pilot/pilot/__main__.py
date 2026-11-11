@@ -30,7 +30,8 @@ async def main() -> int:
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     log = logging.getLogger("battery_pilot")
     try:
-        opts = load(os.environ.get("BP_OPTIONS", "/data/options.json"))
+        options_path = os.environ.get("BP_OPTIONS", "/data/options.json")
+        opts = load(options_path)
     except ConfigError as e:
         log.error("Settings problem: %s", e)
         return 1
@@ -40,8 +41,11 @@ async def main() -> int:
         log.error("SUPERVISOR_TOKEN is not set, so Battery Pilot cannot reach Home Assistant. "
                   "Inside the app it comes from the Supervisor; run locally, set it to a long-lived token.")
     ha = HA(os.environ.get("BP_API", "http://supervisor/core/api"),
-            os.environ.get("BP_WS", "ws://supervisor/core/websocket"), token)
-    app = App(opts, ha, data_dir=os.environ.get("BP_DATA", "/data"), config_dir=config_dir(), version=VERSION)
+            os.environ.get("BP_WS", "ws://supervisor/core/websocket"), token,
+            # (a local run against a plain HA has no Supervisor: settings cannot be saved from the page)
+            supervisor_url=os.environ.get("BP_SUPERVISOR", "" if "BP_API" in os.environ else "http://supervisor"))
+    app = App(opts, ha, data_dir=os.environ.get("BP_DATA", "/data"), config_dir=config_dir(), version=VERSION,
+              options_path=options_path)
 
     runner = web.AppRunner(make_web(app, default_allowed()), access_log=None)
     await runner.setup()

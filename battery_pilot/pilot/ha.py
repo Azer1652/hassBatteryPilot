@@ -17,8 +17,10 @@ class HAError(Exception):
 
 
 class HA:
-    def __init__(self, api_url: str, ws_url: str, token: str, session: aiohttp.ClientSession | None = None):
+    def __init__(self, api_url: str, ws_url: str, token: str, session: aiohttp.ClientSession | None = None,
+                 supervisor_url: str | None = None):
         self.api = api_url.rstrip("/")
+        self.supervisor_url = (supervisor_url or "").rstrip("/")
         self.ws_url = ws_url
         self.token = token
         self._session = session
@@ -39,8 +41,8 @@ class HA:
     def _headers(self):
         return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
 
-    async def _request(self, method: str, path: str, body=None, timeout: float = 30):
-        url = self.api + path
+    async def _request(self, method: str, path: str, body=None, timeout: float = 30, base: str | None = None):
+        url = (base or self.api) + path
         async with self.session.request(method, url, json=body, headers=self._headers,
                                         timeout=aiohttp.ClientTimeout(total=timeout)) as r:
             if r.status >= 400:
@@ -49,6 +51,12 @@ class HA:
             if r.content_type == "application/json":
                 return await r.json()
             return await r.text()
+
+    async def supervisor(self, method: str, path: str, body=None):
+        """A call to the Supervisor itself (the app's own settings), not to Home Assistant."""
+        if not self.supervisor_url:
+            raise HAError("the app is not running under the Home Assistant Supervisor")
+        return await self._request(method, path, body, base=self.supervisor_url)
 
     # ---------------------------------------------------------------- REST
     async def ping(self) -> bool:

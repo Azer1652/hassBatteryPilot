@@ -15,7 +15,7 @@ from . import history as H
 from . import prices as P
 from . import trading
 from .compare import KINDS, Comparison, day_records, replay_day
-from .config import Options
+from .config import ConfigError, Options
 from .controller import ACTIVE, FILL_AGAIN, Decision, Readings, decide
 from .discovery import ENTITIES, NEEDED_FOR, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
@@ -66,8 +66,9 @@ def utcnow() -> datetime:
 
 class App:
     def __init__(self, opts: Options, ha, data_dir: str = "/data", config_dir: str | None = None,
-                 clock=utcnow, version: str = "dev"):
+                 clock=utcnow, version: str = "dev", options_path: str | None = None):
         self.o = opts
+        self.options_path = options_path
         self.ha = ha
         self.data_dir = data_dir
         self.config_dir = config_dir
@@ -146,6 +147,24 @@ class App:
         log.log(level, text)
         self.events.append({"t": self.clock().isoformat(), "text": text})
         del self.events[:-100]
+
+    # ---------------------------------------------------------------- settings file
+    def saved_options(self) -> dict:
+        """The settings as saved on the Configuration tab (what the next start will use)."""
+        try:
+            with open(self.options_path or "", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError) as e:
+            raise ConfigError(f"the settings cannot be read ({e}).") from None
+        if not isinstance(raw, dict):
+            raise ConfigError("the settings file does not hold settings.")
+        return raw
+
+    async def save_options(self, merged: dict, changed: int):
+        """Save imported settings through the Supervisor. The running settings stay as they are
+        until the app is restarted."""
+        await self.ha.supervisor("POST", "/addons/self/options", {"options": merged})
+        self.event(f"Settings imported ({changed} changed). Restart the app to use them.")
 
     # ---------------------------------------------------------------- persistence
     @property

@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.10.1"
+version: "2.11.0"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -9,6 +9,7 @@ arch:
 init: false
 startup: services
 homeassistant_api: true
+hassio_api: true
 ingress: true
 panel_icon: mdi:battery-sync
 panel_title: Battery Pilot

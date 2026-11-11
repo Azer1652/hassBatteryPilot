@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import random
 import sys
@@ -87,7 +88,11 @@ async def main(days: int, port: int, seconds: float | None):
                   peak_shaving=True)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
-    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version=f"{version()} · demo data")
+    options_path = os.path.join(data, "options.json")     # (the settings card exports and imports this file)
+    with open(options_path, "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in vars(o).items() if k != "entities"}, f)
+    app = App(o, fake, data_dir=data, clock=lambda: fake.now, version=f"{version()} · demo data",
+              options_path=options_path)
     await app.setup()
     fill(app, res)
     print(f"Running the app for {LIVE_DAYS} days...", flush=True)

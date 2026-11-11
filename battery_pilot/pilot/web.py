@@ -7,6 +7,9 @@ from datetime import date
 
 from aiohttp import web
 
+from . import settings
+from .config import ConfigError
+
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 INGRESS_IP = "172.30.32.2"   # the Supervisor's ingress proxy
 APP_KEY = web.AppKey("pilot_app", object)
@@ -68,6 +71,49 @@ async def car_fill(request: web.Request):
     return web.json_response({"on": on})
 
 
+async def settings_export(request: web.Request):
+    """The saved settings as a file to keep."""
+    app = request.app[APP_KEY]
+    try:
+        doc = settings.export_doc(app.saved_options(), app.version, app.clock().astimezone(app.tz))
+    except ConfigError as e:
+        raise web.HTTPBadGateway(text=str(e)) from e
+    return web.json_response(doc, dumps=_dumps)
+
+
+async def _prepared(request: web.Request):
+    app = request.app[APP_KEY]
+    try:
+        raw = await request.json()
+    except Exception as e:  # noqa: BLE001
+        raise web.HTTPBadRequest(text="This is not JSON, so it is not a settings file.") from e
+    try:
+        current = app.saved_options()
+    except ConfigError as e:
+        raise web.HTTPBadGateway(text=str(e)) from e
+    try:
+        return settings.prepare(raw, current)
+    except ConfigError as e:
+        raise web.HTTPBadRequest(text=f"Not imported: {e}") from e
+
+
+async def settings_check(request: web.Request):
+    """What an import would change. Nothing is saved."""
+    _, changes, ignored = await _prepared(request)
+    return web.json_response({"changes": changes, "ignored": ignored}, dumps=_dumps)
+
+
+async def settings_import(request: web.Request):
+    """Save imported settings. They are used after a restart of the app."""
+    merged, changes, ignored = await _prepared(request)
+    if changes:
+        try:
+            await request.app[APP_KEY].save_options(merged, len(changes))
+        except Exception as e:  # noqa: BLE001
+            raise web.HTTPBadGateway(text=f"Home Assistant did not save the settings: {e}") from e
+    return web.json_response({"saved": bool(changes), "changes": changes, "ignored": ignored}, dumps=_dumps)
+
+
 def _dumps(obj):
     import json
     return json.dumps(obj, default=str)
@@ -83,6 +129,9 @@ def make_web(app, allowed_ips: set[str] | None = None) -> web.Application:
     w.router.add_get("/api/history", history_index)
     w.router.add_get("/api/history/{day}", history_day)
     w.router.add_post("/api/car_fill", car_fill)
+    w.router.add_get("/api/settings", settings_export)
+    w.router.add_post("/api/settings/check", settings_check)
+    w.router.add_post("/api/settings", settings_import)
     w.router.add_static("/static/", STATIC)
     return w
 

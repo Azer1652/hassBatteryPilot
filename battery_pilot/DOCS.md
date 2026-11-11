@@ -313,6 +313,9 @@ at an extreme price.
 - **Files:** none, except once when taking over from Battery Playbook. It removes the
   `battery_playbook_*.yaml` package files after a configuration check (a copy goes to
   the app's own storage), switches off the old automations, and reloads HA's YAML.
+- **Its own settings**, only when you press *Save these settings* after an import (see
+  *Export and import the settings*). They are saved through the Supervisor, which is why
+  the app asks for access to the Supervisor API.
 - **Its own storage** (`/data/state.json`): what it learned (shade, consumption, peaks),
   the comparison history and the last days of prices and measurements. In
   `/data/history`, one file per day for the last 60 days of planned vs actual;
@@ -427,6 +430,24 @@ keeps its room for hours in which surplus cannot be sold. Without the switch not
 changes. It has not yet been checked on a real inverter. On the first sunny day, check
 that the switch goes on in the morning, that export shows, and that the battery charges
 again at midday.
+
+### Export and import the settings
+
+The card *Settings: export and import* at the bottom of the Battery Pilot page keeps the
+settings above as a file, and puts a file back.
+
+- **Export settings** downloads `battery-pilot-settings-<date>.json` and shows the same
+  text on the page. Inside the Companion app a download does not always arrive: press
+  **Copy** and keep the text. The file holds your settings (rates, limits, entity names);
+  what the app learned and measured is not in it.
+- **Choose a file to import** (or paste the text and press **Check import**) lists every
+  setting that would change, old and new value. Nothing is saved yet.
+- **Save these settings** saves them, as if you had typed them on the Configuration tab.
+  They are used after you **restart the app**; until then it runs on the old ones.
+- A setting the file does not have keeps its value, so a file from an older version
+  works. Text that is not a Battery Pilot setting is skipped and named. Values that
+  cannot be used (for example a reserve below the minimum) are refused with the reason,
+  and nothing is saved.
 
 ## Electric car
 

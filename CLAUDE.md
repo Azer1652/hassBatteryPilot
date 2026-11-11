@@ -112,7 +112,7 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   is kept out of `LoadProfile` and the peaks; the replay uses peak_shave in car quarters; the plan adds
   the car's power for the next hour. `status["car"]`, `sensor.battery_pilot_car_power`, `#carnote`.
 - The fill switch (`helpers.CAR_FILL`, third helper; the page's `#fillbtn` posts to `/api/car_fill` →
-  `App.set_fill`, the only POST route): while on and the car is not charging, `controller.decide(fill=True)`
+  `App.set_fill`): while on and the car is not charging, `controller.decide(fill=True)`
   replaces the plan's step by `fill_step` (charge to 100 % in the current clock hour; once full
   `peak_shave` when the inverter has it, charging again below `FILL_AGAIN`). The plan is not changed.
   `App._fill` turns the helper off when a car session ends or after `FILL_MAX_H` (`fill_since` is persisted).
@@ -122,6 +122,12 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   step `peak_shave`; `controller.decide` switches to peak shaving at the level (leaves it `BUFFER_BAND`
   above) and charges back to it from `BUFFER_GAP` below. That refill is not in the planner or the replay.
   `App.setup` zeroes the option when the peak-shaving switch was not found.
+- Settings export/import (`settings.py`, pure; the page's last card): `GET /api/settings` gives the saved
+  options file (`App.options_path`, `saved_options()`); `POST /api/settings/check` and `POST /api/settings`
+  run `settings.prepare` (known keys only, types as the Supervisor wants them, merged onto the saved options,
+  validated with `config.from_dict`, empty entity overrides left out). Saving is `App.save_options` →
+  `HA.supervisor("POST", "/addons/self/options")` (`hassio_api: true`); the running `Options` are not touched,
+  the user restarts the app. Unverified against a real Supervisor.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices
