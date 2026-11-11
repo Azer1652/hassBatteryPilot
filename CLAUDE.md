@@ -88,6 +88,18 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   a slot boundary are a first slot too short for one SOC point, which the optimizer can only make
   self-use (equal prices are merged, different ones are not); a running charge or discharge that the
   next step continues carries on through it. It never starts one.
+- `solar_hold` (the inverter's feed-in priority switch, `feed_in_priority_switch`, found by name): the
+  surplus is exported and not stored, so the battery keeps its room for hours where surplus cannot be
+  sold (negative sell price with export blocked, or above the export limit). No action cost; chosen only
+  where it lowers the cost. `controller.decide` switches it on with at least 0.3 kW surplus and returns
+  to self-use when it is gone (not within 120 s of the last command), since the battery may not feed the
+  house then. Like `peak_shave` it is in `controller.ACTIVE`, ended on control off, blind, stop and
+  restart, and read back by `_reconcile`. Unverified on a real inverter. Without the entity nothing changes.
+- `efficiency.EfficiencyMeter`: the battery's measured round-trip efficiency (battery AC flow = load +
+  export − import − pv against the SOC change, quarters with complete data and SOC 15-95 %, 60-day
+  half-life, a value after 150 SOC points each way). `learn_records` is called from `App.nightly()`.
+  Display only (`status["efficiency"]`, `sensor.battery_pilot_efficiency`): the plan keeps using
+  `round_trip_efficiency_pct`.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices

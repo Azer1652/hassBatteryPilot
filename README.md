@@ -15,7 +15,10 @@ day/night rates, filling the battery at night would cost more than it saves.*
 ## What it does
 
 - **Plans the battery for the next 36 hours**: self-use, grid charge, export or the
-  inverter's peak-shaving mode in each hour or quarter-hour. It weighs your contract's prices, battery losses and wear.
+  inverter's peak-shaving mode or its feed-in priority ("solar hold": surplus is exported
+  and the battery keeps its room for later) in each hour or quarter-hour. It weighs your contract's prices, battery losses and wear.
+- **Measures the battery's real round-trip efficiency** from its own records and shows it next
+  to the setting. It does not change the plan by itself.
 - **Keeps your capacity-tariff peak low.** Grid charging follows the house load under
   the import limit, and the battery keeps enough energy for your usual cooking peaks.
 - **Handles winter.** On a dull day ahead the battery is charged at night to carry the

@@ -7,14 +7,14 @@
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
-    --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --shave: #17919c; --soc: #1b9e5a; --warn: #c23b2b;
+    --charge: #2f6fd6; --discharge: #e07b1f; --self: #b9c0cc; --shave: #17919c; --hold: #7d9a1c; --soc: #1b9e5a; --warn: #c23b2b;
     --plan: #6250d6; --pv: #eda100; --house: #c2477e;
     --ok-bg: #e8f5ee; --warn-bg: #fdecea; --shadow-bg: #fff6e0;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #111418; --card: #1b2027; --text: #e6e9ee; --muted: #9aa3b2; --line: #2c333d;
-      --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --shave: #2fa9b4; --soc: #30a86a; --warn: #ff6b5a;
+      --charge: #5b93f0; --discharge: #f0973f; --self: #4a5361; --shave: #2fa9b4; --hold: #a6c43c; --soc: #30a86a; --warn: #ff6b5a;
       --plan: #9085e9; --pv: #c98500; --house: #c85593;
       --ok-bg: #16301f; --warn-bg: #3a1c19; --shadow-bg: #3a3017;
     }
@@ -107,12 +107,14 @@
       <span><i class="sw" style="background:var(--discharge)"></i>discharge / export</span>
       <span><i class="sw" style="background:var(--self)"></i>self-use</span>
       <span id="shaveleg" hidden><i class="sw" style="background:var(--shave)"></i>peak shaving</span>
+      <span id="holdleg" hidden><i class="sw" style="background:var(--hold)"></i>solar hold</span>
       <span><i class="ln" style="border-color:var(--soc)"></i>battery SOC (right axis)</span>
       <span id="plantarget" hidden><i class="ring"></i>night target</span>
     </div>
     <p class="hint">Bar height: the price you pay per kWh (left axis, c). Tap or hover over the chart for the details.</p>
     <div class="hchart" id="plan"></div>
     <p class="muted" id="plannote"></p>
+    <p class="muted" id="effnote"></p>
   </div>
 
   <div class="card" id="histcard">
@@ -275,7 +277,8 @@ function chartTip(el, c) {
 }
 
 const ACTIONS = {charge: "grid charge", discharge: "discharge / export", self_use: "self-use",
-                 peak_shave: "peak shaving (grid feeds the house, battery kept)"};
+                 peak_shave: "peak shaving (grid feeds the house, battery kept)",
+                 solar_hold: "solar hold (surplus is exported, the battery keeps its room)"};
 
 function planChart(el, plan) {
   if (!plan || !plan.steps.length) {
@@ -294,7 +297,7 @@ function planChart(el, plan) {
   const yp = (p) => top + (pmax - p) / (pmax - pmin) * (H - top - bottom);
   const ys = (soc) => top + (100 - soc) / 100 * (H - top - bottom);
   const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"),
-               peak_shave: css("--shave")}, soc = css("--soc");
+               peak_shave: css("--shave"), solar_hold: css("--hold")}, soc = css("--soc");
   let g = "";
   steps.forEach((s, i) => {
     const [a, b] = span[i], y = yp(Math.max(s.buy, 0)), y0 = yp(0);
@@ -362,7 +365,24 @@ function planExtras(plan) {
   const sale = plan && plan.steps.find((s) => s.action === "discharge" && (s.reserve !== null || !plan.allow_export));
   if (sale) out.push(`At ${hm(sale.start)} the price is high enough to sell ${plan.allow_export ? "below the reserve" : "in winter"}: ` +
     "buying the energy back later costs less.");
+  const hold = plan && plan.steps.find((s) => s.action === "solar_hold");
+  if (hold) out.push(`From ${hm(hold.start)} the solar surplus is exported and not stored (solar hold): ` +
+    "the battery keeps its room for hours in which surplus cannot be sold.");
   return out.join(" ");
+}
+
+function efficiencyNote(e) {
+  // Measured round-trip efficiency; the plan keeps using the setting.
+  if (!e) return "";
+  const cfg = e.configured_pct;
+  if (e.round_trip_pct === null || e.round_trip_pct === undefined) {
+    const n = Math.min(e.charge_points || 0, e.discharge_points || 0);
+    return `Round trip: not enough data yet (${fmt(n, 0)} of ${e.needed_points || 150} SOC points).`;
+  }
+  let s = `Round trip: measured ${fmt(e.round_trip_pct, 0)} % (setting ${fmt(cfg, 0)} %).`;
+  if (cfg !== undefined && cfg !== null && Math.abs(e.round_trip_pct - cfg) >= 3)
+    s += " Consider changing the round-trip efficiency setting.";
+  return s;
 }
 
 function comparison(c) {
@@ -577,7 +597,7 @@ function histChart(el, doc, kind) {
   }
   // what was planned and what the inverter did
   const col = {charge: css("--charge"), discharge: css("--discharge"), self_use: css("--self"),
-               peak_shave: css("--shave"), shadow: line};
+               peak_shave: css("--shave"), solar_hold: css("--hold"), shadow: line};
   for (const [a, b, act] of plannedActions(doc, kind)) {
     g += `<rect x="${xm(a)}" y="${yA}" width="${Math.max(xm(b) - xm(a) - 1, 1)}" height="${strip}" rx="2" fill="${col[act] || col.self_use}"/>`;
   }
@@ -680,7 +700,7 @@ function histLegend(doc, kind) {
   if (doc.live) h += sw("ln dot", `border-color:${css("--plan")}`, "after now: the current plan");
   const seen = new Set([...plannedActions(doc, kind).map((r) => r[2]), ...doc.measured.mode.filter(Boolean)]);
   const strips = [["charge", "--charge", "grid charge"], ["discharge", "--discharge", "discharge / export"],
-    ["self_use", "--self", "self-use"], ["peak_shave", "--shave", "peak shaving"], ["shadow", "--line", "control off (shadow)"]].filter(([k]) => seen.has(k));
+    ["self_use", "--self", "self-use"], ["peak_shave", "--shave", "peak shaving"], ["solar_hold", "--hold", "solar hold"], ["shadow", "--line", "control off (shadow)"]].filter(([k]) => seen.has(k));
   return h + "</div><div>" + strips.map(([, v, label]) => sw("sw", `background:${css(v)}`, label)).join("") + "</div>";
 }
 
@@ -884,7 +904,7 @@ let render = function (s) {
   const r = s.readings || {}, pr = s.prices || {}, step = s.plan && s.plan.steps[0];
   $("kpis").innerHTML = [
     kpi("battery", r.soc === undefined ? "–" : fmt(r.soc, 0) + " %"),
-    kpi("now", step ? (step.action === "peak_shave" ? "peak shaving" : step.action.replace("_", "-")) : "–"),
+    kpi("now", step ? (step.action === "peak_shave" ? "peak shaving" : step.action === "solar_hold" ? "solar hold" : step.action.replace("_", "-")) : "–"),
     kpi("house", fmt(r.load_kw, 2) + " kW"), kpi("solar", fmt(r.pv_kw, 2) + " kW"),
     kpi("grid import", fmt(r.import_kw, 2) + " kW"),
     kpi("this quarter-hour", fmt(r.projection_kw, 2) + " kW"),
@@ -893,6 +913,8 @@ let render = function (s) {
   importLimit = s.peaks.limit_kw;
   planChart($("plan"), s.plan);
   $("shaveleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "peak_shave"));
+  $("holdleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "solar_hold"));
+  $("effnote").textContent = efficiencyNote(s.efficiency);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`

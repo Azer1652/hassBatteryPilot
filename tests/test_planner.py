@@ -855,3 +855,40 @@ def test_dynamic_sells_in_the_dear_evening_before_a_day_with_more_sun_than_fits(
     assert min(s.soc_end for s in sunny.steps if s.action == "discharge") >= o.battery_reserve_soc
     dull = make_plan(now, BXL, o, DynamicTariff(o), prices, _flat_load(0.4), _bell(1.0), soc=90)
     assert sold(dull) == 0
+
+
+# ---------------------------------------------------------------- solar hold
+def test_solar_hold_sells_the_morning_and_stores_the_blocked_midday():
+    """A battery that starts low, surplus all day, and a sell price below zero (export blocked)
+    from the sixth hour. In self-use the battery fills in the morning; room can then only be made
+    by selling it again, and not below the reserve. With the feed-in priority switch the morning
+    surplus is sold and the midday surplus, which cannot be sold, is stored."""
+    slots = hourly([20] * 10 + [30] * 4, [8] * 5 + [-2] * 5 + [8] * 4, load=[0.5] * 10 + [1.5] * 4,
+                   pv=[3.0] * 10 + [0.0] * 4)
+    kw = dict(terminal_c_kwh=20, curtail_negative=True)
+    plain = optimize(B, slots, 20, **kw)
+    held = optimize(B, slots, 20, solar_hold=True, **kw)
+    assert all(s.action != "solar_hold" for s in plain)
+    assert [s.action for s in held[:5]] == ["solar_hold"] * 5
+    assert held[4].soc_end == 20 and held[0].export_kwh == pytest.approx(2.5)
+    assert all(s.action == "self_use" for s in held[5:])               # blocked hours: stored, as before
+    assert all(s.action != "discharge" for s in held) and any(s.action == "discharge" for s in plain)
+    money = lambda st: sum(s.cost_c for s in st) - 20 * 0.16 * st[-1].soc_end   # noqa: E731
+    assert money(held) < money(plain) - 5
+
+
+def test_solar_hold_changes_nothing_when_storing_is_worth_more():
+    slots = hourly([30] * 8, [5] * 8, load=[0.5] * 4 + [1.5] * 4, pv=[2.0] * 4 + [0.0] * 4)
+    assert optimize(B, slots, 40, terminal_c_kwh=20, solar_hold=True) == optimize(B, slots, 40, terminal_c_kwh=20)
+
+
+def test_solar_hold_is_not_planned_in_an_hour_without_export():
+    slots = hourly([20] * 4, [-2] * 4, load=0.5, pv=3.0)
+    assert all(s.action != "solar_hold" for s in optimize(B, slots, 99, curtail_negative=True, solar_hold=True))
+
+
+def test_the_simulator_exports_all_surplus_in_solar_hold():
+    r = step(B, 50, "solar_hold", 0, 0.5, 3.0, 1.0)
+    assert r.charge_dc_kwh == 0 and r.export_kwh == pytest.approx(2.5) and r.soc == 50
+    r = step(B, 50, "solar_hold", 0, 1.0, 0.2, 1.0)                    # a deficit: as in self-use
+    assert r.discharge_dc_kwh == pytest.approx(0.8 / B.eta_d) and r.import_kwh == pytest.approx(0)

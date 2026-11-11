@@ -16,6 +16,7 @@ from .compare import KINDS, Comparison, day_records, replay_day
 from .config import Options
 from .controller import ACTIVE, Decision, Readings, decide
 from .discovery import ENTITIES, NEEDED_FOR, find_notify, resolve_all
+from .efficiency import EfficiencyMeter
 from .helpers import CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
@@ -81,6 +82,7 @@ class App:
         self.meter = QuarterMeter()
         self.peaks = PeakTracker()
         self.shade = ShadeModel()
+        self.efficiency = EfficiencyMeter()
         self.load = LoadProfile()
         self.comparison = Comparison()
         self.price_slots: list[P.PriceSlot] = []
@@ -146,6 +148,7 @@ class App:
                 raise ValueError("not a JSON object")
             loaded = {
                 "peaks": PeakTracker.from_json(s.get("peaks")), "shade": ShadeModel.from_json(s.get("shade")),
+                "efficiency": EfficiencyMeter.from_json(s.get("efficiency")),
                 "load": LoadProfile.from_json(s.get("load")), "comparison": Comparison.from_json(s.get("comparison")),
                 "price_slots": P.from_json(s.get("prices")),
                 "forecast_archive": dict(s.get("forecast_archive") or {}),
@@ -188,7 +191,8 @@ class App:
              "daily_market": self.daily_market, "alerts": self.alerts, "last_nightly": self.last_nightly,
              "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us,
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
-             "boost_seen": self.boost_seen, "whole_day_averages": True}
+             "boost_seen": self.boost_seen, "whole_day_averages": True,
+             "efficiency": self.efficiency.to_json()}
         write_json(self.state_file, s)
 
     # What Battery Pilot left on the inverter, in a small file written at every change: after a
@@ -722,6 +726,7 @@ class App:
             self._close_day(y)
             n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz)
             n_load = self.load.learn_records(recs, self.tz)
+            self.efficiency.learn_records(recs)
             self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
             if self.price_slots or self.o.contract == "fixed":
                 # The replay is CPU work: run it in a thread on copies, apply the results here.
@@ -910,6 +915,11 @@ class App:
                 "icon": "mdi:compare-horizontal", "basis": "with_strategy" if s.get("with_strategy") else "same_usage",
                 "fixed_eur": best["fixed_eur"], "dynamic_eur": best["dynamic_eur"],
                 "same_usage": s.get("same_usage"), "with_strategy": s.get("with_strategy")}))
+        eff = self.efficiency.report(self.o.round_trip_efficiency_pct)
+        sensors.append(("sensor.battery_pilot_efficiency",
+                        "unknown" if eff["round_trip_pct"] is None else eff["round_trip_pct"], {
+                            "friendly_name": "Battery Pilot measured round-trip efficiency",
+                            "unit_of_measurement": "%", "icon": "mdi:battery-sync", **eff}))
         for eid, state, attrs in sensors:
             try:
                 await self.ha.set_state(eid, state, attrs)
@@ -941,6 +951,7 @@ class App:
                       "rolling_kw": self.peaks.rolling_average(self.o.capacity_min_kw)},
             "comparison": self.comparison.summary(self.o, now, self.tz),
             "market_30d": self.market_avg_30d(),
+            "efficiency": self.efficiency.report(self.o.round_trip_efficiency_pct),
             "breakeven": {"night": None if night_be is None else round(night_be),
                           "day": None if day_be is None else round(day_be)},
             "events": list(reversed(self.events[-30:])),

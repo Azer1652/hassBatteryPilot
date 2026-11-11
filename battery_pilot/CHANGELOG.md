@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.6.0
+
+**Solar hold, and the battery's measured efficiency.**
+
+- **Solar hold.** When the Solis Modbus integration has the feed-in priority switch
+  (`…feed_in_priority`), the plan can use it: while there is solar surplus the surplus is
+  exported and not stored, and the battery keeps its room for later hours in which surplus
+  cannot be sold (a negative sell price with export blocked, or more surplus than the
+  export limit). The plan picks it only where it lowers the cost. Battery Pilot switches it
+  on with at least 0.3 kW of surplus and returns to self-use when the surplus is gone,
+  because the battery may not feed the house in this mode. Stopping the app, switching
+  control off, lost measurements and a restart all end it. The dashboard shows it in its
+  own colour. It is not yet checked on a real inverter: on the first sunny day, check that
+  the switch goes on in the morning, that export shows, and that the battery charges again
+  at midday. Without the switch nothing changes.
+- **Measured efficiency.** Every night the app measures the battery's real round-trip
+  efficiency from its own quarter-hour records (battery flow against the SOC change, SOC
+  15-95 %, half-life 60 days, a value after 150 SOC points of charging and of discharging).
+  The dashboard shows it next to the setting, with a sensor `sensor.battery_pilot_efficiency`.
+  The plan keeps using the *Round-trip efficiency* setting: change it yourself when the
+  measured value stays 3 points or more away.
+- New optional entity setting: `feed_in_priority_switch` (found automatically).
+- Year simulation: TODO
+
 ## 2.5.0
 
 **No night charging that loses money, and the Solis peak-shaving mode.**

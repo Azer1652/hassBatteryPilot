@@ -257,3 +257,36 @@ async def test_without_the_peak_shaving_switch_nothing_changes(tmpdata):
     await run(app, fake, utc(2026, 1, 13, 23, 0))
     assert not app.can_peak_shave and app.solis.mode == "self_use"
     assert all(s.action != "peak_shave" for s in app.plan.steps)
+
+
+# ---------------------------------------------------------------- solar hold (feed-in priority)
+HOLD = "switch.solis_feed_in_priority"
+
+
+async def test_solar_hold_is_ended_by_every_way_out(tmpdata):
+    fake = FakeHA(utc(2026, 6, 14, 9, 0), soc=40, load=lambda t: 0.4, feed_in_priority=True)
+    app = await start(tmpdata, fake)
+    assert app.can_solar_hold and HOLD in app.ent_ids.values()
+    await app.solis.solar_hold(app.clock().astimezone(app.tz))
+    assert fake.mode() == "solar_hold" and fake.s[HOLD]["state"] == "on"
+    await app.shutdown()                                           # stop: back to self-use
+    assert fake.s[HOLD]["state"] == "off" and fake.mode() == "self_use"
+
+
+async def test_a_feed_in_priority_switch_changed_by_something_else_is_corrected(tmpdata):
+    fake = FakeHA(utc(2026, 6, 14, 9, 0), soc=40, load=lambda t: 0.4, feed_in_priority=True)
+    app = await start(tmpdata, fake)
+    await run(app, fake, utc(2026, 6, 14, 9, 5))
+    fake.s[HOLD]["state"] = "on"                                   # someone else switched it on
+    await run(app, fake, utc(2026, 6, 14, 9, 12))
+    if all(s.action != "solar_hold" for s in app.plan.steps[:1]):
+        assert fake.s[HOLD]["state"] == "off"
+    assert any("feed-in priority switch" in e["text"] for e in app.events)
+
+
+async def test_without_the_feed_in_priority_switch_nothing_changes(tmpdata):
+    fake = FakeHA(utc(2026, 6, 14, 9, 0), soc=40, load=lambda t: 0.4)
+    app = await start(tmpdata, fake)
+    await run(app, fake, utc(2026, 6, 14, 9, 30))
+    assert not app.can_solar_hold
+    assert all(s.action != "solar_hold" for s in app.plan.steps)

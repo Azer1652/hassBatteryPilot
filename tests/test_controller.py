@@ -187,3 +187,52 @@ def test_peak_shaving_ends_with_the_step_and_with_control():
     assert decide(None, rd(), OPTS, "peak_shave", "", 0, control_on=True).command == "self_use"
     assert decide(step("peak_shave", 30), rd(), OPTS, "peak_shave", "", 0, control_on=False).command == "self_use"
     assert decide(step("peak_shave", 30), rd(), OPTS, "self_use", "", 0, control_on=False).command == "none"
+
+
+# ---------------------------------------------------------------- solar hold
+def test_solar_hold_starts_only_with_surplus_and_ends_without():
+    sun, cloud = rd(load=0.5, pv=2.0, imp=0.0), rd(load=0.8, pv=0.3)
+    st = step("solar_hold", 30)
+    assert decide(st, sun, OPTS, "self_use", "", 0, control_on=True).command == "solar_hold"
+    assert decide(st, cloud, OPTS, "self_use", "", 0, control_on=True).command == "none"
+    assert decide(st, sun, OPTS, "solar_hold", "", 0, control_on=True).command == "none"
+    assert decide(st, cloud, OPTS, "solar_hold", "", 0, control_on=True).command == "self_use"
+    # a passing cloud right after switching: wait two minutes before switching again
+    assert decide(st, cloud, OPTS, "solar_hold", "", 0, control_on=True, mode_age_s=30).command == "none"
+    assert decide(st, sun, OPTS, "self_use", "", 0, control_on=True, mode_age_s=30).command == "none"
+    assert decide(st, cloud, OPTS, "peak_shave", "", 0, control_on=True).command == "self_use"
+
+
+def test_solar_hold_ends_with_the_step_and_with_control():
+    sun = rd(load=0.5, pv=2.0, imp=0.0)
+    assert decide(step("self_use", 30), sun, OPTS, "solar_hold", "", 0, control_on=True).command == "self_use"
+    assert decide(None, sun, OPTS, "solar_hold", "", 0, control_on=True).command == "self_use"
+    assert decide(step("solar_hold", 30), sun, OPTS, "solar_hold", "", 0, control_on=False).command == "self_use"
+
+
+async def test_the_inverter_driver_turns_feed_in_priority_off_before_anything_else():
+    from pilot.solis import Solis
+
+    class HA:
+        def __init__(self):
+            self.calls = []
+
+        async def call(self, domain, service, data):
+            self.calls.append((service, data["entity_id"]))
+
+    keys = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
+            "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "feed_in_priority_switch")
+    ha = HA()
+    s = Solis(ha, {k: k for k in keys})
+    await s.solar_hold(T)
+    assert s.mode == "solar_hold" and ha.calls[-1] == ("turn_on", "feed_in_priority_switch")
+    assert ("turn_off", "tou_switch") in ha.calls and ("turn_off", "peak_shaving_switch") in ha.calls
+    for command in (lambda: s.charge(T, 20), lambda: s.self_use(T), lambda: s.discharge(T, 20),
+                    lambda: s.peak_shave(T, 2.3, 10)):
+        await s.solar_hold(T)
+        ha.calls.clear()
+        await command()
+        assert ("turn_off", "feed_in_priority_switch") in ha.calls and s.hold is False
+    ha.calls.clear()
+    await s.self_use(T)                                   # already off: not written again
+    assert ("turn_off", "feed_in_priority_switch") not in ha.calls

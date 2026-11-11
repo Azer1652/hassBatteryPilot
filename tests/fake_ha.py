@@ -27,7 +27,7 @@ def st(state, unit=None, **attrs):
 
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
-                 prices=None, with_helpers=True, peak_shaving=False):
+                 prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False):
         self.now = now
         self.soc = soc
         self.load_fn = load
@@ -62,6 +62,8 @@ class FakeHA:
             s["switch.solis_peak_shaving_mode"] = st("off")
             s["number.solis_peak_max_usable_grid_power"] = st(5000, "W")
             s["number.solis_peak_baseline_soc"] = st(50, "%")
+        if feed_in_priority:    # the Solis feed-in priority: solar surplus is exported, not stored
+            s["switch.solis_feed_in_priority"] = st("off")
         if prices is not None:
             s["sensor.current_electricity_market_price"] = st(0.1, "€/kWh", prices=prices)
         if with_helpers:
@@ -145,6 +147,8 @@ class FakeHA:
     def mode(self):
         local = self.now.astimezone(TZ)
         if self.s["switch.solis_time_of_use"]["state"] != "on":
+            if self.s.get("switch.solis_feed_in_priority", {}).get("state") == "on":
+                return "solar_hold"
             shaving = self.s.get("switch.solis_peak_shaving_mode", {}).get("state") == "on"
             return "peak_shave" if shaving else "self_use"
         if self._in_slot("charge", local) and self.s["switch.solis_allow_grid_to_charge_the_battery"]["state"] == "on":
@@ -176,6 +180,8 @@ class FakeHA:
             if self.soc < float(self.s["number.solis_peak_baseline_soc"]["state"]):   # refilled from the grid
                 ch = min(max(limit - net, 0) * 0.97, 2.56, room / h if h else 9e9)
                 batt, grid = ch, net + ch / 0.97
+        elif mode == "solar_hold":      # surplus is exported, a deficit comes from the grid; the battery is idle
+            batt, grid = 0.0, net
         else:
             if net > 0:
                 dis = min(net / 0.97, 4.6, avail / h if h else 9e9)

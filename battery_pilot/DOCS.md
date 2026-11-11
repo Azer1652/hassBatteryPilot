@@ -75,6 +75,7 @@ Home Assistant once and uninstall the Battery Playbook app.
 | Dull day ahead (winter), strategy `peaks_only` | Only enough charge to cover your usual quarter-hour peaks (cooking, kettle) under the import limit, plus whatever the prices make worth it. |
 | Dull day ahead (winter), night charging does not pay | No night target: the battery is not filled at a loss. It keeps enough for your usual peaks, as with `peaks_only`. |
 | Peak shaving (when the inverter has the switch) | In hours where the battery's energy is worth more later (a dearer hour of the plan, or a peak it must cover), the inverter is put in its **peak-shaving mode**: the grid feeds the house up to the *Grid import limit* and the battery only gives what is above it. Typical: the night hours on a day/night contract when the battery cannot carry both the night and the day. It is never used just to end the plan with a fuller battery. |
+| Solar hold (when the inverter has the switch) | While there is solar surplus, the inverter's **feed-in priority** is switched on: the surplus is exported and not stored, and the battery keeps its room for later hours in which surplus cannot be sold (a negative sell price with export blocked, or more surplus than the export limit). The plan uses it only where it lowers the cost. In this mode the battery does not feed the house, so Battery Pilot switches it on only with at least 0.3 kW of surplus and returns to self-use when the surplus is gone. |
 | Any day | The battery keeps enough energy for the quarter-hour peaks Battery Pilot has learned for each weekday and hour, topping up shortly before if needed. |
 | Sunny day ahead | No grid charging: the sun fills the battery. |
 | Sunny day ahead that fills the battery anyway | What the house won't need before the sun covers it (shade-corrected) is sold beforehand, when the room is worth more than the sale. On a dynamic contract it sells in the best-paid hours or quarter-hours first, at full power, never below *Battery reserve for export*, and even buys the house's night energy back when the evening price beats it. On a fixed contract the injection price is the same every hour, so it only sells early when tomorrow's surplus would exceed the export limit. |
@@ -202,6 +203,7 @@ Power sensors can be in W or kW: the unit is read from the entity.
 | `peak_shaving_switch` | switch `…peak_shaving_mode` / `…peak_shaving…` | optional: without it the plan never uses peak shaving |
 | `peak_shaving_limit` | number `…peak_max_usable_grid_power` | optional: the grid power the inverter shaves to; without it the inverter's own value is used |
 | `peak_shaving_soc` | number `…peak_baseline_soc` | optional: the battery level the inverter keeps while peak shaving; without it the inverter's own value is used |
+| `feed_in_priority_switch` | switch `…feed_in_priority` / `…feed_in_priority_mode` | optional: without it the plan never uses solar hold |
 
 Slot entities come in two sets on Solis Modbus (`time_charging` and
 `grid_time_of_use`); the *Solis slot entities* setting picks which one. When several
@@ -232,7 +234,8 @@ entities match, the one with `solis` in its name wins.
 | Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only. |
 | Renew | At every new clock hour while still charging or exporting. | The same as Charge / Discharge for the new hour. |
 | Peak shaving | The plan says peak shaving in this slot (only when the peak-shaving switch was found). | *Time of use* off, peak-shaving grid power = *Grid import limit*, peak-shaving baseline SOC = *Battery minimum SOC* (so the inverter does not refill the battery from the grid by itself; or the lowest value the entity accepts), *peak-shaving mode* on. The two numbers are written only when they change. |
-| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Time of use* off, and *peak-shaving mode* off when Battery Pilot switched it on. Everything else is left as it is. |
+| Solar hold | The plan says solar hold in this slot, the *feed-in priority* switch was found and the solar surplus is at least 0.3 kW. | *Time of use* off, *feed-in priority* on. Back to self-use when the surplus is gone (not within 120 s of the last command). |
+| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Time of use* off, and *peak-shaving mode* and *feed-in priority* off when Battery Pilot switched them on. Everything else is left as it is. |
 | Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to the value it had before (at most *Normal export limit*) when the price is positive again. An installation already at 0 W (zero export) is left alone. |
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
@@ -390,11 +393,34 @@ With the inverter's **peak-shaving switch** (see *Solis controls*), a battery th
 for the peaks is not emptied by the house first: at night the grid feeds the house and the
 battery waits for the dearer day hours and for the peaks.
 
+### Solar hold (feed-in priority)
+
+With the inverter's **feed-in priority switch** (see *Solis controls*), the plan can keep
+solar surplus out of the battery on purpose: the surplus is exported, and the battery
+keeps its room for hours in which surplus cannot be sold. Without the switch nothing
+changes. It has not yet been checked on a real inverter. On the first sunny day, check
+that the switch goes on in the morning, that export shows, and that the battery charges
+again at midday.
+
+## Measured efficiency
+
+Every night Battery Pilot measures the battery's real round-trip efficiency from its own
+quarter-hour records: the battery's flow (house load + export − import − solar) against
+the SOC change. Only quarters with complete data and a SOC between 15 and 95 % count, and
+older days weigh less (half-life 60 days). A value shows only after 150 SOC points of
+charging and 150 of discharging; until then the dashboard shows how far it is. The
+sensor `sensor.battery_pilot_efficiency` holds the measured value, with the split by
+grid charging and solar charging where known.
+
+The plan does **not** use the measured value. It keeps using *Round-trip efficiency*. If
+the measured value stays 3 points or more from the setting, change the setting yourself.
+
 ## Sensors it publishes
 
 | Entity | State | Main attributes |
 | --- | --- | --- |
-| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge` or `peak_shave` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
+| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
+| `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), or unknown until there is enough data | `round_trip_pct`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_round_trip_pct`, `solar_round_trip_pct` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Shade-corrected solar forecast for today (kWh) | `forecast_kwh` (before correction) |
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |
