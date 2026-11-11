@@ -114,6 +114,7 @@
     <p class="hint">Bar height: the price you pay per kWh (left axis, c). Tap or hover over the chart for the details.</p>
     <div class="hchart" id="plan"></div>
     <p class="muted" id="plannote"></p>
+    <p class="muted" id="tradenote"></p>
     <p class="muted" id="effnote"></p>
   </div>
 
@@ -370,6 +371,26 @@ function planExtras(plan) {
   if (hold) out.push(`From ${hm(hold.start)} the solar surplus is exported and not stored (solar hold): ` +
     "the battery keeps its room for hours in which surplus cannot be sold.");
   return out.join(" ");
+}
+
+// Why the plan trades with the grid, or not: the best pair of hours with this contract's prices.
+function tradeNote(t) {
+  if (!t || !t.trade || !t.shift) return "";
+  const c = (v) => fmt(Math.abs(v), 1) + " c", tr = t.trade, sh = t.shift;
+  const pair = `buying at ${hm(tr.buy_at)} (${c(tr.buy_c)}) and selling at ${hm(tr.at)} (${c(tr.price_c)})`;
+  const from = `Selling pays from ${c(tr.needed_sell_c)}` +
+    (tr.needed_market_eur_mwh != null ? ` (market ${tr.needed_market_eur_mwh} €/MWh).` : ".");
+  const trade = tr.needed_market_eur_mwh == null && tr.margin_c <= 0      // fixed prices: the same every day
+    ? `Selling energy bought from the grid does not pay on this contract: a kWh costs ${c(tr.buy_c)} at best ` +
+      `and sells for ${c(tr.price_c)}.`
+    : tr.margin_c > 0
+    ? `Trading with the grid pays in the next 24 hours: ${pair} earns ${c(tr.margin_c)} per kWh bought.`
+    : `Trading with the grid does not pay in the next 24 hours: ${pair} loses ${c(tr.margin_c)} per kWh bought, ` +
+      `after ${100 - t.round_trip_pct} % conversion loss and ${c(t.wear_c_kwh)} battery wear. ${from}`;
+  const shift = sh.margin_c > 0
+    ? `Charging at ${hm(sh.buy_at)} (${c(sh.buy_c)}) to avoid buying at ${hm(sh.at)} (${c(sh.price_c)}) saves ${c(sh.margin_c)} per kWh.`
+    : `Charging from the grid to use later does not pay either (best case loses ${c(sh.margin_c)} per kWh).`;
+  return trade + " " + shift;
 }
 
 function efficiencyNote(e) {
@@ -916,6 +937,7 @@ let render = function (s) {
   $("shaveleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "peak_shave"));
   $("holdleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "solar_hold"));
   $("effnote").textContent = efficiencyNote(s.efficiency);
+  $("tradenote").textContent = tradeNote((s.trading || {})[s.contract]);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`

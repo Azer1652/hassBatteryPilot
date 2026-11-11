@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from . import history as H
 from . import prices as P
+from . import trading
 from .compare import KINDS, Comparison, day_records, replay_day
 from .config import Options
 from .controller import ACTIVE, Decision, Readings, decide
@@ -105,6 +106,7 @@ class App:
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
         self.export_limit_before: float | None = None   # the export limit we found before blocking (persisted)
         self.peak_warned = ""
+        self.trading: dict = {}           # what trading would earn in the coming hours, per contract (display)
         self.boost_seen: dict = {}        # the boost window last announced in the events (persisted)
         self.over_since: datetime | None = None
         self.events: list[dict] = []
@@ -669,6 +671,8 @@ class App:
                               month_peak_kw=self.peaks.month_peak(now, self.tz), current_action=current,
                               peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
         self._log_plan(now)
+        avg = self.market_avg_month(now)
+        self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz, avg) for k in KINDS}
         boost, seen = self.plan.boost, self.boost_seen
         # The plan is redone every few minutes while a boost runs: announce a window once, unless
         # a new one starts after it or the level goes up clearly.
@@ -954,6 +958,7 @@ class App:
                                                       "log": list(reversed(self.solis.log[-20:]))},
             "plan": self.plan.to_json() if self.plan else None,
             "prices": self.current_prices(),
+            "trading": self.trading,
             "solar": {"today": round(self.pv.day_total(now.astimezone(self.tz).date()), 1),
                       "tomorrow": round(self.pv.day_total(now.astimezone(self.tz).date() + timedelta(days=1)), 1),
                       "today_factor": self.today_factor,

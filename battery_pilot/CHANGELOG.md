@@ -19,6 +19,13 @@
   the fixed contract stays at €947. With a forecast that is right about the day it changes
   nothing on fixed and costs €1 on dynamic. Other window lengths and half-lives gave the
   same result within €1.
+- **Why it trades, or not.** The plan card now shows the best trade of the next 24 hours
+  with your own rates: when to buy and sell, what one bought kWh earns or loses after the
+  conversion loss and battery wear, and the selling price from which it would pay. With
+  the default rates, a kWh bought at a market price of 0 must be sold at about 180 €/MWh
+  to break even, because the grid fees sit on every kWh bought. It also shows what
+  charging in the cheapest hour to avoid buying in the dearest one saves. The plan itself
+  is unchanged: it already made these trades when they pay.
 - Not new: the plan already keeps battery for your usual consumption peaks (the typical
   highest quarter-hour per weekday and hour), since 2.0.
 

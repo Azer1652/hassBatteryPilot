@@ -100,6 +100,9 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
   half-life, a value after 150 SOC points each way). `learn_records` is called from `App.nightly()`.
   Display only (`status["efficiency"]`, `sensor.battery_pilot_efficiency`): the plan keeps using
   `round_trip_efficiency_pct`.
+- `trading.margins()`: display only (`status["trading"]`, the `#tradenote` line in the plan card): the
+  best buy-then-sell pair and the best buy-to-avoid-buying pair of the next 24 h per contract, per kWh
+  bought, with the same efficiencies and wear as the planner. Computed in `App.replan`.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices

@@ -27,6 +27,13 @@ What it does:
 - **Learns your tree shade.** It compares what your panels deliver with the forecast
   for every month and hour of the day. Low winter sun behind trees gets its own
   correction; summer noon keeps its own.
+- **Trades with the grid when it pays, and says why not.** Buying a kWh to sell it
+  later earns `sell price × round-trip efficiency − wear − buy price`. The grid fees are
+  on every kWh bought, so with the default rates a kWh bought at a market price of 0 must
+  be sold at about 180 €/MWh to break even. Buying cheap to avoid buying dear needs a much
+  smaller difference, about 33 €/MWh, but is limited to what the house uses. The plan
+  card shows the best pair of hours of the next 24 hours with your rates, and the selling
+  price from which trading would pay.
 - **Follows today's weather.** When the panels gave clearly less (or more) in the last
   three hours than the forecast after shade, the rest of today is planned lower (or
   higher). The correction fades over the following hours and never touches tomorrow.
