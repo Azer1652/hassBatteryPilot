@@ -103,6 +103,13 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 - `trading.margins()`: display only (`status["trading"]`, the `#tradenote` line in the plan card): the
   best buy-then-sell pair and the best buy-to-avoid-buying pair of the next 24 h per contract, per kWh
   bought, with the same efficiencies and wear as the planner. Computed in `App.replan`.
+- `car.py`: `CarState` (charging, power_kw, and `soc`/`plugged`/`target_soc`, None for now) from a source
+  chosen in `car.make_source`: `ChargerPowerSource` (`car_charger_power` set, never auto-found; above 1 kW),
+  `LoadStepSource` (`car_min_kw` > 0: jump over the 10-minute median for 3 min), else `NoCar`. A car
+  integration would be a new source filling `soc`/`plugged`. `App._car` feeds `controller.decide(car_kw=,
+  can_shave=)`: while the car charges above the import limit it forces `peak_shave`. `QuarterRecord.car`
+  is kept out of `LoadProfile` and the peaks; the replay uses peak_shave in car quarters; the plan adds
+  the car's power for the next hour. `status["car"]`, `sensor.battery_pilot_car_power`, `#carnote`.
 - `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
   (plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
   tariff are added in `report()`. Both contracts must cover the same hours: a month with market prices

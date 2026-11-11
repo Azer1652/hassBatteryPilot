@@ -16,6 +16,8 @@ Pure function, so every rule can be tested without Home Assistant:
 * solar_hold - the inverter's feed-in priority while there is solar surplus: it is
               exported, the battery waits; without surplus back to self-use (the
               battery may not feed the house in that mode);
+* the car   - while the electric car charges and the house asks more than the import
+              limit, peak shaving whatever the step says (when the inverter has it);
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -84,12 +86,23 @@ def paced_amps(step: Step, r: Readings, o: Options, up: bool) -> int:
 
 
 def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str, amps_now: int,
-           control_on: bool, mode_age_s: float = 1e9) -> Decision:
+           control_on: bool, mode_age_s: float = 1e9, car_kw: float = 0.0, can_shave: bool = False) -> Decision:
+    """`car_kw`: what the electric car takes now (0: not charging). `can_shave`: the inverter has
+    the peak-shaving switch."""
     hour = r.t_local.strftime("%H:00:00")
     if not control_on:
         if mode in ACTIVE:
             return Decision("self_use", reason="Battery Pilot control is off")
         return Decision("none", reason="shadow mode: control is off")
+    # The car charges and the house asks more than the import limit: the grid gives up to the limit
+    # and the battery only the rest, whatever the plan says. In self-use the battery would feed the
+    # whole car, run empty and leave the full charge to the grid (a capacity peak). It stays so until
+    # the car stops, also through a moment of sun.
+    if car_kw > 0 and can_shave and (mode == "peak_shave" or r.load_kw - r.pv_kw > o.import_limit_kw):
+        if mode != "peak_shave":
+            return Decision("peak_shave", reason="the car is charging: the grid gives up to the import limit, "
+                                                 "the battery the rest")
+        return Decision("none", reason="peak shaving while the car charges")
     if step is None:
         if mode != "self_use":
             return Decision("self_use", reason="no plan")

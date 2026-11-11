@@ -214,6 +214,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
                              peak_shave=peak_shave, solar_hold=solar_hold)
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
+        if r.car > 0 and peak_shave:        # the car charged: peak shaving whatever the plan said, as live
+            action = "peak_shave"
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:
             load_kwh, pv_kwh = r.kwh["load"], r.kwh["pv"]
             if r.blocked:       # the panels were held back: what was measured is the least they could give

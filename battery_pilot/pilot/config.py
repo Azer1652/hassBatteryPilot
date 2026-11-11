@@ -18,7 +18,7 @@ ENTITY_KEYS = (
     "charge_current", "discharge_current", "charge_start", "charge_end",
     "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",
     "peak_shaving_soc", "feed_in_priority_switch", "forecast_power_now",
-    "forecast_today", "forecast_tomorrow", "price_sensor",
+    "forecast_today", "forecast_tomorrow", "price_sensor", "car_charger_power",
 )
 # Option name of each override where it differs from the entity key
 # (battery_voltage is already the nominal-voltage option).
@@ -70,6 +70,8 @@ class Options:
     safety_margin_pct: int = 30
     winter_solar_threshold_kwh: float = 12.0
     winter_mode: str = "full_day"            # full_day: fill at night to carry the day | peaks_only
+    # electric car (0 = no car detection)
+    car_min_kw: float = 0.0                  # a jump in house load of at least this much, that stays, is the car
     # inverter
     slot_entities: str = "time_charging"
     notify_service: str = ""

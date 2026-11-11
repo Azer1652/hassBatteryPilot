@@ -79,8 +79,9 @@ class LoadProfile:
             if len(recs) < 4 or any(r.covered.get("load", 0) < 0.9 for r in recs):
                 continue
             local = hour.astimezone(tz)
-            self.learn(local.weekday(), local.hour, sum(r.kwh["load"] for r in recs))
-            self.learn_peak(local.weekday(), local.hour, max(r.kwh["load"] for r in recs) * 4)
+            # The car is not the house: its energy is taken out of the consumption and of the peaks.
+            self.learn(local.weekday(), local.hour, sum(r.house_kwh for r in recs))
+            self.learn_peak(local.weekday(), local.hour, max(r.house_kwh for r in recs) * 4)
             n += 1
         return n
 

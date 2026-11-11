@@ -34,6 +34,8 @@ ENTITIES = {
     "forecast_today": ("sensor", [r"^energy_production_today$"], False, False),
     "forecast_tomorrow": ("sensor", [r"^energy_production_tomorrow$"], False, False),
     "price_sensor": ("sensor", [r"current_electricity_market_price", r"^nordpool", r"electricity_price"], False, False),
+    # never guessed: only the entity named in the settings
+    "car_charger_power": ("sensor", [], False, True),
 }
 TIME_SLOT_KEYS = ("charge_start", "charge_end", "discharge_start", "discharge_end")
 

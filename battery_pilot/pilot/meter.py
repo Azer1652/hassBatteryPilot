@@ -29,6 +29,12 @@ class QuarterRecord:
     soc: float | None = None              # SOC at the start of the quarter
     mode: str | None = None               # inverter mode most of the quarter (shadow: control off)
     blocked: bool = False                 # export was blocked (negative sell price): the panels were held back
+    car: float = 0.0                      # kWh of the house load that went into the car (0: no car charging)
+
+    @property
+    def house_kwh(self) -> float:
+        """House consumption without the car."""
+        return max(self.kwh.get("load", 0.0) - self.car, 0.0)
 
     def to_json(self):
         d = {"start": self.start.isoformat(), "kwh": {k: round(v, 5) for k, v in self.kwh.items()},
@@ -37,12 +43,14 @@ class QuarterRecord:
             d["mode"] = self.mode
         if self.blocked:
             d["blocked"] = True
+        if self.car > 0:
+            d["car"] = round(self.car, 5)
         return d
 
     @classmethod
     def from_json(cls, d):
         return cls(datetime.fromisoformat(d["start"]), d["kwh"], d["covered"], d.get("soc"), d.get("mode"),
-                   bool(d.get("blocked")))
+                   bool(d.get("blocked")), float(d.get("car") or 0.0))
 
 
 @dataclass

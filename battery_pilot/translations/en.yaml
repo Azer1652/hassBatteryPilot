@@ -65,6 +65,9 @@ configuration:
   capacity_min_kw:
     name: "Capacity tariff minimum (kW)"
     description: "The lowest monthly peak that is billed (Fluvius: 2.5 kW)."
+  car_min_kw:
+    name: "Electric car: smallest charging power (kW, 0 = off)"
+    description: "Set it to switch car detection on. A jump in house consumption of at least this many kW that lasts 3 minutes is taken as the car charging, and the peak is then shaved with the inverter's peak shaving. For a charger limited to 5 kW, about 3.5 is a good value. Not needed when you set the charger power entity."
   battery_capacity_kwh:
     name: "Battery capacity (kWh)"
     description: "Usable capacity between 0 and 100 % SOC."
@@ -158,6 +161,9 @@ configuration:
   feed_in_priority_switch:
     name: "Feed-in priority switch entity"
     description: "Leave empty to find it automatically (switch …feed_in_priority). With it, Battery Pilot can send solar surplus to the grid first and keep room in the battery for hours in which the surplus cannot be sold (negative price, export limit)."
+  car_charger_power:
+    name: "Car charger power entity"
+    description: "Optional, never found automatically. A power sensor of the charger (kW or W). When set, the car counts as charging above 1 kW and the jump detection is not used."
   peak_shaving_soc:
     name: "Peak-shaving baseline SOC entity"
     description: "Leave empty to find it automatically (number …peak_baseline_soc). Battery Pilot sets it to the battery minimum, so the inverter does not refill the battery from the grid by itself."

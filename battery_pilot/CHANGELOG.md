@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.8.0
+
+**Battery Pilot knows when the car charges and shaves its peak.**
+
+- **Off by default.** Set *Electric car: smallest charging power* (`car_min_kw`) to switch
+  it on. For a charger limited to 5 kW, about 3.5 is a good value. Or set the optional
+  entity `car_charger_power` (a power sensor of the charger, never found automatically);
+  then `car_min_kw` is not needed.
+- **How it sees the car.** Without the charger sensor, a jump in house consumption of at
+  least `car_min_kw` above the level of the last 10 minutes, lasting 3 minutes, is the car.
+  The session ends when consumption is below that level plus half of `car_min_kw` for
+  2 minutes. With the charger sensor, charging is anything above 1 kW.
+- **What it does.** While the car charges and the house asks more than the import limit,
+  and the inverter's peak-shaving switch was found, the inverter goes to peak shaving
+  whatever the plan says: the grid gives up to the import limit and the battery the rest.
+  In self-use the battery would feed the whole car, run empty and leave the full charger
+  power to the grid, a capacity peak. When the car stops, the plan is followed again.
+  Without the switch the car is only measured.
+- The car's energy is kept out of the house consumption and the usual peaks that Battery
+  Pilot learns. While a session runs, the plan counts the car on top of the house for the
+  next hour. The nightly replay uses peak shaving in quarter-hours in which the car charged.
+- New sensor `sensor.battery_pilot_car_power` (only with car detection on), a line in the
+  plan card, `car` in `/api/status`, and events when a session starts and ends.
+- **Limits.** Battery Pilot does not control the charger. A long burst of a hob or oven can
+  be taken for a car: the peak is then shaved while cooking, which is harmless, and the
+  burst is not learned as house consumption. Slow sessions below `car_min_kw`, for example a charger in
+  solar-surplus mode, are not detected without the charger sensor. Not yet checked on a
+  real installation: that the inverter's house-load sensor includes the charger. The car's
+  own battery level is not read; the code is ready for a car integration.
+
 ## 2.7.0
 
 **The plan follows today's weather.**

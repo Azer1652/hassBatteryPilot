@@ -115,6 +115,7 @@
     <div class="hchart" id="plan"></div>
     <p class="muted" id="plannote"></p>
     <p class="muted" id="tradenote"></p>
+    <p class="muted" id="carnote"></p>
     <p class="muted" id="effnote"></p>
   </div>
 
@@ -371,6 +372,16 @@ function planExtras(plan) {
   if (hold) out.push(`From ${hm(hold.start)} the solar surplus is exported and not stored (solar hold): ` +
     "the battery keeps its room for hours in which surplus cannot be sold.");
   return out.join(" ");
+}
+
+// The electric car: what it does now, or this month's energy.
+function carNote(c) {
+  if (!c || !c.enabled) return "";
+  if (!c.charging) return c.month_kwh > 0 ? `Car this month: ${fmt(c.month_kwh, 1)} kWh.` : "";
+  const now = `The car is charging at about ${fmt(c.power_kw, 1)} kW`;
+  if (c.shaving) return `${now}: the grid gives up to the import limit and the battery the rest (peak shaving). ` +
+    `${fmt(c.session_kwh, 1)} kWh so far.`;
+  return c.can_shave ? `${now}.` : `${now}. The inverter's peak-shaving switch was not found, so the battery is used as usual.`;
 }
 
 // Why the plan trades with the grid, or not: the best pair of hours with this contract's prices.
@@ -938,6 +949,7 @@ let render = function (s) {
   $("holdleg").hidden = !(s.plan && s.plan.steps.some(x => x.action === "solar_hold"));
   $("effnote").textContent = efficiencyNote(s.efficiency);
   $("tradenote").textContent = tradeNote((s.trading || {})[s.contract]);
+  $("carnote").textContent = carNote(s.car);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`

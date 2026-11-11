@@ -39,6 +39,10 @@ What it does:
   higher). The correction fades over the following hours and never touches tomorrow.
   Quarter-hours in which the inverter held the panels back do not count. The page says
   so when the difference is 15 % or more.
+- **Knows when the car charges** (off by default). It sees the car as a jump in house
+  consumption, or reads the charger's own power sensor. While the car charges it uses the
+  inverter's peak shaving, so the grid gives up to the import limit and the battery the
+  rest, and it keeps the car out of what it learns as usual consumption.
 - **Shows planned vs actual**, day by day: the battery level and solar the plan
   expected against what really happened, so you can see how good the prediction is.
 - **Compares contracts** with your own measured energy, in two ways (see below).
@@ -221,6 +225,12 @@ Slot entities come in two sets on Solis Modbus (`time_charging` and
 `grid_time_of_use`); the *Solis slot entities* setting picks which one. When several
 entities match, the one with `solis` in its name wins.
 
+### Electric car (read every 10 seconds, only when set)
+
+| Setting | Found automatically | Needed |
+| --- | --- | --- |
+| `car_charger_power` | never: only used when you set it | optional: a power sensor of the charger. When set, the car counts as charging above 1 kW and `car_min_kw` is not needed |
+
 ### Everything else it reads
 
 - **Home Assistant's configuration:** time zone, latitude and longitude (for day/night,
@@ -351,6 +361,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | Normal export limit | `export_limit_kw` | 5.0 kW | The most your installation may export (Fluvius allows 5 kW on a single-phase connection). The plan never counts on more, and it is the value restored after a negative-price block. |
 | Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
 | Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
+| Car: smallest charging power | `car_min_kw` | 0 kW (off) | Switches car detection on. A jump in house consumption of at least this many kW above the level of the last 10 minutes, lasting 3 minutes, is taken as the car charging. The session ends when consumption is below that level plus half this value for 2 minutes. For a charger limited to 5 kW, about 3.5 is a good value. Not needed with the `car_charger_power` entity. See *Electric car*. |
 
 ### Battery
 
@@ -414,6 +425,40 @@ changes. It has not yet been checked on a real inverter. On the first sunny day,
 that the switch goes on in the morning, that export shows, and that the battery charges
 again at midday.
 
+## Electric car
+
+Battery Pilot does not control the charger. It only notices when the car charges. Switch
+this on with *Car: smallest charging power* (`car_min_kw`), or set the *Car charger power*
+entity (`car_charger_power`).
+
+In plain self-use the battery would feed the whole car, up to its maximum discharge power,
+run empty quickly, and then the grid would give the full charger power. That is a capacity
+peak. So while the car charges, the house asks more than the import limit and the
+inverter's peak-shaving switch was found, Battery Pilot switches the inverter to peak
+shaving, whatever the plan says: the grid gives up to the import limit and the battery
+only the rest. The battery lasts much longer that way. When the car stops, the plan is
+followed again. Without the peak-shaving switch nothing changes: the car is only measured.
+
+- **Two sources.** With the charger entity, the car charges when it draws more than 1 kW.
+  Without it, the car is a jump in house consumption that stays (see `car_min_kw`).
+- **Learning.** The car's energy is kept out of what Battery Pilot learns as house
+  consumption and as your usual peaks. While a session runs, the plan counts the car's
+  power on top of the house for the next hour. The nightly replay uses peak shaving in
+  the quarter-hours in which the car charged, when the switch exists.
+- **What you see.** Two events, "Car charging detected" and "Car charging ended" with the
+  kWh. The sensor `sensor.battery_pilot_car_power`, and a line in the plan card.
+
+Limits:
+
+- A long burst of a hob or oven can be taken for a car. The peak is then shaved while you
+  cook, which does no harm, and the burst is not learned as house consumption.
+- Without the charger entity, sessions below `car_min_kw` are not detected, for example a
+  charger in solar-surplus mode.
+- Not yet checked on a real installation: that the inverter's house-load sensor includes
+  the charger.
+- It does not read the car's battery level or whether it is plugged in. The code is ready
+  for that, but no car integration is included.
+
 ## Measured efficiency
 
 Every night Battery Pilot measures the battery's real round-trip efficiency from its own
@@ -433,6 +478,7 @@ the measured value stays 3 points or more from the setting, change the setting y
 | --- | --- | --- |
 | `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
 | `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), or unknown until there is enough data | `round_trip_pct`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_round_trip_pct`, `solar_round_trip_pct` |
+| `sensor.battery_pilot_car_power` | What the car takes now (kW, 0 when not charging). Only published when car detection is on | `charging`, `source` (`house consumption` or `charger sensor`), `month_kwh`, `peak_shaving` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Solar forecast for today after shade and today's weather correction (kWh) | `forecast_kwh` (before correction), `today_factor` (what the panels gave in the last hours against the forecast after shade; 1.0 = as forecast) |
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |

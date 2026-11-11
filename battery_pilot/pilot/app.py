@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 from zoneinfo import ZoneInfo
 
+from . import car as C
 from . import history as H
 from . import prices as P
 from . import trading
@@ -20,7 +21,7 @@ from .discovery import ENTITIES, NEEDED_FOR, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
 from .helpers import CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
-from .meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
+from .meter import MAX_GAP, PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
 from .planner import Plan, Step, make_plan, market_at, step_to_follow, sticky_action
 from .simulate import Battery
@@ -106,6 +107,12 @@ class App:
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
         self.export_limit_before: float | None = None   # the export limit we found before blocking (persisted)
         self.peak_warned = ""
+        self.car = C.NoCar()              # where the car's state comes from (set in setup)
+        self.car_state = C.IDLE
+        self.car_months: dict[str, float] = {}     # kWh into the car per month (persisted)
+        self._car_q = 0.0                 # car kWh in the quarter that is running
+        self._car_t: datetime | None = None
+        self._car_session: tuple[datetime, float] | None = None    # (start, kWh so far)
         self.trading: dict = {}           # what trading would earn in the coming hours, per contract (display)
         self.boost_seen: dict = {}        # the boost window last announced in the events (persisted)
         self.over_since: datetime | None = None
@@ -151,6 +158,7 @@ class App:
             loaded = {
                 "peaks": PeakTracker.from_json(s.get("peaks")), "shade": ShadeModel.from_json(s.get("shade")),
                 "efficiency": EfficiencyMeter.from_json(s.get("efficiency")),
+                "car_months": {str(k): float(v) for k, v in (s.get("car_months") or {}).items()},
                 "load": LoadProfile.from_json(s.get("load")), "comparison": Comparison.from_json(s.get("comparison")),
                 "price_slots": P.from_json(s.get("prices")),
                 "forecast_archive": dict(s.get("forecast_archive") or {}),
@@ -194,7 +202,7 @@ class App:
              "migrated": self.migrated, "curtailed_by_us": self.curtailed_by_us,
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
              "boost_seen": self.boost_seen, "whole_day_averages": True,
-             "efficiency": self.efficiency.to_json()}
+             "efficiency": self.efficiency.to_json(), "car_months": self.car_months}
         write_json(self.state_file, s)
 
     # What Battery Pilot left on the inverter, in a small file written at every change: after a
@@ -240,7 +248,7 @@ class App:
             if f.entity_id:
                 unit = f" [{f.unit}]" if ENTITIES[key][3] else ""
                 log.info("  ok       %s: %s%s (%s)", key, f.entity_id, unit, f.how)
-            else:
+            elif ENTITIES[key][1] or key in self.o.entities:     # (never guessed and not set: nothing to report)
                 tag = "MISSING" if ENTITIES[key][2] else "missing"
                 extra = f" (needed for {NEEDED_FOR[key]})" if key in NEEDED_FOR else ""
                 log.warning("  %-8s %s: %s%s", tag, key, f.how, extra)
@@ -251,6 +259,7 @@ class App:
             self.event(self.problem, logging.ERROR)
             return False
         self.ent_ids = {k: f.entity_id for k, f in self.ents.items() if f.entity_id}
+        self.car = C.make_source(self.o, self.ent_ids)
         self.notify, how = find_notify(self.o, await self.ha.services())
         log.info("  %-8s notify: %s (%s)", "ok" if self.notify else "check", self.notify or "-", how)
         if not self.ent_ids.get("price_sensor") and self.o.fixed_sell_mult != 0:
@@ -347,7 +356,8 @@ class App:
     async def tick(self):
         now = self.clock()
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_soc",
-                "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch")
+                "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
+                "car_charger_power")
         sts = await self._states(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), return_exceptions=True)
         self.control_on = self._helper("control", helpers[0], self.control_on, now)
@@ -356,6 +366,7 @@ class App:
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
         self._blocked = self._blocked or self.curtailed_by_us
+        self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None)
         for rec in self.meter.add(now, kw, soc):
             self._quarter_closed(rec)
 
@@ -379,12 +390,35 @@ class App:
             step = step_to_follow(self.plan, now, Battery.from_options(self.o), self.solis.mode)
             self.decision = decide(step, self.readings, self.o, self.solis.mode, self.solis.slot_hour,
                                    self.solis.amps, self.control_on,
-                                   (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9)
+                                   (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9,
+                                   car_kw=self.car_state.power_kw if self.car_state.charging else 0.0,
+                                   can_shave=self.can_peak_shave)
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
         self._modes[mode] = self._modes.get(mode, 0) + 1
         await self._peak_warning(now, projection, step)
+
+    def _car(self, now: datetime, load_kw: float | None, charger_kw: float | None):
+        """Is the car charging? Its energy is kept per quarter (so it is not learned as house
+        consumption) and per month, and a session is reported when it starts and ends."""
+        was = self.car_state
+        if was.charging and self._car_t is not None and timedelta(0) < now - self._car_t <= MAX_GAP:
+            kwh = was.power_kw * (now - self._car_t).total_seconds() / 3600
+            self._car_q += kwh
+            if self._car_session:
+                self._car_session = (self._car_session[0], self._car_session[1] + kwh)
+        self._car_t = now
+        self.car_state = self.car.update(now, load_kw, charger_kw)
+        if self.car_state.charging and not was.charging:
+            self._car_session = (now, 0.0)
+            what = ("peak shaving while it lasts" if self.can_peak_shave and self.control_on
+                    else "measured only" if self.can_peak_shave
+                    else "measured only (the inverter's peak-shaving switch was not found)")
+            self.event(f"Car charging detected (about {self.car_state.power_kw:.1f} kW): {what}.")
+        elif was.charging and not self.car_state.charging and self._car_session:
+            self.event(f"Car charging ended: {self._car_session[1]:.1f} kWh.")
+            self._car_session = None
 
     def _helper(self, name: str, st, last: bool, now: datetime) -> bool:
         """A helper switch's state; a read that fails keeps the last known state for a minute."""
@@ -564,6 +598,12 @@ class App:
         # Export was blocked in this quarter: the inverter held the panels back, so its solar
         # is not what they could give (not learned as shade, not used as such in the replay).
         rec.blocked, self._blocked = self._blocked, False       # (the next tick sets it again while it lasts)
+        if self._car_q > 0:
+            rec.car, self._car_q = min(self._car_q, rec.kwh.get("load", 0.0)), 0.0
+            key = rec.start.astimezone(self.tz).strftime("%Y-%m")
+            self.car_months[key] = round(self.car_months.get(key, 0.0) + rec.car, 3)
+            for old in sorted(self.car_months)[:-24]:
+                del self.car_months[old]
         self.peaks.add(rec, self.tz)
         market, known = market_at(self.price_slots, rec.start) if self.price_slots else (None, False)
         self.comparison.add_quarter(rec, market, self.o, self.tz, estimated=market is not None and not known)
@@ -640,6 +680,17 @@ class App:
                            logging.WARNING)
         self.pv = PvForecast(hourly, self.shade, self.tz)
 
+    def car_status(self, now: datetime) -> dict:
+        s = self.car_state
+        source = {"ChargerPowerSource": "charger sensor", "LoadStepSource": "house consumption"}.get(
+            type(self.car).__name__)
+        return {"enabled": source is not None, "source": source, "charging": s.charging,
+                "power_kw": round(s.power_kw, 2) if s.charging else 0.0,
+                "session_kwh": round(self._car_session[1], 1) if self._car_session else None,
+                "month_kwh": round(self.car_months.get(now.astimezone(self.tz).strftime("%Y-%m"), 0.0), 1),
+                "shaving": bool(s.charging and self.solis and self.solis.mode == "peak_shave"),
+                "can_shave": self.can_peak_shave, "soc": s.soc, "plugged": s.plugged}
+
     @property
     def today_factor(self) -> float:
         """Measured solar against the forecast over the last hours (1.0: as forecast, or no data)."""
@@ -664,10 +715,19 @@ class App:
         current = sticky_action(self.plan, now, soc, self.o.battery_reserve_soc) if self.readings else None
         # Today's weather against the forecast, from the quarters measured so far.
         self.pv.observe(self.records, now, past=self._archive_hours(), export_limit_kw=self.o.export_limit_kw)
-        self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots, lambda a, b: self.load.kwh(a, b, self.tz),
+        # While the car charges, the next hour has its power on top of the house (how long it goes
+        # on is not known: the plan is redone every few minutes from the real battery level).
+        car_kw = self.car_state.power_kw if self.car_state.charging else 0.0
+        car_end = now + timedelta(hours=1)
+
+        def car_kwh(a: datetime, b: datetime) -> float:
+            return car_kw * max((min(b, car_end) - max(a, now)).total_seconds(), 0.0) / 3600
+
+        self.plan = make_plan(now, self.tz, self.o, tar, self.price_slots,
+                              lambda a, b: self.load.kwh(a, b, self.tz) + car_kwh(a, b),
                               self.pv.kwh, soc, market_avg=self.market_avg_month(now),
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
-                              peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz),
+                              peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz) + (car_kw if car_kwh(a, b) > 0 else 0.0),
                               month_peak_kw=self.peaks.month_peak(now, self.tz), current_action=current,
                               peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
         self._log_plan(now)
@@ -931,6 +991,12 @@ class App:
                 "icon": "mdi:compare-horizontal", "basis": "with_strategy" if s.get("with_strategy") else "same_usage",
                 "fixed_eur": best["fixed_eur"], "dynamic_eur": best["dynamic_eur"],
                 "same_usage": s.get("same_usage"), "with_strategy": s.get("with_strategy")}))
+        car = self.car_status(now)
+        if car["enabled"]:
+            sensors.append(("sensor.battery_pilot_car_power", car["power_kw"], {
+                "friendly_name": "Battery Pilot car charging power", "unit_of_measurement": "kW", "device_class": "power",
+                "state_class": "measurement", "icon": "mdi:car-electric", "charging": car["charging"],
+                "source": car["source"], "month_kwh": car["month_kwh"], "peak_shaving": car["shaving"]}))
         eff = self.efficiency.report(self.o.round_trip_efficiency_pct)
         sensors.append(("sensor.battery_pilot_efficiency",
                         "unknown" if eff["round_trip_pct"] is None else eff["round_trip_pct"], {
@@ -959,6 +1025,7 @@ class App:
             "plan": self.plan.to_json() if self.plan else None,
             "prices": self.current_prices(),
             "trading": self.trading,
+            "car": self.car_status(now),
             "solar": {"today": round(self.pv.day_total(now.astimezone(self.tz).date()), 1),
                       "tomorrow": round(self.pv.day_total(now.astimezone(self.tz).date() + timedelta(days=1)), 1),
                       "today_factor": self.today_factor,
