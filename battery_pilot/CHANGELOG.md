@@ -29,6 +29,11 @@
   switch nothing changes.
 - New optional entity settings: `peak_shaving_switch`, `peak_shaving_limit`,
   `peak_shaving_soc` (found automatically).
+- **The simulated year** (default rates, same house and weather): fixed €988 → €955, and
+  €948 with the peak-shaving switch; dynamic €885 → €875, and €862 with it. On the fixed
+  contract the battery buys about 150 kWh a year from the grid instead of 1600. Without
+  the switch one month's peak rose from 2.24 to 2.60 kW (a cooking peak the battery was
+  too empty for); with it every month stays at the 2.3 kW limit.
 
 ## 2.4.1
 
