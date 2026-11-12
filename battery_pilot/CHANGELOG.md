@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.13.0
+
+**How much of the car charges under the import limit.**
+
+- **New on the Plan tab:** with *Car: battery size* (`car_battery_kwh`) and *Car: charging power*
+  (`car_charge_kw`) set, a line says how much of the car charges before grid import goes over
+  the import limit, with the battery as it is now and with a full battery (*Fill the battery for
+  the car*). It also gives the charging power at which the car never needs the battery. While
+  the car charges, its measured power is used.
+- **The car leaves the peak buffer alone.** With a peak buffer, the car now takes the battery
+  only down to the minimum plus the buffer; the inverter's peak-shaving baseline is set there
+  while the car charges, and back to the minimum afterwards. The buffer stays for the house's
+  peaks after the car. Without a peak buffer nothing changes.
+
 ## 2.12.0
 
 **Charging and export through the Solis Modbus *Force battery* action.**
@@ -18,8 +32,6 @@
   action when it is there and the time-of-use slots otherwise; `force` or `time_slot` to choose.
   With several inverters, set *Solis Modbus slave ID* (`solis_slave`).
 - Without the force action nothing changes. The log says at the start which way is used.
-
-- 
 
 ## 2.11.3
 

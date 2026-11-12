@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.12.0"
+version: "2.13.0"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -40,6 +40,8 @@ options:
   capacity_tariff_eur_kw_year: 52.37
   capacity_min_kw: 2.5
   car_min_kw: 0
+  car_battery_kwh: 0
+  car_charge_kw: 0
   battery_capacity_kwh: 16
   battery_min_soc: 10
   battery_reserve_soc: 35
@@ -78,6 +80,8 @@ schema:
   capacity_tariff_eur_kw_year: float(0,500)
   capacity_min_kw: float(0,20)
   car_min_kw: float(0,25)
+  car_battery_kwh: float(0,200)
+  car_charge_kw: float(0,25)
   battery_capacity_kwh: float(1,200)
   battery_min_soc: int(0,50)
   battery_reserve_soc: int(0,95)

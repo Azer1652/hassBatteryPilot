@@ -394,6 +394,8 @@ The contract formulas in full (market prices in EUR/MWh):
 | Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
 | Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
 | Car: smallest charging power | `car_min_kw` | 0 kW (off) | Switches car detection on. A jump in house consumption of at least this many kW above the level of the last 10 minutes, lasting 3 minutes, is taken as the car charging. The session ends when consumption is below that level plus half this value for 2 minutes. For a charger limited to 5 kW, about 3.5 is a good value. Not needed with the `car_charger_power` entity. See *Electric car*. |
+| Car: battery size | `car_battery_kwh` | 0 kWh (no estimate) | The usable capacity of the car's battery. With it, the Plan tab shows how much of the car charges before the import limit is crossed (see *How much of the car fits under the limit*). |
+| Car: charging power | `car_charge_kw` | 0 kW | What the charger gives the car, for that estimate. While the car charges, the measured power is used instead. 0: the estimate only appears while the car charges. |
 
 ### Battery
 
@@ -498,6 +500,14 @@ followed again. Without the peak-shaving switch nothing changes: the car is only
   consumption and as your usual peaks. While a session runs, the plan counts the car's
   power on top of the house for the next hour. The nightly replay uses peak shaving in
   the quarter-hours in which the car charged, when the switch exists.
+- **The peak buffer stays for the house.** With a peak buffer (`peak_buffer_pct`), the car
+  only takes the battery down to the minimum plus the buffer: while the car charges,
+  Battery Pilot sets the inverter's peak-shaving baseline SOC there. Below it the car's power
+  above the import limit comes from the grid, and the buffer is still there for the house's
+  peaks afterwards. When the car starts with the battery already below that level, the
+  baseline is the SOC it starts at, so the inverter does not refill from the grid during the
+  charge. The battery reserve (`battery_reserve_soc`) only governs export and does not limit
+  the car. Without a buffer the car can use the battery down to the minimum.
 - **What you see.** Two events, "Car charging detected" and "Car charging ended" with the
   kWh. The sensor `sensor.battery_pilot_car_power`, and a line in the plan card.
 
@@ -511,6 +521,26 @@ Limits:
   the charger.
 - It does not read the car's battery level or whether it is plugged in. The code is ready
   for that, but no car integration is included.
+
+### How much of the car fits under the limit
+
+A car charger usually takes more than the import limit, so the car only charges without a
+capacity peak while the battery covers the difference. Set *Car: battery size*
+(`car_battery_kwh`) and *Car: charging power* (`car_charge_kw`) and the Plan tab says, for
+example:
+
+> Car at 7.4 kW: with the battery at 62 %, about **34 %** of the car (19 kWh, 2 h 35) charges
+> under the import limit. Then the battery is at 25 % (minimum + peak buffer) and the rest
+> comes from the grid above the limit. With a full battery: about **58 %**.
+> At 1.9 kW or less the car charges under the limit without the battery.
+
+How it is worked out: quarter-hour by quarter-hour from now, the car's power is added to the
+house's usual consumption for that hour and the solar forecast is taken off; the grid gives up
+to the import limit and the battery the rest, until the battery reaches its floor (above).
+The car gets 90 % of what the charger takes (charging losses). It assumes the car starts
+empty and charges now; a car that starts half full needs half of it. Once the car charges,
+its measured power is used. It is an estimate: a dishwasher or oven during the charge uses
+battery energy the car would have had.
 
 ### Fill the battery for the car
 

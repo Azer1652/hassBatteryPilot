@@ -131,6 +131,7 @@
     <p class="muted" id="plannote"></p>
     <p class="muted" id="tradenote"></p>
     <p class="muted" id="carnote"></p>
+    <p class="muted" id="carcover"></p>
     <div class="fill">
       <button id="fillbtn" type="button" aria-pressed="false">Fill the battery for the car</button>
       <p class="muted" id="fillnote"></p>
@@ -419,6 +420,25 @@ function carNote(c) {
   if (c.shaving) return `${now}: the grid gives up to the import limit and the battery the rest (peak shaving). ` +
     `${fmt(c.session_kwh, 1)} kWh so far.`;
   return c.can_shave ? `${now}.` : `${now}. The inverter's peak-shaving switch was not found, so the battery is used as usual.`;
+}
+
+// How much of the car charges under the import limit with the battery's help (car_battery_kwh set).
+function carCover(c) {
+  if (!c || c.coverage === undefined) return "";
+  if (!c.coverage) return `How much of the car fits under the import limit: no estimate, ${c.coverage_why}.`;
+  const v = c.coverage, n = v.now, f = v.full;
+  const dur = h => h >= 1 ? `${Math.floor(h)} h ${String(Math.round((h % 1) * 60)).padStart(2, "0")}` : `${Math.round(h * 60)} min`;
+  const floor = `${v.floor_soc} %${v.buffer ? " (minimum + peak buffer)" : " (the minimum)"}`;
+  let out = `Car at ${fmt(v.charger_kw, 1)} kW${v.measured ? " (measured)" : ""}: `;
+  if (n.whole) out += `with the battery at ${n.soc} %, the whole car (${fmt(n.kwh, 1)} kWh) charges under the import limit.`;
+  else if (n.pct <= 0 && n.soc > v.floor_soc) out += `the car goes over the import limit at once: the battery gives at most ` +
+    `${fmt(v.battery_kw, 1)} kW, not enough for what the car asks above the limit.`;
+  else if (n.pct <= 0) out += `the battery is at ${n.soc} %, its floor of ${floor}, so the car goes over the import limit at once.`;
+  else out += `with the battery at ${n.soc} %, about <strong>${n.pct} %</strong> of the car (${fmt(n.kwh, 1)} kWh, ${dur(n.hours)}) ` +
+    `charges under the import limit. Then the battery is at ${floor} and the rest comes from the grid above the limit.`;
+  if (n.soc < 100 && !n.whole) out += f.whole ? " With a full battery: the whole car." : ` With a full battery: about <strong>${f.pct} %</strong>.`;
+  if (v.free_kw > 0 && v.free_kw < v.charger_kw) out += ` At ${fmt(v.free_kw, 1)} kW or less the car charges under the limit without the battery.`;
+  return out;
 }
 
 // The "fill the battery for the car" switch: what it is doing.
@@ -1121,6 +1141,7 @@ let render = function (s) {
   $("effnote").textContent = efficiencyNote(s.efficiency);
   $("tradenote").textContent = tradeNote((s.trading || {})[s.contract]);
   $("carnote").textContent = carNote(s.car);
+  $("carcover").innerHTML = carCover(s.car);       // (numbers and fixed text only)
   renderFill(s.car);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter

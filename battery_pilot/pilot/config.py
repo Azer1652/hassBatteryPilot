@@ -73,6 +73,8 @@ class Options:
     winter_mode: str = "full_day"            # full_day: fill at night to carry the day | peaks_only
     # electric car (0 = no car detection)
     car_min_kw: float = 0.0                  # a jump in house load of at least this much, that stays, is the car
+    car_battery_kwh: float = 0.0             # the car's battery, for the page's coverage estimate (0: no estimate)
+    car_charge_kw: float = 0.0               # the car's charging power (0: the measured power while it charges)
     # inverter
     slot_entities: str = "time_charging"
     charge_command: str = "auto"             # auto: the force action when HA has it | force | time_slot

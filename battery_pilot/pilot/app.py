@@ -119,6 +119,7 @@ class App:
         self._car_q = 0.0                 # car kWh in the quarter that is running
         self._car_t: datetime | None = None
         self._car_session: tuple[datetime, float] | None = None    # (start, kWh so far)
+        self._car_floor: float | None = None      # the SOC the car may take the battery down to (session running)
         self.trading: dict = {}           # what trading would earn in the coming hours, per contract (display)
         self.boost_seen: dict = {}        # the boost window last announced in the events (persisted)
         self.over_since: datetime | None = None
@@ -404,7 +405,8 @@ class App:
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
         self._blocked = self._blocked or self.curtailed_by_us
-        self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None)
+        self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None,
+                  soc)
         await self._fill(now)
         for rec in self.meter.add(now, kw, soc):
             self._quarter_closed(rec)
@@ -434,13 +436,33 @@ class App:
                                    car_kw=self.car_state.power_kw if self.car_state.charging else 0.0,
                                    can_shave=self.can_peak_shave, fill=self.fill_on,
                                    renew=self.solis.renew_due(now))
+            if (self.decision.command == "none" and self.control_on and self.solis.mode == "peak_shave"
+                    and self.solis.shave_set and self.solis.shave_set[1] != self.shave_level):
+                self.decision = Decision("peak_shave", reason=f"the car {'charges' if self.car_state.charging else 'stopped'}"
+                                                              f": the battery is kept at {self.shave_level:.0f} %")
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
         self._modes[mode] = self._modes.get(mode, 0) + 1
         await self._peak_warning(now, projection, step)
 
-    def _car(self, now: datetime, load_kw: float | None, charger_kw: float | None):
+    @property
+    def shave_level(self) -> float:
+        """The SOC the inverter keeps while peak shaving: the battery minimum, and while the car charges
+        the peak buffer, so the car does not take what is kept for the house's peaks."""
+        if self.car_state.charging and self._car_floor is not None:
+            return self._car_floor
+        return self._shave_soc
+
+    def car_floor(self, soc: float | None) -> float:
+        """Where a car session starting at `soc` stops taking the battery: minimum + peak buffer, or the
+        SOC it starts at when that is lower (a Solis refills to its baseline from the grid)."""
+        level = float(self.o.battery_min_soc + self.o.peak_buffer_pct)
+        if soc is not None:
+            level = min(level, float(int(soc)))
+        return max(self._shave_soc, level)
+
+    def _car(self, now: datetime, load_kw: float | None, charger_kw: float | None, soc: float | None = None):
         """Is the car charging? Its energy is kept per quarter (so it is not learned as house
         consumption) and per month, and a session is reported when it starts and ends."""
         was = self.car_state
@@ -453,6 +475,7 @@ class App:
         self.car_state = self.car.update(now, load_kw, charger_kw)
         if self.car_state.charging and not was.charging:
             self._car_session = (now, 0.0)
+            self._car_floor = self.car_floor(soc)
             what = ("peak shaving while it lasts" if self.can_peak_shave and self.control_on
                     else "measured only" if self.can_peak_shave
                     else "measured only (the inverter's peak-shaving switch was not found)")
@@ -460,6 +483,7 @@ class App:
         elif was.charging and not self.car_state.charging and self._car_session:
             self.event(f"Car charging ended: {self._car_session[1]:.1f} kWh.")
             self._car_session = None
+            self._car_floor = None
             self._fill_done = True
 
     async def _fill(self, now: datetime):
@@ -588,7 +612,7 @@ class App:
             elif d.command == "solar_hold":
                 await self.solis.solar_hold(local)
             elif d.command == "peak_shave":
-                await self.solis.peak_shave(local, self.o.import_limit_kw, self._shave_soc)
+                await self.solis.peak_shave(local, self.o.import_limit_kw, self.shave_level)
             else:
                 await self.solis.self_use(local, d.reason)
             self._cmd_failures = 0
@@ -780,7 +804,33 @@ class App:
                 "can_shave": self.can_peak_shave, "soc": s.soc, "plugged": s.plugged,
                 "fill": self.fill_on, "fill_state": self._fill_state(),
                 "fill_until": ((datetime.fromisoformat(self.fill_since) + timedelta(hours=FILL_MAX_H)).isoformat()
-                               if self.fill_on and self.fill_since else None)}
+                               if self.fill_on and self.fill_since else None),
+                **self.car_coverage(now, source is not None)}
+
+    def car_coverage(self, now: datetime, detected: bool) -> dict:
+        """How much of the car charges under the import limit with the home battery's help: from the
+        SOC now and from a full battery. Empty when the car's battery size is not set."""
+        o = self.o
+        if o.car_battery_kwh <= 0:
+            return {}
+        s = self.car_state
+        kw = s.power_kw if s.charging and s.power_kw > 0 else o.car_charge_kw
+        why = ("car detection is off (set Car: smallest charging power or the charger entity)" if not detected
+               else "the inverter's peak-shaving switch was not found" if not self.can_peak_shave
+               else "set Car: charging power, or wait until the car charges" if kw <= 0
+               else "the battery SOC is not known yet" if not self.readings else None)
+        if why:
+            return {"coverage": None, "coverage_why": why}
+        soc = self.readings.soc
+        floor = self._car_floor if s.charging and self._car_floor is not None else self.car_floor(soc)
+        load = (lambda a, b: self.load.kwh(a, b, self.tz))
+        net = (load(now, now + timedelta(hours=3)) - self.pv.kwh(now, now + timedelta(hours=3))) / 3
+        cover = {k: C.coverage(o, start, kw, low, now, load, self.pv.kwh).__dict__
+                 for k, start, low in (("now", soc, floor), ("full", 100.0, self.car_floor(100.0)))}
+        return {"coverage": {"car_kwh": o.car_battery_kwh, "charger_kw": round(kw, 2), "floor_soc": round(floor),
+                             "measured": bool(s.charging), "free_kw": round(max(o.import_limit_kw - net, 0.0), 1),
+                             "buffer": o.peak_buffer_pct > 0,
+                             "battery_kw": round(o.max_discharge_kw * o.discharge_efficiency, 1), **cover}}
 
     def _fill_state(self) -> str | None:
         if not self.fill_on:

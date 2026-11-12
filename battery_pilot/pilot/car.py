@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .config import Options
+from .simulate import Battery, step
 
 START_AFTER = timedelta(minutes=3)      # the jump must last this long (a kettle does not)
 END_AFTER = timedelta(minutes=2)        # and be gone this long
@@ -127,3 +128,49 @@ def make_source(o: Options, entities: dict):
     if o.car_min_kw > 0:
         return LoadStepSource(o.car_min_kw)
     return NoCar()
+
+
+# ---------------------------------------------------------------- how much of the car fits under the limit
+CAR_EFF = 0.9                   # charger and car losses: kWh into the car per kWh the charger takes
+COVER_MAX = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class Coverage:
+    soc: float          # the home battery's SOC the car starts at, %
+    pct: float          # of the car's battery charged before the import limit is crossed
+    kwh: float          # into the car by then
+    hours: float
+    whole: bool         # the car is full before the home battery reaches its floor
+
+
+def coverage(o: Options, soc: float, car_kw: float, floor: float, start: datetime,
+             load_kwh, pv_kwh) -> Coverage:
+    """How much of the car charges at `car_kw` while the grid gives up to the import limit and the
+    home battery the rest (peak shaving), until the battery reaches `floor` and the import limit
+    would be crossed. `load_kwh(a, b)` / `pv_kwh(a, b)`: the house's usual consumption and the solar
+    forecast. The same physics as the replay (`simulate.step`, peak_shave with `shave_floor`)."""
+    b = Battery.from_options(o)
+    need = o.car_battery_kwh / CAR_EFF          # what the charger takes for an empty-to-full car
+    limit = o.import_limit_kw
+    got, t, s, whole = 0.0, start, soc, False
+    while t - start < COVER_MAX:
+        h = min(0.25, (need - got) / car_kw)
+        t1 = t + timedelta(hours=h)
+        house, pv = load_kwh(t, t1), pv_kwh(t, t1)
+        res = step(b, s, "peak_shave", s, house + car_kw * h, pv, h, shave_floor=floor)
+        over = res.import_kwh - limit * h
+        if over > 1e-6:
+            if res.soc <= max(floor, b.min_soc) + 1e-6:     # the battery reached its floor in this quarter
+                above = car_kw * h + house - pv - limit * h      # what the battery had to give
+                got += car_kw * h * max(1 - over / above, 0.0) if above > 0 else 0.0
+            break                               # (else the battery cannot give that much power)
+        got, s, t = got + car_kw * h, res.soc, t1
+        if got >= need - 1e-9:
+            whole = True
+            break
+    else:                                       # a whole day under the limit: the car can go on as slowly
+        got, whole = need, True
+    car = min(got * CAR_EFF, o.car_battery_kwh)
+    return Coverage(round(soc), round(car / o.car_battery_kwh * 100), round(car, 1),
+                    round(got / car_kw, 2), whole)

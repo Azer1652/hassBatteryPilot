@@ -221,6 +221,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     b = Battery.from_options(o)
     tar = tariff(kind, o)
     soc = soc0
+    car_at: float | None = None          # the floor of the car session that runs (see below)
     out = {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "peak_kw": 0.0,
            "grid_charged": 0.0, "stored_c": 0.0, "soc_end": soc0, "flows": []}
     buys = []
@@ -237,8 +238,11 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
                              peak_shave=peak_shave, solar_hold=solar_hold)
         st = plan.step_at(r.start + timedelta(minutes=7))
         action, target = (st.action, st.soc_end) if st else ("self_use", soc)
-        if r.car > 0 and peak_shave:        # the car charged: peak shaving whatever the plan said, as live
-            action = "peak_shave"
+        car_floor = None
+        if r.car > 0 and peak_shave:        # the car charged: peak shaving whatever the plan said, as live,
+            action = "peak_shave"           # and the battery kept at the peak buffer (or where it was)
+            car_floor = car_at if car_at is not None else min(b.self_floor, soc)
+        car_at = car_floor
         if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5:
             load_kwh, pv_kwh = r.kwh["load"], r.kwh["pv"]
             if r.blocked:       # the panels were held back: what was measured is the least they could give
@@ -254,7 +258,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         sell = tar.sell(local, market, market_avg)
         res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left,
                        curtail=block_negative and sell < 0, limit_kw=st.limit_kw if st else None,
-                       reserve=st.reserve if st else None)
+                       reserve=st.reserve if st else None, shave_floor=car_floor)
         buy = tar.buy(local, market)
         buys.append(buy)
         out["cost_c"] += res.import_kwh * buy - res.export_kwh * sell

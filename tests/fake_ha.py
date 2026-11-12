@@ -214,9 +214,11 @@ class FakeHA:
             grid = net - dis * 0.97
         elif mode == "peak_shave" and net > 0:
             limit = float(self.s["number.solis_peak_max_usable_grid_power"]["state"]) / 1000
-            dis = min(max(net - limit, 0) / 0.97, 4.6, avail / h if h else 9e9)
+            base = float(self.s["number.solis_peak_baseline_soc"]["state"])
+            above = max(min(avail, (self.soc - base) / 100 * CAP), 0.0)    # held at the baseline
+            dis = min(max(net - limit, 0) / 0.97, 4.6, above / h if h else 9e9)
             batt, grid = -dis, net - dis * 0.97
-            if self.soc < float(self.s["number.solis_peak_baseline_soc"]["state"]):   # refilled from the grid
+            if self.soc < base:   # refilled from the grid
                 ch = min(max(limit - net, 0) * 0.97, 2.56, room / h if h else 9e9)
                 batt, grid = ch, net + ch / 0.97
         elif mode == "solar_hold":      # surplus is exported, a deficit comes from the grid; the battery is idle

@@ -132,6 +132,16 @@ can_shave=)`: while the car charges above the import limit it forces `peak_shave
 is kept out of `LoadProfile` and the peaks; the replay uses peak_shave in car quarters; the plan adds
 the car's power for the next hour. `status["car"]`, `sensor.battery_pilot_car_power`, `#carnote`.
 
+While the car charges, the peak-shaving baseline is `App.shave_level`: `App._car_floor`, set at the
+session start by `App.car_floor(soc)` = minimum + `peak_buffer_pct`, or the SOC the car found when
+lower (a Solis refills to its baseline from the grid), never below `_shave_soc`. The tick resends
+`peak_shave` when the inverter's baseline (`Solis.shave_set`) differs, so it goes back to the minimum
+when the car stops. The replay does the same with `simulate.step(shave_floor=)`. The planner does
+not model the car beyond its next-hour load, so it has nothing to agree with here.
+`car.coverage()` (display only, `status["car"]["coverage"]`, `#carcover`): quarter-hours of
+`simulate.step("peak_shave", shave_floor=)` with the car's power added to the usual house load,
+until the import limit would be crossed; `CAR_EFF` 0.9 charging losses; from the SOC now and from 100 %.
+
 The fill switch (`helpers.CAR_FILL`, third helper; the page's `#fillbtn` posts to `/api/car_fill` →
 `App.set_fill`): while on and the car is not charging, `controller.decide(fill=True)`
 replaces the plan's step by `fill_step` (charge to 100 % in the current clock hour; once full
