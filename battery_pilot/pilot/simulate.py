@@ -68,13 +68,14 @@ class StepResult:
 def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float, pv_kwh: float,
          hours: float, curtail: bool = False, slot_left_h: float | None = None,
          limit_kw: float | None = None, reserve: float | None = None,
-         shave_floor: float | None = None) -> StepResult:
+         shave_floor: float | None = None, hold: float = 0.0) -> StepResult:
     """One step of `hours` with this command. `curtail`: export is blocked (sell price < 0).
 
     `limit_kw` / `reserve`: the plan step's import level for charging and export floor, when
     the plan crosses the import limit or sells below the reserve (default: the settings).
     `shave_floor`: with peak_shave, the battery gives only down to this SOC (default: the
     minimum). While the car charges it is the peak buffer, which is kept for the house.
+    `hold`: the plan step's winter level; self-use stops there instead of at the peak buffer.
 
     `slot_left_h`: time left in the plan slot including this step. Charging is then paced
     to reach the target at the end of the slot, as the controller does, and held at the
@@ -113,8 +114,9 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
     else:  # self_use (also charge/discharge that reached their target, or charging paused)
         if net > 0:
             # down to the peak buffer the battery covers the house; below it only what is above the limit
-            free = b.kwh(max(soc - b.self_floor, 0))
-            shave = max(net - limit * hours, 0.0) / b.eta_d if b.self_floor > b.min_soc else 0.0
+            floor = max(b.self_floor, hold)
+            free = b.kwh(max(soc - floor, 0))
+            shave = max(net - limit * hours, 0.0) / b.eta_d if floor > b.min_soc else 0.0
             discharge_dc = min(max(min(net / b.eta_d, free), shave), avail, b.max_discharge_kw * hours)
         else:
             charge_dc = min(-net * b.eta_c, room, b.max_charge_kw * hours)

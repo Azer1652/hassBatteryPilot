@@ -417,6 +417,10 @@ function planExtras(plan) {
   const sale = plan && plan.steps.find((s) => s.action === "discharge" && (s.reserve !== null || !plan.allow_export));
   if (sale) out.push(`At ${hm(sale.start)} the price is high enough to sell ${plan.allow_export ? "below the reserve" : "in winter"}: ` +
     "buying the energy back later costs less.");
+  const winter = plan && plan.steps.find((s) => s.hold > 0 && new Date(s.start) - new Date(plan.created) < 24 * 3600e3);
+  if (winter) out.push(`Winter day: self-use stops at ${fmt(winter.hold, 0)} %; below it the house runs on the grid ` +
+    `(peak shaving), so the battery keeps ${fmt(winter.hold, 0)} % for the car. Nothing charges it back from the grid ` +
+    "for this; self-use returns 5 points above it.");
   const hold = plan && plan.steps.find((s) => s.action === "solar_hold");
   if (hold) out.push(`From ${hm(hold.start)} the solar surplus is exported and not stored (solar hold): ` +
     "the battery keeps its room for hours in which surplus cannot be sold.");
@@ -447,6 +451,9 @@ function carCover(c) {
   else if (n.pct <= 0) out += `the battery is at ${n.soc} %, its floor of ${floor}, so the car goes over the import limit at once.`;
   else out += `with the battery at ${n.soc} %, about <strong>${n.pct} %</strong> of the car (${fmt(n.kwh, 1)} kWh, ${dur(n.hours)}) ` +
     `charges under the import limit. Then the battery is at ${floor} and the rest comes from the grid above the limit.`;
+  const w = v.winter;
+  if (w && n.soc < w.soc - 1 && !n.whole) out += w.whole ? ` With the battery at the winter level (${w.soc} %): the whole car.`
+    : ` With the battery at the winter level (${w.soc} %): about <strong>${w.pct} %</strong>.`;
   if (n.soc < 100 && !n.whole) out += f.whole ? " With a full battery: the whole car." : ` With a full battery: about <strong>${f.pct} %</strong>.`;
   if (v.free_kw > 0 && v.free_kw < v.charger_kw) out += ` At ${fmt(v.free_kw, 1)} kW or less the car charges under the limit without the battery.`;
   return out;

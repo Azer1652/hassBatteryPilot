@@ -48,7 +48,7 @@ import math
 import statistics
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .config import Options
@@ -95,6 +95,7 @@ class Slot:
     sell: float              # c/kWh
     market: float | None = None   # EUR/MWh, None when estimated or not used
     peak_kw: float = 0.0          # typical highest quarter-hour house load in this slot
+    hold: float = 0.0             # winter level: self-use stops here (0: none, see winter_hold)
 
     @property
     def end(self) -> datetime:
@@ -118,6 +119,7 @@ class Step:
     capacity_c: float = 0.0          # the part of cost_c for import above the import limit
     limit_kw: float | None = None    # import level charging may follow (None: the import limit setting)
     reserve: float | None = None     # export floor (None: the battery reserve setting)
+    hold: float = 0.0                # winter level: self-use stops here, below it peak shaving (0: none)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -277,11 +279,13 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
     low = [-low_c_kwh * max(s - smin, 0) * e for s in levels] if peak_shave else None
     choice: list[list[int | str | None]] = [None] * T  # type: ignore[list-item]   # None: self-use
     shave = [-_shave_kwh(b, sl) / e if peak_shave else 0.0 for sl in slots]   # SOC points, <= 0
-    # The peak buffer: self-use stops there, below it the battery only gives what is above the import limit.
-    sbuf = int(math.ceil(b.self_floor)) if peak_shave else smin
+    # The peak buffer, or on a winter day the winter level: self-use stops there, below it the
+    # battery only gives what is above the import limit.
+    sbufs = [max(int(math.ceil(b.self_floor)), int(math.ceil(sl.hold))) if peak_shave else smin for sl in slots]
 
     def self_move(t: int, s: int, lo: int, hi: int) -> tuple[int, float]:
         """(whole SOC points, exact change) of self-use in slot t from level s."""
+        sbuf = sbufs[t]
         lo_self = max(min(sbuf - s, 0), lo)
         ds, x = min(max(whole[t], lo_self), hi), min(max(exact[t], lo_self), hi)
         if sbuf > smin and exact[t] < -1e-9:
@@ -324,7 +328,8 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         can_hold = solar_hold and not (curtail_negative and sl.sell < 0)   # export blocked: nothing to gain
         act = ACTION_COST_C_PER_H * sl.hours
         cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
-        floor = smin if t in extreme else sres
+        # (the winter level holds for planned discharges too, except at an extreme price)
+        floor = smin if t in extreme else max(sres, sbufs[t] if sl.hold else sres)
         for s in levels:
             lo = max(min(smin - s, 0), -maxd)
             hi = min(100 - s, maxc)
@@ -376,7 +381,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         ds, x = self_move(t, s, lo, hi)
         if d is None:
             # at or below the peak buffer the inverter is in peak shaving, not self-use
-            action, d = (SHAVE if s <= sbuf and sbuf > smin and exact[t] < -1e-9 else "self_use"), ds
+            action, d = (SHAVE if s <= sbufs[t] and sbufs[t] > smin and exact[t] < -1e-9 else "self_use"), ds
             cost, imp, exp, cap = _flow(b, sl, x * e, curtail_negative)
         elif d == SHAVE and x > 1e-9:
             action, d = HOLD, 0
@@ -390,7 +395,8 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
             cost, imp, exp, cap = costs[t][d]
         reserve = b.min_soc if (action == "discharge" and t in extreme and s + d < b.reserve_soc) else None
         steps.append(Step(sl.start, sl.hours, action, s, s + d, imp, exp, sl.load_kwh, sl.pv_kwh,
-                          sl.buy, sl.sell, cost, cap, None, reserve))
+                          sl.buy, sl.sell, cost, cap, None, reserve,
+                          sl.hold if peak_shave and sl.hold > b.self_floor else 0.0))
         s += d
     return steps
 
@@ -425,6 +431,22 @@ def market_at(price_slots: list[PriceSlot], t: datetime) -> tuple[float | None, 
     if price_slots:
         return statistics.fmean(p.eur_mwh for p in price_slots), False
     return None, False
+
+
+def winter_hold(o: Options, b: Battery | None = None) -> float:
+    """The winter level (0: off): on a winter day self-use stops there and below it the house runs on
+    the grid (peak shaving), so the battery keeps it, e.g. for the car. Only above the peak buffer."""
+    b = b or Battery.from_options(o)
+    return float(o.winter_hold_soc) if o.winter_hold_soc > b.self_floor else 0.0
+
+
+def is_winter_day(day: date, tz: ZoneInfo, o: Options, pv_kwh: PvFn, forecast_until: datetime | None) -> bool | None:
+    """A dull day: its (shade-corrected) solar forecast is below the winter threshold, as for the
+    night target. None when the forecast does not reach the day's late morning yet."""
+    start = datetime.combine(day, time(0), tz).astimezone(timezone.utc)
+    if forecast_until is not None and forecast_until < start + timedelta(hours=12):
+        return None
+    return pv_kwh(start, start + timedelta(days=1)) < o.winter_solar_threshold_kwh
 
 
 def night_windows(start: datetime, end: datetime, tz: ZoneInfo, o: Options):
@@ -489,12 +511,15 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
               curtail_negative: bool = False, horizon_h: int = 36,
               forecast_until: datetime | None = None, peak_kw: LoadFn | None = None,
               month_peak_kw: float = 0.0, current_action: str | None = None,
-              peak_shave: bool = False, solar_hold: bool = False) -> Plan:
+              peak_shave: bool = False, solar_hold: bool = False,
+              winter_days: dict[date, bool] | None = None) -> Plan:
     """`forecast_until`: end of the solar forecast; nights after it get no winter target.
     `month_peak_kw`: the highest quarter-hour import so far this month (for the capacity cost).
     `current_action`: what the previous plan is still doing now (see `sticky_action`).
     `peak_shave`: the inverter's peak-shaving switch was found, so the plan may use it.
-    `solar_hold`: its feed-in priority switch was found, so solar charging can be put off."""
+    `solar_hold`: its feed-in priority switch was found, so solar charging can be put off.
+    `winter_days`: which local dates are winter days for the winter level (`winter_hold`); dates
+    not in it are decided here and added, so a caller that keeps it fixes each date once."""
     b = Battery.from_options(o)
     end = now + timedelta(hours=horizon_h)
     minutes = 60
@@ -517,6 +542,18 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         slots[1] = Slot(a.start, a.hours + z.hours, a.load_kwh + z.load_kwh, a.pv_kwh + z.pv_kwh, z.buy, z.sell,
                         z.market, max(a.peak_kw, z.peak_kw))
         slots.pop(0)
+    hold = winter_hold(o, b)
+    if hold and peak_shave:
+        days = {} if winter_days is None else winter_days
+        for i, sl in enumerate(slots):
+            d = (sl.start + timedelta(hours=sl.hours / 2)).astimezone(tz).date()
+            if d not in days:
+                known = is_winter_day(d, tz, o, pv_kwh, forecast_until)
+                if known is None:
+                    continue
+                days[d] = known
+            if days[d]:
+                slots[i] = replace(sl, hold=hold)
 
     targets: dict[int, float] = {}
     target_info = []

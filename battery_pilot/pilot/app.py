@@ -132,6 +132,7 @@ class App:
         self._soc_since: tuple[float, datetime] | None = None
         self._stuck_soc: float | None = None
         self._cmd_at: datetime | None = None
+        self.winter_days: dict[date, bool] = {}   # winter level: each date decided once (planner.is_winter_day)
         self._cmd_failures = 0
         self._tou_mismatch = 0
         self._shave_mismatch = 0
@@ -193,6 +194,7 @@ class App:
                 "curtailed_by_us": bool(s.get("curtailed_by_us")), "fill_since": str(s.get("fill_since") or ""),
                 "export_limit_before": s.get("export_limit_before"),
                 "day_logs": dict(s.get("day_logs") or {}), "boost_seen": dict(s.get("boost_seen") or {}),
+                "winter_days": {date.fromisoformat(k): bool(v) for k, v in (s.get("winter_days") or {}).items()},
             }
             if s.get("load_default_kw"):
                 loaded["load"].default_kw = float(s["load_default_kw"])
@@ -228,7 +230,8 @@ class App:
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
              "boost_seen": self.boost_seen, "whole_day_averages": True,
              "efficiency": self.efficiency.to_json(), "car_months": self.car_months,
-             "fill_since": self.fill_since}
+             "fill_since": self.fill_since,
+             "winter_days": {d.isoformat(): v for d, v in self.winter_days.items()}}
         write_json(self.state_file, s)
 
     # What Battery Pilot left on the inverter, in a small file written at every change: after a
@@ -321,6 +324,9 @@ class App:
             self.event("The peak buffer needs the inverter's peak-shaving switch, which was not found: "
                        "it is off.", logging.WARNING)
             self.o.peak_buffer_pct = 0
+        if self.o.winter_hold_soc and not self.can_peak_shave:
+            self.event("The winter level (winter_hold_soc) needs the inverter's peak-shaving switch, which was "
+                       "not found: it is off.", logging.WARNING)
         saved = self._load_inverter()
         if "curtailed_by_us" in saved:
             self.curtailed_by_us = bool(saved["curtailed_by_us"])
@@ -825,8 +831,12 @@ class App:
         floor = self._car_floor if s.charging and self._car_floor is not None else self.car_floor(soc)
         load = (lambda a, b: self.load.kwh(a, b, self.tz))
         net = (load(now, now + timedelta(hours=3)) - self.pv.kwh(now, now + timedelta(hours=3))) / 3
-        cover = {k: C.coverage(o, start, kw, low, now, load, self.pv.kwh).__dict__
-                 for k, start, low in (("now", soc, floor), ("full", 100.0, self.car_floor(100.0)))}
+        starts = [("now", soc, floor), ("full", 100.0, self.car_floor(100.0))]
+        hold = max((st.hold for st in self.plan.steps if st.start < now + timedelta(hours=24)), default=0.0) \
+            if self.plan else 0.0
+        if hold > floor:                  # the winter level keeps this much for the car
+            starts.append(("winter", hold, self.car_floor(hold)))
+        cover = {k: C.coverage(o, start, kw, low, now, load, self.pv.kwh).__dict__ for k, start, low in starts}
         return {"coverage": {"car_kwh": o.car_battery_kwh, "charger_kw": round(kw, 2), "floor_soc": round(floor),
                              "measured": bool(s.charging), "free_kw": round(max(o.import_limit_kw - net, 0.0), 1),
                              "buffer": o.peak_buffer_pct > 0,
@@ -883,7 +893,11 @@ class App:
                               curtail_negative=self.blocks_negative_export, forecast_until=self.pv.until,
                               peak_kw=lambda a, b: self.load.peak_kw(a, b, self.tz) + (car_kw if car_kwh(a, b) > 0 else 0.0),
                               month_peak_kw=self.peaks.month_peak(now, self.tz), current_action=current,
-                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold)
+                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold,
+                              winter_days=self.winter_days)
+        today = now.astimezone(self.tz).date()
+        for d in [d for d in self.winter_days if d < today - timedelta(days=3)]:
+            del self.winter_days[d]
         self._log_plan(now)
         avg = self.market_avg_month(now)
         self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz, avg) for k in KINDS}

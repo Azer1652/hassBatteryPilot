@@ -122,6 +122,17 @@ step `peak_shave`; `controller.decide` switches to peak shaving at the level (le
 above) and charges back to it from `BUFFER_GAP` below. That refill is not in the planner or the replay.
 `App.setup` zeroes the option when the peak-shaving switch was not found.
 
+The winter level (`winter_hold_soc`, off by default; `planner.winter_hold`, only above `self_floor` and
+with `peak_shave=True`): on a winter day (`planner.is_winter_day`, the day's corrected forecast below
+`winter_solar_threshold_kwh`, decided once per local date in the `winter_days` dict that `App` keeps in
+the state file and `replay_day` keeps per replay) each slot gets `Slot.hold` and each step `Step.hold`.
+`optimize` uses it as that slot's `sbuf` (self-use stops there) and as the discharge floor outside
+extreme slots; `simulate.step(hold=)` stops self-use there; `controller.winter_hold` switches to peak
+shaving at the level, back to self-use only `WINTER_BAND` (5) above it, and not within
+`WINTER_DWELL_S` (15 min) of the last command, so it cannot flip the inverter. The planner does not
+model the band or the dwell (at most 5 points). Nothing charges back to the level from the grid. The
+car comes first in `decide` and uses the level down to `car_floor`.
+
 ## The car (`car.py`) and the fill switch
 
 `car.py`: `CarState` (charging, power_kw, and `soc`/`plugged`/`target_soc`, None for now) from a source

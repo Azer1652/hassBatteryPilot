@@ -110,6 +110,9 @@ configuration:
   winter_mode:
     name: "Winter strategy"
     description: "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin) when the night price is low enough to pay for the losses and wear, no export. peaks_only: never a night target, keep only enough for your usual quarter-hour peaks."
+  winter_hold_soc:
+    name: "Winter: keep the battery at (%)"
+    description: "0 = off. On winter days (solar forecast below the threshold) self-use stops at this level; below it the house runs on the grid (peak shaving) and the battery only covers what is above the import limit. The battery is then part-filled when the car arrives; the car may use it down to the minimum + peak buffer. Nothing charges it back from the grid for this: solar and the plan fill it. Needs the inverter's peak-shaving switch."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."

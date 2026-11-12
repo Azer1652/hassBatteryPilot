@@ -71,6 +71,7 @@ class Options:
     safety_margin_pct: int = 30
     winter_solar_threshold_kwh: float = 12.0
     winter_mode: str = "full_day"            # full_day: fill at night to carry the day | peaks_only
+    winter_hold_soc: int = 0                 # winter days: self-use stops here, below it peak shaving (0: off)
     # electric car (0 = no car detection)
     car_min_kw: float = 0.0                  # a jump in house load of at least this much, that stays, is the car
     car_battery_kwh: float = 70.5            # the car's battery for the page's coverage estimate (0: none); a Mercedes EQB 250+
@@ -124,6 +125,8 @@ class Options:
             raise ConfigError("battery_reserve_soc must be between battery_min_soc and 100.")
         if not 0 <= self.peak_buffer_pct or self.battery_min_soc + self.peak_buffer_pct > 90:
             raise ConfigError("peak_buffer_pct: the battery minimum plus the peak buffer must stay at or below 90 %.")
+        if self.winter_hold_soc and not self.battery_min_soc <= self.winter_hold_soc <= 100:
+            raise ConfigError("winter_hold_soc must be 0 (off) or between battery_min_soc and 100.")
         if self.winter_mode not in ("full_day", "peaks_only"):
             raise ConfigError("winter_mode must be full_day or peaks_only.")
         if self.slot_entities not in ("time_charging", "grid_time_of_use"):

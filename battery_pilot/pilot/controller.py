@@ -24,6 +24,10 @@ Pure function, so every rule can be tested without Home Assistant:
 * the peak buffer - with `peak_buffer_pct` and the peak-shaving switch: where the plan says
               self-use and the SOC is at or below minimum + buffer, peak shaving; BUFFER_GAP
               below it, grid charge back to it under the import limit;
+* the winter level - a plan step with `hold` (a winter day, `winter_hold_soc`): at or below it
+              peak shaving, nothing charged back from the grid; self-use again only WINTER_BAND
+              above it, and no switch within WINTER_DWELL_S of the last, so the inverter does not
+              flip between the two;
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
@@ -53,6 +57,8 @@ HOLD_SURPLUS_KW = 0.3   # solar hold starts with this much surplus
 HOLD_DWELL_S = 120      # and is not started or ended within this time of the last command
 BUFFER_GAP = 3.0        # the peak buffer is charged again when it is this far below its level
 BUFFER_BAND = 2.0       # and peak shaving at the buffer ends this far above it
+WINTER_BAND = 5.0       # the winter level: peak shaving from the level, self-use again only this far above it
+WINTER_DWELL_S = 900    # and no switch between the two within this time of the last mode change
 FILL_AGAIN = 95.0       # the fill switch: a full battery is charged again below this SOC
 
 
@@ -197,6 +203,11 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
                                                      "what is above the import limit")
             return Decision("none", reason="peak buffer kept (peak shaving)")
 
+    if can_shave and step.hold > 0 and step.action in ("self_use", "peak_shave") and r.soc < step.hold + WINTER_BAND:
+        held = winter_hold(step.hold, r, mode, mode_age_s)
+        if held is not None:
+            return held
+
     if step.action == "peak_shave":
         if mode != "peak_shave":
             return Decision("peak_shave", reason=f"{src}: peak shaving (the battery is kept for later)")
@@ -218,3 +229,24 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         why = "target reached" if step.action != "self_use" else "plan: self-use"
         return Decision("self_use", reason=why)
     return Decision("none", reason="self-use")
+
+
+def winter_hold(hold: float, r: Readings, mode: str, mode_age_s: float) -> Decision | None:
+    """The winter level, below `hold` + WINTER_BAND: peak shaving from the level down (the house on
+    the grid, the battery only above the import limit), self-use above it until peak shaving has
+    started; once started it lasts until WINTER_BAND above the level. Between self-use and peak
+    shaving it waits WINTER_DWELL_S after the last mode change. None: the plan decides."""
+    shave = r.soc <= hold or mode == "peak_shave"
+    if mode in ("self_use", "peak_shave") and mode_age_s < WINTER_DWELL_S:
+        if (mode == "peak_shave") != shave:
+            return Decision("none", reason=f"winter level {hold:.0f} %: {mode.replace('_', ' ')} kept a few "
+                                           "minutes before switching")
+        shave = mode == "peak_shave"
+    if shave:
+        if mode != "peak_shave":
+            return Decision("peak_shave", reason=f"winter level: below {hold:.0f} % the house runs on the grid "
+                                                 "and the battery is kept (peak shaving)")
+        return Decision("none", reason=f"winter level {hold:.0f} % kept (peak shaving)")
+    if mode != "self_use":
+        return Decision("self_use", reason=f"winter level: self-use down to {hold:.0f} %")
+    return Decision("none", reason=f"self-use down to the winter level ({hold:.0f} %)")

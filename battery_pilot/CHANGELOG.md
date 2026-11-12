@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.15.0
+
+**Winter: keep the battery for the car.**
+
+- **New setting *Winter: keep the battery at*** (`winter_hold_soc`, off by default). On winter days
+  (the day's shade-corrected solar forecast below *Winter day when solar is below*), self-use stops
+  at this level and below it the inverter peak-shaves: the house runs on the grid and the battery
+  only covers what is above the import limit. The battery is then part-filled when the car comes,
+  so the *Fill the battery for the car* switch is needed less. The car may use it down to the
+  minimum + peak buffer. Nothing is bought from the grid to fill it back: solar and the plan's own
+  night charging do.
+- **No flipping:** peak shaving starts at the level and self-use comes back only 5 points above
+  it, never within 15 minutes of the last switch. Whether a day is a winter day is decided once per
+  day, so a forecast wobbling around the threshold does not switch the level on and off.
+- The plan, the contract comparison and the Plan tab (a note, and how much of the car the battery
+  covers from the winter level) count with it. Needs the inverter's peak-shaving switch.
+
 ## 2.14.0
 
 - **New House tab:** the household peaks Battery Pilot has learned, per weekday and hour: the

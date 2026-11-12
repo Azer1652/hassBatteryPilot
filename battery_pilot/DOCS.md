@@ -101,6 +101,7 @@ Home Assistant once and uninstall the Battery Playbook app.
 | Dull day ahead (winter), strategy `full_day` | When the night price is low enough to pay for it (see *Winter strategy*): charged from the grid at night, at the cheapest moments, to the **night target** by the time the night tariff ends. The target is what the house needs until evening after the corrected solar, plus the safety margin, but never more than the night window can charge under the import limit. No battery export, except at a price so high that buying the energy back later costs less. |
 | Dull day ahead (winter), strategy `peaks_only` | Only enough charge to cover your usual quarter-hour peaks (cooking, kettle) under the import limit, plus whatever the prices make worth it. |
 | Dull day ahead (winter), night charging does not pay | No night target: the battery is not filled at a loss. It keeps enough for your usual peaks, as with `peaks_only`. |
+| Dull day ahead (winter), with *Winter: keep the battery at* | Self-use stops at that level; at or below it the inverter is in peak shaving, so the house runs on the grid (the battery covers only what is above the import limit) and the level is kept for the car. Nothing is bought to fill it back: solar and the night target do. Self-use returns only 5 points above the level, at least 15 minutes after the last switch. |
 | Peak shaving (when the inverter has the switch) | In hours where the battery's energy is worth more later (a dearer hour of the plan, or a peak it must cover), the inverter is put in its **peak-shaving mode**: the grid feeds the house up to the *Grid import limit* and the battery only gives what is above it. Typical: the night hours on a day/night contract when the battery cannot carry both the night and the day. It is never used just to end the plan with a fuller battery. |
 | Solar hold (when the inverter has the switch) | While there is solar surplus, the inverter's **feed-in priority** is switched on: the surplus is exported and not stored, and the battery keeps its room for later hours in which surplus cannot be sold (a negative sell price with export blocked, or more surplus than the export limit). The plan uses it only where it lowers the cost. In this mode the battery does not feed the house, so Battery Pilot switches it on only with at least 0.3 kW of surplus and returns to self-use when the surplus is gone. |
 | Any day | The battery keeps enough energy for the quarter-hour peaks Battery Pilot has learned for each weekday and hour, topping up shortly before if needed. |
@@ -424,6 +425,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | --- | --- | --- | --- |
 | Winter day when solar is below | `winter_solar_threshold_kwh` | 12 kWh | A day whose shade-corrected forecast is below this is a winter day. |
 | Winter strategy | `winter_mode` | full_day | `full_day`: on winter days fill the battery at night to carry the day when the night price pays for it, no battery export. `peaks_only`: never a night target, keep only enough for your usual peaks (see below). |
+| Winter: keep the battery at | `winter_hold_soc` | 0 % (off) | On winter days (the day's shade-corrected forecast below the threshold above), self-use stops at this level; at or below it the inverter is in peak shaving, so the house runs on the grid and the battery only covers what is above the import limit. The battery is then part-filled when the car arrives: the car may use it down to the minimum + peak buffer. Nothing charges it back from the grid for this level (solar and the plan's own charging fill it). Self-use comes back only 5 points above the level, and a switch waits at least 15 minutes after the last one, so the inverter does not flip back and forth. Whether a day is a winter day is decided once per day. Needs the inverter's peak-shaving switch; without it the setting is ignored. Only above the minimum + peak buffer. |
 | Night target safety margin | `safety_margin_pct` | 30 % | SOC points added to what the day needs, for `full_day`. Raise it if the battery runs empty before night on cloudy days. |
 
 ### Inverter and alerts
@@ -515,6 +517,10 @@ followed again. Without the peak-shaving switch nothing changes: the car is only
   baseline is the SOC it starts at, so the inverter does not refill from the grid during the
   charge. The battery reserve (`battery_reserve_soc`) only governs export and does not limit
   the car. Without a buffer the car can use the battery down to the minimum.
+- **The winter level is for the car.** With *Winter: keep the battery at*
+  (`winter_hold_soc`), the house stops using the battery at that level on winter days, so
+  the car finds it part-filled; the car may use it down to the minimum + peak buffer. The
+  Plan tab then also says how much of the car the battery covers from the winter level.
 - **What you see.** Two events, "Car charging detected" and "Car charging ended" with the
   kWh. The sensor `sensor.battery_pilot_car_power`, and a line in the plan card.
 
