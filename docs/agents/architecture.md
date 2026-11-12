@@ -205,6 +205,11 @@ bought, with the same efficiencies and wear as the planner. Computed in `App.rep
 The page (`static/index.html`, one file, no build) shows one `[data-tab]` block at a time (`showTab`, tab
 kept in `localStorage`, `#<tab>` in the URL selects one, `#all` shows every card: `tools/screenshots.cjs`
 uses that). Charts take their width from the visible card, so `showTab` renders again.
+The plan chart colours bars by `Step.mode`, not `Step.action`: `controller.expected_modes` runs
+`decide` itself over the plan's steps (readings built from each step, the mode and the time since the
+last change carried along), and `App.label_plan` sets the running step to the live `solis.mode`.
+Keep it calling `decide`, never a copy of its rules: that is what keeps the chart equal to the
+inverter. `history.plan_actions` and `sensor.battery_pilot_plan` use the mode too.
 The *House* tab draws `status.load.peak` (`LoadProfile.peak`, kW per weekday × hour, None = not learned)
 against the import limit, with `status.load.kw` (the average) in the tooltip.
 

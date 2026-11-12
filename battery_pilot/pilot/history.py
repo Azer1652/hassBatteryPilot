@@ -78,10 +78,11 @@ def plan_actions(plan: Plan, t0: datetime, t1: datetime, origin: datetime) -> li
         if b <= a:
             continue
         m0, m1 = minutes(a, origin), minutes(b, origin)
-        if runs and runs[-1][2] == s.action and runs[-1][1] == m0:
+        act = s.mode or s.action             # what the inverter was expected to do (older plans: the action)
+        if runs and runs[-1][2] == act and runs[-1][1] == m0:
             runs[-1][1] = m1
         elif m1 > m0:
-            runs.append([m0, m1, s.action])
+            runs.append([m0, m1, act])
     return runs
 
 

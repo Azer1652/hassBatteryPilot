@@ -16,14 +16,14 @@ from . import prices as P
 from . import trading
 from .compare import KINDS, Comparison, day_records, replay_day
 from .config import ConfigError, Options
-from .controller import ACTIVE, FILL_AGAIN, Decision, Readings, decide
+from .controller import ACTIVE, FILL_AGAIN, MODES, Decision, Readings, decide, expected_modes
 from .discovery import ENTITIES, NEEDED_FOR, SLOT_ONLY, charge_method, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
 from .helpers import CAR_FILL, CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
 from .meter import MAX_GAP, PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
-from .planner import Plan, Step, make_plan, market_at, step_to_follow, sticky_action
+from .planner import Plan, Step, make_plan, market_at, step_to_follow, sticky_action, winter_hold
 from .simulate import Battery
 from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, parse_energy_forecast
 from .solis import NEEDED as SOLIS_NEEDED
@@ -898,6 +898,7 @@ class App:
         today = now.astimezone(self.tz).date()
         for d in [d for d in self.winter_days if d < today - timedelta(days=3)]:
             del self.winter_days[d]
+        self.label_plan(now)
         self._log_plan(now)
         avg = self.market_avg_month(now)
         self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz, avg) for k in KINDS}
@@ -914,6 +915,24 @@ class App:
                    "capacity peak costs" if boost["peak_cost_eur"] > 0 else
                    f"this month already has a peak that high, so it costs nothing extra (earns about €{boost['gain_eur']:.2f})")
             self.event(f"Plan: charging above the import limit, up to {boost['limit_kw']:g} kW, {a:%H:%M}–{z:%H:%M}: {why}.")
+
+    def label_plan(self, now: datetime | None = None):
+        """Put on each plan step the mode the inverter is expected to be in (`controller.expected_modes`:
+        the controller's own rules run over the plan), and on the step running now the mode it is in."""
+        p = self.plan
+        if not p or not p.steps:
+            return
+        now = now or self.clock()
+        live = self.solis.mode if self.solis and self.control_on else None
+        start = live if live in MODES else "self_use"
+        car = self.car_state.power_kw if self.car_state.charging else 0.0
+        modes = expected_modes(p.steps, self.o, self.tz, start, self.can_peak_shave, car, self.fill_on, now,
+                               self.solis.amps if self.solis else 0)
+        for s, (mode, why) in zip(p.steps, modes):
+            s.mode, s.why = mode, why
+        first = p.steps[0]
+        if live and first.start <= now < first.start + timedelta(hours=first.hours) and self.decision:
+            first.mode, first.why = (live if live in MODES else "self_use"), self.decision.reason
 
     def _log_plan(self, now: datetime):
         """Keep what this plan predicts: for the day (the first plan after the nightly learning)
@@ -1112,7 +1131,7 @@ class App:
         p = self.plan
         step = p.step_at(now) if p else None
         target = p.targets[0] if p and p.targets else None
-        sensors.append(("sensor.battery_pilot_plan", step.action if step else "unknown", {
+        sensors.append(("sensor.battery_pilot_plan", (step.mode or step.action) if step else "unknown", {
             "friendly_name": "Battery Pilot plan", "icon": "mdi:battery-sync",
             "mode": "active" if self.control_on else "shadow",
             "soc_target": round(step.soc_end, 1) if step else None,
@@ -1120,6 +1139,7 @@ class App:
             "plan_cost_eur": round(sum(st.cost_c for st in p.steps) / 100, 2) if p else None,
             "boost_kw": p.boost["limit_kw"] if p and p.boost else None,
             "next_hours": [{"start": s.start.astimezone(self.tz).strftime("%H:%M"), "action": s.action,
+                            "mode": s.mode or s.action,
                             "soc": round(s.soc_end)} for s in (p.steps if p else [])
                            if s.start < now + timedelta(hours=24)][:96],
         }))
@@ -1190,7 +1210,7 @@ class App:
             "decision": {"command": self.decision.command, "amps": self.decision.amps, "reason": self.decision.reason},
             "inverter": None if not self.solis else {"mode": self.solis.mode, "amps": self.solis.amps,
                                                       "log": list(reversed(self.solis.log[-20:]))},
-            "plan": self.plan.to_json() if self.plan else None,
+            "plan": self._plan_json(now),
             "prices": self.current_prices(),
             "trading": self.trading,
             "car": self.car_status(now),
@@ -1209,6 +1229,20 @@ class App:
                           "day": None if day_be is None else round(day_be)},
             "events": list(reversed(self.events[-30:])),
         }
+
+    def _plan_json(self, now: datetime) -> dict | None:
+        if not self.plan:
+            return None
+        self.label_plan(now)                     # the inverter's mode now, not up to 5 minutes old
+        d = self.plan.to_json()
+        o = self.o
+        d["buffer_soc"] = o.battery_min_soc + o.peak_buffer_pct if o.peak_buffer_pct > 0 and self.can_peak_shave else None
+        unknown = None
+        if winter_hold(o) and self.can_peak_shave:
+            dates = sorted({st.start.astimezone(self.tz).date() for st in self.plan.steps})
+            unknown = next((dd.isoformat() for dd in dates if dd not in self.winter_days), None)
+        d["winter_unknown_from"] = unknown
+        return d
 
     # ---------------------------------------------------------------- planned vs actual
     def history_day(self, day: date) -> dict | None:

@@ -120,6 +120,8 @@ class Step:
     limit_kw: float | None = None    # import level charging may follow (None: the import limit setting)
     reserve: float | None = None     # export floor (None: the battery reserve setting)
     hold: float = 0.0                # winter level: self-use stops here, below it peak shaving (0: none)
+    mode: str = ""                   # what the inverter is expected to do (controller.expected_modes)
+    why: str = ""                    # and why
 
     def to_json(self) -> dict:
         d = asdict(self)

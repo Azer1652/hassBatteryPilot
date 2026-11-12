@@ -250,3 +250,36 @@ def winter_hold(hold: float, r: Readings, mode: str, mode_age_s: float) -> Decis
     if mode != "self_use":
         return Decision("self_use", reason=f"winter level: self-use down to {hold:.0f} %")
     return Decision("none", reason=f"self-use down to the winter level ({hold:.0f} %)")
+
+
+MODES = ("charge", "discharge", "self_use", "peak_shave", "solar_hold")
+
+
+def expected_modes(steps: list[Step], o: Options, tz, start_mode: str, can_shave: bool, car_kw: float = 0.0,
+                   fill: bool = False, now: datetime | None = None, amps: int = 0) -> list[tuple[str, str]]:
+    """The inverter mode, and why, in each plan step: `decide` run over the plan, step by step, with the
+    step's own house load, solar and SOC, the mode carried from one step to the next. The page shows
+    this, so the chart follows the inverter's logic (bands, waits, the car, the fill switch) and not
+    only the planner's choice. `car_kw`: the car charging now (its future is unknown: first step only)."""
+    mode = start_mode if start_mode in MODES else "self_use"
+    changed: datetime | None = None
+    out: list[tuple[str, str]] = []
+    v = o.battery_voltage
+    for i, s in enumerate(steps):
+        t = now if (i == 0 and now is not None) else s.start
+        load, pv = s.load_kwh / s.hours, s.pv_kwh / s.hours
+        net = max(load - pv, 0.0)
+        r = Readings(t, t.astimezone(tz), s.soc_start, load, pv, net, net, v)
+        d = decide(s, r, o, mode, t.astimezone(tz).strftime("%H:00:00"), amps, True,
+                   (t - changed).total_seconds() if changed else 1e9,
+                   car_kw=car_kw if i == 0 else 0.0, can_shave=can_shave, fill=fill)
+        if d.command in MODES:
+            if d.command != mode:
+                changed = t
+            mode = d.command
+            if d.command in ("charge", "discharge"):
+                amps = d.amps
+        elif d.command == "current":
+            amps = d.amps
+        out.append((mode, d.reason))
+    return out

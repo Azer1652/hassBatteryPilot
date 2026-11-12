@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.16.0
+
+**The plan chart shows what the inverter does.**
+
+- The bar colours are now worked out with the live control's own rules, run over the plan. Hours
+  below the winter level or the peak buffer where the sun charges the battery now show peak
+  shaving (as the inverter does) instead of self-use. The bands and waits, the car charging now,
+  the fill switch, a charge paused for room under the limit, and solar hold's 0.3 kW threshold
+  show up as well.
+- A "now" line marks the inverter's real mode. The *now* figure at the top shows the inverter's
+  mode, not the plan's; in shadow mode it says what it would do.
+- Dashed lines mark the winter level and minimum + peak buffer.
+- The tooltip gives the inverter mode and why, and the plan's energy count when it differs.
+- The plan says when a later day is not yet known to be a winter day (the forecast does not reach
+  it).
+- `sensor.battery_pilot_plan` reports the inverter's mode; `next_hours` gives each hour's `mode`
+  next to its `action`. *Planned vs actual* compares the expected inverter mode with what it did
+  (days stored before keep the plan's action).
+
 ## 2.15.0
 
 **Winter: keep the battery for the car.**

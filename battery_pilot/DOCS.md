@@ -19,8 +19,21 @@ above the import limit are red: the plan keeps enough battery to cover them. Tap
 over a cell (or focus the chart and use the arrow keys) for the peak and the average load.
 
 *Demo data. Each bar is one hour or quarter-hour: its height is the price you pay per kWh
-(left axis), its colour what the battery does (blue: grid charge). Green: the battery level
+(left axis), its colour what the inverter does then (blue: grid charge). Green: the battery level
 (right axis); the circle is the night target. Tap or hover over the chart for the details.*
+
+The bar colours follow the inverter, not only the plan. Each hour's mode is worked out with the
+same rules as the live control (see *Modes of operation*), so the chart includes the winter level
+and peak buffer with their bands and waits, the car charging now, the fill switch, a charge
+paused for room under the limit, and solar hold's 0.3 kW threshold.
+
+- **Now:** the bar under the "now" line is the inverter's real mode. The figure at the top shows
+  it too; in shadow mode it says what the inverter would do.
+- **Dashed lines** mark the winter level (on winter days) and minimum + peak buffer: the levels
+  where peak shaving starts.
+- **The tooltip** gives the inverter mode and why. When the plan's own energy count differs, it
+  says so too. For example, in a sunny hour below the winter level the plan counts self-use
+  (the sun charges the battery), while the inverter stays in peak shaving; the energy is the same.
 
 What it does:
 
@@ -162,7 +175,8 @@ the sell price is negative. It puts it back when the price is positive again.
 
 ### Decision order
 
-Each loop takes the first rule that applies, from top to bottom. Higher rules win.
+Each loop takes the first rule that applies, from top to bottom. Higher rules win. The plan chart
+runs the same rules over the coming hours to colour its bars.
 
 ```mermaid
 flowchart TD
@@ -764,7 +778,7 @@ the measured value stays 3 points or more from the setting, change the setting y
 
 | Entity | State | Main attributes |
 | --- | --- | --- |
-| `sensor.battery_pilot_plan` | What the battery does now: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours) |
+| `sensor.battery_pilot_plan` | The inverter's mode now, as on the plan chart: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours, each with the inverter's `mode` and the plan's `action`) |
 | `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), or unknown until there is enough data | `round_trip_pct`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_round_trip_pct`, `solar_round_trip_pct` |
 | `sensor.battery_pilot_car_power` | What the car takes now (kW, 0 when not charging). Only published when car detection is on | `charging`, `source` (`house consumption` or `charger sensor`), `month_kwh`, `peak_shaving` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
