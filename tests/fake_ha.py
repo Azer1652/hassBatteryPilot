@@ -33,8 +33,10 @@ def st(state, unit=None, **attrs):
 
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
-                 prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False):
+                 prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False):
         self.now = now
+        self.force_action = force_action        # the Solis Modbus force charge/discharge actions exist
+        self.forced: tuple[str, float, datetime] | None = None   # (charge|discharge, W, until) while one runs
         self.soc = soc
         self.load_fn = load
         self.pv_fn = pv
@@ -109,7 +111,12 @@ class FakeHA:
         return {"result": "ok"}
 
     async def services(self):
-        return [{"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}}]
+        out = [{"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}}]
+        if self.force_action:
+            out.append({"domain": "solis_modbus", "services": {
+                "solis_force_battery_charge": {}, "solis_force_battery_discharge": {},
+                "solis_stop_force_charge_discharge": {}, "solis_write_holding_register": {}}})
+        return out
 
     async def call(self, domain, service, data=None):
         data = data or {}
@@ -123,6 +130,16 @@ class FakeHA:
             self.s[eid]["state"] = str(data["value"])
         elif domain == "time" and service == "set_value":
             self.s[eid]["state"] = data["time"]
+        elif domain == "solis_modbus":
+            if not self.force_action:
+                raise RuntimeError(f"Action solis_modbus.{service} not found")
+            if service == "solis_stop_force_charge_discharge":
+                self.forced = None
+            else:
+                minutes = int(data["duration_minutes"])
+                assert 1 <= minutes <= 30, minutes          # the integration's schema
+                kind = "charge" if service == "solis_force_battery_charge" else "discharge"
+                self.forced = (kind, float(data["power_watts"]), self.now + timedelta(minutes=minutes))
         elif domain == "automation" and service == "turn_off":
             for e in eid if isinstance(eid, list) else [eid]:
                 self.s[e]["state"] = "off"
@@ -161,6 +178,10 @@ class FakeHA:
 
     def mode(self):
         local = self.now.astimezone(TZ)
+        if self.forced and self.now >= self.forced[2]:      # the timeout: back to the inverter's own mode
+            self.forced = None
+        if self.forced:
+            return "force_" + self.forced[0]
         if self.s["switch.solis_time_of_use"]["state"] != "on":
             if self.s.get("switch.solis_feed_in_priority", {}).get("state") == "on":
                 return "solar_hold"
@@ -178,13 +199,16 @@ class FakeHA:
         mode = self.mode()
         net = load - pv
         room, avail = (100 - self.soc) / 100 * CAP, max(self.soc - 10, 0) / 100 * CAP
-        if mode == "charge":
-            ch = min(float(self.s["number.solis_time_charging_charge_current"]["state"]) * V / 1000, room / h if h else 9e9)
+        if mode in ("charge", "force_charge"):
+            amps_kw = (self.forced[1] / 1000 if mode == "force_charge"
+                       else float(self.s["number.solis_time_charging_charge_current"]["state"]) * V / 1000)
+            ch = min(amps_kw, room / h if h else 9e9)
             ch = max(ch, min(-net, 2.56)) if net < 0 else ch
             batt = ch
             grid = net + ch / 0.97
-        elif mode == "discharge":
-            dis = min(float(self.s["number.solis_time_charging_discharge_current"]["state"]) * V / 1000,
+        elif mode in ("discharge", "force_discharge"):
+            dis = min(self.forced[1] / 1000 if mode == "force_discharge"
+                      else float(self.s["number.solis_time_charging_discharge_current"]["state"]) * V / 1000,
                       avail / h if h else 9e9)
             batt = -dis
             grid = net - dis * 0.97
@@ -214,7 +238,7 @@ class FakeHA:
         self.s["sensor.solis_battery_soc"]["state"] = str(round(self.soc, 1))
 
     def solis_calls(self):
-        return [c for c in self.calls if c[0] in ("switch", "number", "time")]
+        return [c for c in self.calls if c[0] in ("switch", "number", "time", "solis_modbus")]
 
 
 def utc(*a):

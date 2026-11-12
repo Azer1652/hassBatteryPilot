@@ -27,7 +27,8 @@ Pure function, so every rule can be tested without Home Assistant:
 * self_use  - also when a charge target is passed: never charge on above it
               (the old playbook's overcharge bug).
 
-Charge and discharge slots are renewed at each new clock hour.
+Charge and discharge slots are renewed at each new clock hour, and a force command (the Solis
+Modbus action) also every FORCE_RENEW_S, before its timeout ends it.
 """
 from __future__ import annotations
 
@@ -105,10 +106,13 @@ def fill_step(r: Readings, mode: str, can_shave: bool) -> Step:
 
 def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str, amps_now: int,
            control_on: bool, mode_age_s: float = 1e9, car_kw: float = 0.0, can_shave: bool = False,
-           fill: bool = False) -> Decision:
+           fill: bool = False, renew: bool = False) -> Decision:
     """`car_kw`: what the electric car takes now (0: not charging). `can_shave`: the inverter has
-    the peak-shaving switch. `fill`: the "fill the battery for the car" switch is on."""
+    the peak-shaving switch. `fill`: the "fill the battery for the car" switch is on. `renew`: the
+    running force charge or discharge must be sent again before it lapses (`Solis.renew_due`)."""
     hour = r.t_local.strftime("%H:00:00")
+    renewal = ("renew the hourly charge slot" if slot_hour != hour
+               else "renew the force command" if renew else "")
     if not control_on:
         if mode in ACTIVE:
             return Decision("self_use", reason="Battery Pilot control is off")
@@ -148,8 +152,8 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
                 if want < amps_now:       # a lower current keeps the quarter-hour under the limit
                     return Decision("current", want, "house load up: lower the charge current")
                 return Decision("self_use", reason="house load too high: battery helps instead")
-            if slot_hour != hour:
-                return Decision("charge", want, "renew the hourly charge slot")
+            if renewal:
+                return Decision("charge", want, renewal)
             if abs(want - amps_now) >= 10:
                 return Decision("current", want, "follow house load")
             return Decision("none", reason="charging")
@@ -162,7 +166,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
     floor = max(step.soc_end, step.reserve if step.reserve is not None else o.battery_reserve_soc)
     if step.action == "discharge" and r.soc > floor:
         want = paced_amps(step, r, o, up=False)
-        if mode != "discharge" or slot_hour != hour:
+        if mode != "discharge" or renewal:
             return Decision("discharge", want, f"plan: export down to {floor:.0f} %")
         if abs(want - amps_now) >= 10:
             return Decision("current", want, "pace the export")
@@ -180,8 +184,8 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
             if mode == "charge":
                 if follow < MIN_A or r.projection_kw > o.import_limit_kw + 0.1:
                     return Decision("peak_shave", reason="peak buffer: the house needs the room under the limit")
-                if slot_hour != hour:
-                    return Decision("charge", want, "renew the hourly charge slot")
+                if renewal:
+                    return Decision("charge", want, renewal)
                 if abs(want - amps_now) >= 10:
                     return Decision("current", want, "follow house load")
                 return Decision("none", reason="charging the peak buffer")

@@ -220,12 +220,12 @@ Power sensors can be in W or kW: the unit is read from the entity.
 
 | Setting | Found automatically | Needed |
 | --- | --- | --- |
-| `tou_switch` | switch `time_of_use` | required |
-| `grid_charge_switch` | switch `allow_grid…charge` / `grid_charg…` | required |
-| `charge_current` | number `…charge_current` (not discharge) | required |
-| `discharge_current` | number `…discharge_current` | required |
-| `charge_start`, `charge_end` | time `…charge_start…slot_1`, `…charge_end…slot_1` | required |
-| `discharge_start`, `discharge_end` | time `…discharge_start…slot_1`, `…discharge_end…slot_1` | required |
+| `tou_switch` | switch `time_of_use` | required for the time-of-use slots (with the force action: switched off when found) |
+| `grid_charge_switch` | switch `allow_grid…charge` / `grid_charg…` | required for the time-of-use slots (with the force action: switched on when found) |
+| `charge_current` | number `…charge_current` (not discharge) | required for the time-of-use slots |
+| `discharge_current` | number `…discharge_current` | required for the time-of-use slots |
+| `charge_start`, `charge_end` | time `…charge_start…slot_1`, `…charge_end…slot_1` | required for the time-of-use slots |
+| `discharge_start`, `discharge_end` | time `…discharge_start…slot_1`, `…discharge_end…slot_1` | required for the time-of-use slots |
 | `export_limit` | number `export_power_limit` / `export…limit` | optional: only for blocking export at negative prices |
 | `peak_shaving_switch` | switch `…peak_shaving_mode` / `…peak_shaving…` | optional: without it the plan never uses peak shaving |
 | `peak_shaving_limit` | number `…peak_max_usable_grid_power` | optional: the grid power the inverter shaves to; without it the inverter's own value is used |
@@ -235,6 +235,22 @@ Power sensors can be in W or kW: the unit is read from the entity.
 Slot entities come in two sets on Solis Modbus (`time_charging` and
 `grid_time_of_use`); the *Solis slot entities* setting picks which one. When several
 entities match, the one with `solis` in its name wins.
+
+**Two ways to charge and export.** *Solis charge command* (`charge_command`) picks one:
+
+- **The force action** (`auto` uses it when Home Assistant has it): the Solis Modbus actions
+  *Force battery charge* / *Force battery discharge* (`solis_modbus.solis_force_battery_charge`,
+  `…_discharge`, `…_stop_force_charge_discharge`), the inverter's remote control. They come with
+  recent versions of the Solis Modbus integration. Each command runs for 30 minutes and Battery
+  Pilot sends it again every 10 minutes while it should go on, so when Battery Pilot or Home
+  Assistant stops, the inverter returns to its own mode within half an hour. The time-of-use
+  entities are not needed then. With several inverters on the integration, set *Solis Modbus
+  slave ID* (`solis_slave`).
+- **The time-of-use slots** (`time_slot`, or `auto` without the action): slot 1 of the entities
+  above, set to the current clock hour.
+
+If the page says the battery is charging but it does not, switch to the other one. The log says
+at the start which one is used.
 
 ### Electric car (read every 10 seconds, only when set)
 
@@ -262,13 +278,13 @@ entities match, the one with `solis` in its name wins.
 
 | Command | When | What it sets |
 | --- | --- | --- |
-| Charge | The plan says grid-charge in this slot and there is room under the import limit (or the higher limit the plan pays for at a price spike). | Charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–23:59 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
-| Discharge (export) | The plan says export in this slot. | Discharge slot 1 = the current clock hour, charge slot 1 = 00:00–00:00, discharge current, *time of use* on. |
-| Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only. |
-| Renew | At every new clock hour while still charging or exporting. | The same as Charge / Discharge for the new hour. |
+| Charge | The plan says grid-charge in this slot and there is room under the import limit (or the higher limit the plan pays for at a price spike). | With the force action: *Force battery charge* with the power (charge current × battery voltage) for 30 minutes; *time of use* off and *allow grid charging* on when those entities exist. With the time-of-use slots: charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–23:59 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
+| Discharge (export) | The plan says export in this slot. | With the force action: *Force battery discharge* with the power for 30 minutes. With the time-of-use slots: discharge slot 1 = the current clock hour, charge slot 1 = 00:00–00:00, discharge current, *time of use* on. |
+| Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only (with the force action: the force command again with the new power). |
+| Renew | At every new clock hour while still charging or exporting, and every 10 minutes with the force action. | The same as Charge / Discharge. |
 | Peak shaving | The plan says peak shaving in this slot (only when the peak-shaving switch was found). | *Time of use* off, peak-shaving grid power = *Grid import limit*, peak-shaving baseline SOC = *Battery minimum SOC* (so the inverter does not refill the battery from the grid by itself; or the lowest value the entity accepts), *peak-shaving mode* on. The two numbers are written only when they change. |
 | Solar hold | The plan says solar hold in this slot, the *feed-in priority* switch was found and the solar surplus is at least 0.3 kW. | *Time of use* off, *feed-in priority* on. Back to self-use when the surplus is gone (not within 120 s of the last command). |
-| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Time of use* off, and *peak-shaving mode* and *feed-in priority* off when Battery Pilot switched them on. Everything else is left as it is. |
+| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Stop force charge/discharge* (with the force action), *time of use* off, and *peak-shaving mode* and *feed-in priority* off when Battery Pilot switched them on. Everything else is left as it is. |
 | Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to the value it had before (at most *Normal export limit*) when the price is positive again. An installation already at 0 W (zero export) is left alone. |
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
@@ -290,8 +306,8 @@ at an extreme price.
 - **A command fails:** it is sent again on the next tick; after three failures in a row
   the page shows the problem. With *Battery Pilot control* off, the inverter is put back
   in self-use.
-- **Battery Pilot stops:** on a normal stop it puts the inverter in self-use. A command
-  covers the current clock hour, but the Solis repeats its time-of-use slot **every
+- **Battery Pilot stops:** on a normal stop it puts the inverter in self-use. A force
+  command ends by itself within 30 minutes. A time-of-use command covers the current clock hour, but the Solis repeats its time-of-use slot **every
   day**. After a power cut, or when Home Assistant restarts the app because it crashed or
   stopped responding, it puts the inverter back in self-use when it starts (it records
   what it left on the inverter in `/data/inverter.json`). Keep **Watchdog** switched on
@@ -406,6 +422,8 @@ The contract formulas in full (market prices in EUR/MWh):
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
 | Solis slot entities | `slot_entities` | time_charging | Which set of time-of-use entities to drive; switch to `grid_time_of_use` if charging does nothing. |
+| Solis charge command | `charge_command` | auto | `auto`: the Solis Modbus force action when Home Assistant has it, else the time-of-use slots. `force` or `time_slot` to choose. |
+| Solis Modbus slave ID | `solis_slave` | (empty) | Only with several inverters on the integration: where the force action goes. |
 | Phone notification action | `notify_service` | (empty) | For example `notify.mobile_app_pixel_8`. Empty: the only Companion app phone found. |
 
 The entity settings (`grid_import_power`, `battery_soc`, …) are in *What Battery Pilot

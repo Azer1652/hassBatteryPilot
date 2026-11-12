@@ -86,6 +86,12 @@ in 5 A steps, pauses when the quarter-hour projection exceeds the limit.
 
 ## The Solis and the safety net (`solis.py`, `App.tick`)
 
+`Solis.method` (from `discovery.charge_method`: option `charge_command`, and whether HA lists the
+three `solis_modbus` force actions) is `force` or `time_slot`. `force`: charge/discharge/set_current
+call `solis_modbus.solis_force_battery_charge|discharge` (power = amps × `Solis.volts`, 30 min), time of
+use off; `_force_off` sends the stop action; `Solis.renew_due` makes `decide(renew=True)` resend every
+`FORCE_RENEW_S`; `discovery.SLOT_ONLY` entities are not required. Amps stay the controller's unit, so
+planner/simulator/controller are unchanged. `time_slot`:
 `solis.py` sets slot 1 to the current clock hour only (charge or discharge); `controller` renews
 them each hour. The Solis repeats slots daily, so `App` records what it left on the inverter
 (`/data/inverter.json`) and returns it to self-use at the next start; `Solis.mode` is `failed`

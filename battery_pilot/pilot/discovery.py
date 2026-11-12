@@ -40,6 +40,10 @@ ENTITIES = {
     "car_charger_power": ("sensor", [], False, True),
 }
 TIME_SLOT_KEYS = ("charge_start", "charge_end", "discharge_start", "discharge_end")
+# Only needed when charging goes through the time-of-use slots (not with the force action).
+SLOT_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current") + TIME_SLOT_KEYS
+FORCE_DOMAIN = "solis_modbus"
+FORCE_SERVICES = ("solis_force_battery_charge", "solis_force_battery_discharge", "solis_stop_force_charge_discharge")
 
 # What each optional entity is needed for (shown in the log when it is missing).
 NEEDED_FOR = {
@@ -112,11 +116,34 @@ def resolve(key: str, opts: Options, states: dict) -> Found:
     return found
 
 
-def resolve_all(opts: Options, states: dict) -> tuple[dict[str, Found], list[str]]:
-    """All entities, plus the keys of required ones that are missing."""
+def resolve_all(opts: Options, states: dict, force: bool = False) -> tuple[dict[str, Found], list[str]]:
+    """All entities, plus the keys of required ones that are missing (`force`: charging goes through
+    the force action, so the time-of-use entities are optional)."""
     out = {k: resolve(k, opts, states) for k in ENTITIES}
-    missing = [k for k, f in out.items() if f.entity_id is None and ENTITIES[k][2]]
+    missing = [k for k, f in out.items() if f.entity_id is None and ENTITIES[k][2]
+               and not (force and k in SLOT_ONLY)]
     return out, missing
+
+
+def has_force(services: list) -> bool:
+    """Home Assistant has the Solis Modbus force charge, force discharge and stop actions."""
+    for dom in services or []:
+        if dom.get("domain") == FORCE_DOMAIN:
+            return all(s in (dom.get("services") or {}) for s in FORCE_SERVICES)
+    return False
+
+
+def charge_method(opts: Options, services: list) -> tuple[str, str]:
+    """`force` or `time_slot` for these settings and actions, and why."""
+    found = has_force(services)
+    if opts.charge_command == "time_slot":
+        return "time_slot", "set in the app settings"
+    if opts.charge_command == "force":
+        return ("force", "set in the app settings") if found else \
+            ("time_slot", "set to force, but Home Assistant has no solis_modbus.solis_force_battery_charge action "
+                          "(update the Solis Modbus integration); the time-of-use slots are used")
+    return ("force", "found the Solis Modbus force action") if found else \
+        ("time_slot", "no Solis Modbus force action found")
 
 
 def find_notify(opts: Options, services: list) -> tuple[str | None, str]:

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.12.0
+
+**Charging and export through the Solis Modbus *Force battery* action.**
+
+- **Why:** on some Solis inverters the time-of-use slots Battery Pilot set did nothing. The page
+  said "charging" (also for *Fill the battery for the car*) while the battery stayed where it was.
+- **Now**, when Home Assistant has the Solis Modbus actions *Force battery charge*, *Force battery
+  discharge* and *Stop force charge/discharge* (recent versions of the integration), every grid
+  charge and export goes through them: the plan's charges, the fill switch, the peak-buffer
+  refill and exports. The power follows the house so that grid import stays under the import
+  limit, as before.
+- **Safer when something stops:** each command runs for 30 minutes and is sent again every 10
+  minutes while it should go on. If Battery Pilot or Home Assistant stops, the inverter returns
+  to its own mode within half an hour. Time of use stays off.
+- **New setting *Solis charge command*** (`charge_command`): `auto` (the default) uses the force
+  action when it is there and the time-of-use slots otherwise; `force` or `time_slot` to choose.
+  With several inverters, set *Solis Modbus slave ID* (`solis_slave`).
+- Without the force action nothing changes. The log says at the start which way is used.
+
+- 
+
 ## 2.11.3
 
 - **Best battery use no longer charges a day for energy the next day uses.** The replay paid for

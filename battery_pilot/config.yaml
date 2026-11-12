@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.11.3"
+version: "2.12.0"
 slug: battery_pilot
 description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -53,6 +53,7 @@ options:
   winter_solar_threshold_kwh: 12
   winter_mode: full_day
   slot_entities: time_charging
+  charge_command: auto
 schema:
   contract: list(fixed|dynamic)
   fixed_contract_end: match(^(\d{4}-\d{2}-\d{2})?$)
@@ -90,6 +91,8 @@ schema:
   winter_solar_threshold_kwh: float(0,200)
   winter_mode: list(full_day|peaks_only)
   slot_entities: list(time_charging|grid_time_of_use)
+  charge_command: list(auto|force|time_slot)
+  solis_slave: int(1,247)?
   notify_service: str?
   grid_import_power: str?
   grid_export_power: str?

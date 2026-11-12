@@ -107,6 +107,12 @@ configuration:
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
+  charge_command:
+    name: "Solis charge command"
+    description: "How grid charging and export are sent. auto: the Solis Modbus action Force battery charge/discharge when Home Assistant has it, else the time-of-use slots. force: always that action. time_slot: always the time-of-use slots."
+  solis_slave:
+    name: "Solis Modbus slave ID"
+    description: "Only with several inverters on the Solis Modbus integration: the slave ID the force action is sent to. Leave empty for one inverter."
   notify_service:
     name: "Phone notification action"
     description: "For example notify.mobile_app_pixel_8. Leave empty to use the only Companion app phone found."

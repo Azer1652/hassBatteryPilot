@@ -75,6 +75,8 @@ class Options:
     car_min_kw: float = 0.0                  # a jump in house load of at least this much, that stays, is the car
     # inverter
     slot_entities: str = "time_charging"
+    charge_command: str = "auto"             # auto: the force action when HA has it | force | time_slot
+    solis_slave: int = 0                     # Modbus slave ID for the force action (0: the integration's default)
     notify_service: str = ""
     entities: dict = field(default_factory=dict)
 
@@ -124,6 +126,8 @@ class Options:
             raise ConfigError("winter_mode must be full_day or peaks_only.")
         if self.slot_entities not in ("time_charging", "grid_time_of_use"):
             raise ConfigError("slot_entities must be time_charging or grid_time_of_use.")
+        if self.charge_command not in ("auto", "force", "time_slot"):
+            raise ConfigError("charge_command must be auto, force or time_slot.")
         if self.fixed_contract_end.strip():
             try:
                 _ = self.fixed_end_date

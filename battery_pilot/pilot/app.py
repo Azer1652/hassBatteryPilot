@@ -17,7 +17,7 @@ from . import trading
 from .compare import KINDS, Comparison, day_records, replay_day
 from .config import ConfigError, Options
 from .controller import ACTIVE, FILL_AGAIN, Decision, Readings, decide
-from .discovery import ENTITIES, NEEDED_FOR, find_notify, resolve_all
+from .discovery import ENTITIES, NEEDED_FOR, SLOT_ONLY, charge_method, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
 from .helpers import CAR_FILL, CONTROL, CURTAIL, ensure_helpers
 from .load import LoadProfile
@@ -268,13 +268,19 @@ class App:
 
         self.event(f"Battery Pilot {self.version}: contract {self.o.contract}, battery "
                    f"{self.o.battery_capacity_kwh:g} kWh, import limit {self.o.import_limit_kw:g} kW")
-        self.ents, missing = resolve_all(self.o, states)
+        services = await self.ha.services()
+        method, why = charge_method(self.o, services)
+        force = method == "force"
+        self.event(("Charging and export through the Solis Modbus force action" if force
+                    else "Charging and export through the Solis time-of-use slots") + f" ({why}).",
+                   logging.WARNING if self.o.charge_command == "force" and not force else logging.INFO)
+        self.ents, missing = resolve_all(self.o, states, force)
         for key, f in self.ents.items():
             if f.entity_id:
                 unit = f" [{f.unit}]" if ENTITIES[key][3] else ""
                 log.info("  ok       %s: %s%s (%s)", key, f.entity_id, unit, f.how)
             elif ENTITIES[key][1] or key in self.o.entities:     # (never guessed and not set: nothing to report)
-                tag = "MISSING" if ENTITIES[key][2] else "missing"
+                tag = "MISSING" if ENTITIES[key][2] and not (force and key in SLOT_ONLY) else "missing"
                 extra = f" (needed for {NEEDED_FOR[key]})" if key in NEEDED_FOR else ""
                 log.warning("  %-8s %s: %s%s", tag, key, f.how, extra)
         if missing:
@@ -285,7 +291,7 @@ class App:
             return False
         self.ent_ids = {k: f.entity_id for k, f in self.ents.items() if f.entity_id}
         self.car = C.make_source(self.o, self.ent_ids)
-        self.notify, how = find_notify(self.o, await self.ha.services())
+        self.notify, how = find_notify(self.o, services)
         log.info("  %-8s notify: %s (%s)", "ok" if self.notify else "check", self.notify or "-", how)
         if not self.ent_ids.get("price_sensor") and self.o.fixed_sell_mult != 0:
             self.event("No price sensor: dynamic prices, the contract comparison and the fixed injection "
@@ -297,7 +303,8 @@ class App:
         except Exception as e:  # noqa: BLE001
             self.event(f"Could not create the Battery Pilot helpers ({e}); control stays off.", logging.ERROR)
         self.problem = None
-        self.solis = Solis(self.ha, {k: v for k, v in self.ent_ids.items() if k in SOLIS_NEEDED + SOLIS_OPTIONAL})
+        self.solis = Solis(self.ha, {k: v for k, v in self.ent_ids.items() if k in SOLIS_NEEDED + SOLIS_OPTIONAL},
+                           method=method, volts=self.o.battery_voltage, slave=self.o.solis_slave)
         if "peak_shaving_limit" in self.ent_ids:
             unit = ((states.get(self.ent_ids["peak_shaving_limit"]) or {}).get("attributes") or {}) \
                 .get("unit_of_measurement")
@@ -420,11 +427,13 @@ class App:
                             (sts.get("feed_in_priority_switch") or {}).get("state"))
             # (a charge or discharge is not stopped for the last minutes before a slot boundary)
             step = step_to_follow(self.plan, now, Battery.from_options(self.o), self.solis.mode)
+            self.solis.volts = voltage
             self.decision = decide(step, self.readings, self.o, self.solis.mode, self.solis.slot_hour,
                                    self.solis.amps, self.control_on,
                                    (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9,
                                    car_kw=self.car_state.power_kw if self.car_state.charging else 0.0,
-                                   can_shave=self.can_peak_shave, fill=self.fill_on)
+                                   can_shave=self.can_peak_shave, fill=self.fill_on,
+                                   renew=self.solis.renew_due(now))
             await self._apply(self.decision, local)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
@@ -539,8 +548,11 @@ class App:
         if not self.control_on or tou not in ("on", "off") or settling:
             self._tou_mismatch = self._shave_mismatch = self._hold_mismatch = 0
             return
-        wrong = (tou == "on" and s.mode in ("self_use", "peak_shave", "solar_hold")) \
-            or (tou == "off" and s.mode in ("charge", "discharge"))
+        if s.force:                       # time of use stays off: the force action does the work
+            wrong = tou == "on" and s.mode != "failed"
+        else:
+            wrong = (tou == "on" and s.mode in ("self_use", "peak_shave", "solar_hold")) \
+                or (tou == "off" and s.mode in ("charge", "discharge"))
         self._tou_mismatch = self._tou_mismatch + 1 if wrong else 0
         if self._tou_mismatch >= 2:
             self._tou_mismatch = 0
@@ -584,7 +596,7 @@ class App:
                 self.problem = None
         except Exception as e:  # noqa: BLE001
             self.solis.mode = "failed"        # its state is not known: the next tick sends the command again
-            self.solis.shave = self.solis.shave_set = self.solis.hold = None
+            self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
             self._cmd_failures += 1
             now, key = self.clock(), "cmdfail:" + d.command
             last = self._last.get(key)
