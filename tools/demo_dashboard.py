@@ -69,7 +69,7 @@ def fill(app: App, res: dict) -> None:
 
 
 async def main(days: int, port: int, seconds: float | None):
-    o = Options(car_min_kw=3.5, car_battery_kwh=60, car_charge_kw=5.0)      # (shows the car estimate)
+    o = Options(car_min_kw=3.5)      # (shows the car estimate)
     res = history(days, o)
     w = yearsim.World(seed=1)
     live = [TODAY + timedelta(days=i) for i in range(-LIVE_DAYS, 2)]

@@ -119,6 +119,10 @@ async def test_without_a_buffer_the_car_uses_the_battery_to_the_minimum(tmp_path
     assert float(fake.s[SHAVE_SOC]["state"]) == Options().battery_min_soc
 
 
+def test_the_defaults_are_an_eqb_250_plus_on_a_5_kw_charger():
+    assert (Options().car_battery_kwh, Options().car_charge_kw) == (70.5, 5.0)
+
+
 async def test_the_page_gets_the_estimate(tmp_path):
     app, _ = await evening(tmp_path, 60, utc(2026, 1, 14, 19, 5), car_battery_kwh=60, car_charge_kw=5.0,
                            peak_buffer_pct=15)
@@ -135,9 +139,9 @@ async def test_the_page_gets_the_estimate(tmp_path):
 
 
 async def test_no_estimate_without_the_size_and_a_reason_without_the_power(tmp_path):
-    app, _ = await evening(tmp_path, 60, utc(2026, 1, 14, 19, 2))
+    app, _ = await evening(tmp_path, 60, utc(2026, 1, 14, 19, 2), car_battery_kwh=0)
     assert "coverage" not in app.status()["car"]
-    app.o.car_battery_kwh = 60
+    app.o.car_battery_kwh, app.o.car_charge_kw = 60, 0
     car = app.status()["car"]
     assert car["coverage"] is None and "charging power" in car["coverage_why"]
 

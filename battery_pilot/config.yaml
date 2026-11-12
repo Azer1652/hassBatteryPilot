@@ -40,8 +40,8 @@ options:
   capacity_tariff_eur_kw_year: 52.37
   capacity_min_kw: 2.5
   car_min_kw: 0
-  car_battery_kwh: 0
-  car_charge_kw: 0
+  car_battery_kwh: 70.5
+  car_charge_kw: 5
   battery_capacity_kwh: 16
   battery_min_soc: 10
   battery_reserve_soc: 35

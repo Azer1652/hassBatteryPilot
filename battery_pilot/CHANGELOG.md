@@ -5,7 +5,7 @@
 **How much of the car charges under the import limit.**
 
 - **New on the Plan tab:** with *Car: battery size* (`car_battery_kwh`) and *Car: charging power*
-  (`car_charge_kw`) set, a line says how much of the car charges before grid import goes over
+  (`car_charge_kw`, by default a Mercedes EQB 250+ with 70.5 kWh on a 5 kW charger), a line says how much of the car charges before grid import goes over
   the import limit, with the battery as it is now and with a full battery (*Fill the battery for
   the car*). It also gives the charging power at which the car never needs the battery. While
   the car charges, its measured power is used.

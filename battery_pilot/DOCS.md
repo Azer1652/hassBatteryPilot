@@ -394,8 +394,8 @@ The contract formulas in full (market prices in EUR/MWh):
 | Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
 | Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
 | Car: smallest charging power | `car_min_kw` | 0 kW (off) | Switches car detection on. A jump in house consumption of at least this many kW above the level of the last 10 minutes, lasting 3 minutes, is taken as the car charging. The session ends when consumption is below that level plus half this value for 2 minutes. For a charger limited to 5 kW, about 3.5 is a good value. Not needed with the `car_charger_power` entity. See *Electric car*. |
-| Car: battery size | `car_battery_kwh` | 0 kWh (no estimate) | The usable capacity of the car's battery. With it, the Plan tab shows how much of the car charges before the import limit is crossed (see *How much of the car fits under the limit*). |
-| Car: charging power | `car_charge_kw` | 0 kW | What the charger gives the car, for that estimate. While the car charges, the measured power is used instead. 0: the estimate only appears while the car charges. |
+| Car: battery size | `car_battery_kwh` | 70.5 kWh (a Mercedes EQB 250+) | The usable capacity of the car's battery; 0: no estimate. With it, the Plan tab shows how much of the car charges before the import limit is crossed (see *How much of the car fits under the limit*). |
+| Car: charging power | `car_charge_kw` | 5 kW | What the charger gives the car, for that estimate. While the car charges, the measured power is used instead. 0: the estimate only appears while the car charges. |
 
 ### Battery
 
@@ -526,13 +526,14 @@ Limits:
 
 A car charger usually takes more than the import limit, so the car only charges without a
 capacity peak while the battery covers the difference. Set *Car: battery size*
-(`car_battery_kwh`) and *Car: charging power* (`car_charge_kw`) and the Plan tab says, for
-example:
+(`car_battery_kwh`) and *Car: charging power* (`car_charge_kw`) to your car and charger (the
+defaults are a Mercedes EQB 250+, 70.5 kWh, on a 5 kW charger). With car detection on, the
+Plan tab then says, for example (16 kWh battery, 15 % peak buffer, house at 0.5 kW):
 
-> Car at 7.4 kW: with the battery at 62 %, about **34 %** of the car (19 kWh, 2 h 35) charges
+> Car at 5.0 kW: with the battery at 62 %, about **11 %** of the car (7.9 kWh, 1 h 46) charges
 > under the import limit. Then the battery is at 25 % (minimum + peak buffer) and the rest
-> comes from the grid above the limit. With a full battery: about **58 %**.
-> At 1.9 kW or less the car charges under the limit without the battery.
+> comes from the grid above the limit. With a full battery: about **23 %**.
+> At 1.8 kW or less the car charges under the limit without the battery.
 
 How it is worked out: quarter-hour by quarter-hour from now, the car's power is added to the
 house's usual consumption for that hour and the solar forecast is taken off; the grid gives up

@@ -70,7 +70,7 @@ configuration:
     description: "Set it to switch car detection on. A jump in house consumption of at least this many kW that lasts 3 minutes is taken as the car charging, and the peak is then shaved with the inverter's peak shaving. For a charger limited to 5 kW, about 3.5 is a good value. Not needed when you set the charger power entity."
   car_battery_kwh:
     name: "Electric car: battery size (kWh, 0 = no estimate)"
-    description: "Usable capacity of the car's battery. With it, the Plan tab shows how much of the car can be charged while the home battery keeps grid import at the import limit."
+    description: "Usable capacity of the car's battery (default: a Mercedes EQB 250+). With it, the Plan tab shows how much of the car can be charged while the home battery keeps grid import at the import limit."
   car_charge_kw:
     name: "Electric car: charging power (kW)"
     description: "What the charger gives the car, for that estimate. 0: the measured power, only while the car charges."
