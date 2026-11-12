@@ -16,6 +16,9 @@
   day, so a forecast wobbling around the threshold does not switch the level on and off.
 - The plan, the contract comparison and the Plan tab (a note, and how much of the car the battery
   covers from the winter level) count with it. Needs the inverter's peak-shaving switch.
+- **Docs:** a new *Modes of operation* section lists every inverter mode, who asks for it and how
+  it ends, with diagrams of the loop, the decision order, the plan's choices, the peak buffer and
+  winter level, the car and the fill switch.
 
 ## 2.14.0
 

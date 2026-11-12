@@ -118,6 +118,158 @@ Charge and discharge commands only cover the current clock hour, and Battery Pil
 the inverter back in self-use when it stops, when its measurements are lost and when
 *Battery Pilot control* is switched off. See *When something goes wrong* below.
 
+## Modes of operation
+
+The diagrams below render on GitHub. In Home Assistant's Documentation tab they show as
+text.
+
+### The loop
+
+Battery Pilot runs one loop, every 10 seconds. The plan is redone every 5 minutes and once a
+night it learns.
+
+```mermaid
+flowchart TD
+    A["Every 10 s: read SOC, grid, house, solar"] --> B{"Measurements usable?"}
+    B -- no --> S["Back to self-use until they return"]
+    B -- yes --> C["Meter the quarter-hour, detect the car"]
+    C --> D{"5 minutes since the last plan?"}
+    D -- yes --> P["New 36-hour plan: prices, solar forecast after shade, usual consumption and peaks"]
+    D -- no --> E
+    P --> E["Decide one command from the plan step and the live readings"]
+    E --> F{"Battery Pilot control on?"}
+    F -- no --> G["Shadow mode: nothing is sent"]
+    F -- yes --> H["Send the command to the inverter, if it differs from what runs"]
+    H --> I["Block export at a negative sell price, warn of a coming peak"]
+    N["Once a night"] --> L["Learn shade, consumption and peaks; replay yesterday on both contracts"]
+```
+
+### The inverter modes
+
+The inverter is always in one of these modes. While *Battery Pilot control* is off, Battery
+Pilot sends nothing (shadow mode). It plans and shows what it would do.
+
+| Mode | What the inverter does | Who asks for it | How it ends |
+| --- | --- | --- | --- |
+| **Self-use** | Solar first feeds the house. The battery stores the surplus and covers what the house needs. Grid import happens only when the battery is at its floor. | The plan, a reached target, a paused charge, lost measurements, *Battery Pilot control* off, the app stopping | Another mode is asked for |
+| **Grid charge** | Charges from the grid. The current follows the house load, so import stays under the import limit (or under the higher limit the plan pays for at a price spike). | The plan (night target, cheap hours, peak cover), the fill switch, the peak buffer refill | The target is reached, the slot ends, or the quarter-hour heads over the limit (charging pauses in self-use) |
+| **Discharge / export** | Sells from the battery, paced to the plan's SOC, never below *Battery reserve for export* (except at an extreme price). | The plan (a dynamic price peak, or room for tomorrow's sun) | The plan's SOC or the floor is reached, or the slot ends |
+| **Peak shaving** | The grid feeds the house up to the *Grid import limit*. The battery only gives what is above it, and its baseline is the minimum, so the inverter does not refill from the grid. | The plan (energy worth more later), the car, the fill switch once full, the peak buffer, the winter level | See the decision order below; each trigger has its own way back |
+| **Solar hold** | The *feed-in priority*: solar surplus is exported, and the battery keeps its room for later. The battery does not feed the house. | The plan, with at least 0.3 kW of surplus | Surplus gone (not within 120 s of the last command) |
+
+Next to the mode, *Battery Pilot block negative export* sets the export limit to 0 W while
+the sell price is negative. It puts it back when the price is positive again.
+
+### Decision order
+
+Each loop takes the first rule that applies, from top to bottom. Higher rules win.
+
+```mermaid
+flowchart TD
+    Z(["Every 10 s"]) --> A{"Battery Pilot control on?"}
+    A -- no --> A1["Self-use if Battery Pilot set another mode, then shadow mode"]
+    A -- yes --> B{"Car charging and the house above the import limit? Needs the peak-shaving switch"}
+    B -- yes --> B1["Peak shaving: the grid up to the limit, the battery the rest, down to minimum + peak buffer"]
+    B -- no --> C{"Fill switch on, car not charging?"}
+    C -- yes --> C1["The plan step is replaced by: charge to 100 % under the limit, then peak shaving"]
+    C -- no --> D{"Is there a plan?"}
+    C1 --> E
+    D -- no --> D1["Self-use"]
+    D -- yes --> E{"Step: charge, below its SOC?"}
+    E -- yes --> E1["Grid charge under the import limit; self-use while the house needs the room"]
+    E -- no --> F{"Step: discharge, above its floor?"}
+    F -- yes --> F1["Discharge / export, paced"]
+    F -- no --> G{"Peak buffer set and the SOC at or below minimum + buffer?"}
+    G -- yes --> G1["Peak shaving; 3 points below: grid charge back to the level"]
+    G -- no --> H{"Winter day with a winter level, the SOC under level + 5?"}
+    H -- yes --> H1["Peak shaving at or below the level, otherwise self-use; band and 15-minute wait"]
+    H -- no --> I{"Step: peak shaving?"}
+    I -- yes --> I1["Peak shaving"]
+    I -- no --> J{"Step: solar hold?"}
+    J -- yes --> J1["Solar hold with at least 0.3 kW surplus, otherwise self-use"]
+    J -- no --> K["Self-use"]
+```
+
+### What the plan chooses
+
+The plan picks the cheapest mode for each hour (or quarter-hour) of the next 36 hours. It
+counts prices, losses, battery wear, the capacity tariff and your usual peaks. See *How it
+decides* above.
+
+```mermaid
+flowchart LR
+    W{"Winter day? Solar after shade below the threshold"} -- yes --> T{"full_day and night charging pays?"}
+    T -- yes --> T1["Night target: grid charge at night to carry the day; no export"]
+    T -- no --> T2["Keep enough for the usual peaks"]
+    W -- no --> S{"Sunny day that fills the battery anyway?"}
+    S -- yes --> S1["Sell beforehand what the house will not need"]
+    S -- no --> S2["Self-use"]
+    T1 & T2 & S1 & S2 --> X{"Dynamic contract with a spread that pays?"}
+    X -- yes --> X1["Charge in cheap hours, export in dear ones"]
+    X -- no --> Y["Peak shaving where the energy is worth more later; solar hold where room is worth more than storing"]
+    X1 --> Y
+```
+
+### The peak buffer and the winter level
+
+The peak buffer and the winter level both stop self-use at a SOC and switch to peak shaving
+below it. They differ in how they get back.
+
+| | Peak buffer (`peak_buffer_pct`) | Winter level (`winter_hold_soc`) |
+| --- | --- | --- |
+| When | Always | Winter days only, decided once per day |
+| Level | Minimum + buffer | The setting (only when above minimum + buffer) |
+| Peak shaving from | At or below the level | At or below the level |
+| Self-use again from | 2 points above it | 5 points above it, and at least 15 minutes after the last switch |
+| Refill from the grid | Yes, under the import limit, from 3 points below | No: only solar and the plan's own charging fill it |
+| The car may use it | No: the car stops at the buffer | Yes, down to minimum + buffer |
+
+The band and the wait keep the inverter from flipping between self-use and peak shaving.
+Without a grid refill, only solar can lift the battery the 5 points back to self-use.
+
+```mermaid
+stateDiagram-v2
+    [*] --> SelfUse
+    SelfUse --> PeakShaving: SOC at or below the winter level, and 15 min since the last switch
+    PeakShaving --> SelfUse: SOC 5 points above the level, and 15 min since the last switch
+    PeakShaving --> PeakShaving: a peak above the import limit, the battery gives only that
+    SelfUse --> CarCharging: car detected
+    PeakShaving --> CarCharging: car detected
+    CarCharging --> PeakShaving: car stops below the level
+    CarCharging --> SelfUse: car stops above the level
+    note right of CarCharging: peak shaving at the import limit, the battery down to minimum + peak buffer
+```
+
+### The car
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Rising: house load at least car_min_kw above its usual level
+    Rising --> Idle: gone within 3 minutes (kettle, hob)
+    Rising --> Charging: still there after 3 minutes
+    Idle --> Charging: charger sensor above 1 kW
+    Charging --> Idle: below half of car_min_kw above the level for 2 minutes, or no reading for 3 minutes
+    note right of Charging: peak shaving; the inverter baseline is minimum + peak buffer
+```
+
+### The fill switch
+
+```mermaid
+stateDiagram-v2
+    [*] --> Off
+    Off --> Filling: switch on
+    Filling --> Holding: battery full
+    Holding --> Filling: below 95 %
+    Filling --> Car: car charging
+    Holding --> Car: car charging
+    Car --> Off: the car stops (the switch turns itself off)
+    Filling --> Off: 24 hours, or switched off
+    Holding --> Off: 24 hours, or switched off
+    note right of Filling: grid charge to 100 % under the import limit
+    note right of Holding: peak shaving keeps it full (or a hold at the minimum current)
+```
+
 ## The comparison
 
 - **Same usage:** every quarter-hour, what you actually bought and sold is priced on
