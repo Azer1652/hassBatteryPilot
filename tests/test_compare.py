@@ -178,3 +178,29 @@ def test_a_month_saved_before_priced_quarters_were_kept_apart_is_unchanged():
     old = Comparison.from_json({"months": {"2026-06": {k: v for k, v in c.months["2026-06"].items()
                                                        if not k.startswith("p_")}}})
     assert old.report("2026-06", o)["same_usage"] == before["same_usage"]
+
+
+def test_the_energy_left_in_the_battery_is_credited_to_the_day():
+    """A day that ends with a fuller battery than it started is not charged for what the next day uses."""
+    recs, prices, fc = sunny_day()
+    o = Options()
+    res = {s: replay_day(recs, "fixed", o, BXL, prices, LoadProfile(default_kw=0.4), fc, s, market_avg=60.0)
+           for s in (20.0, 90.0)}
+    for soc0, r in res.items():
+        stored_kwh = (r["soc_end"] - soc0) * o.battery_capacity_kwh / 100
+        if abs(stored_kwh) > 0.1:
+            assert r["stored_c"] * stored_kwh < 0               # fuller: a credit, emptier: a cost
+        else:
+            assert r["stored_c"] == pytest.approx(0.0, abs=5)
+    # A battery that starts low fills from the sun: the day earns the energy it leaves behind.
+    assert res[20.0]["soc_end"] > 20.0 and res[20.0]["stored_c"] < 0
+
+
+def test_the_stored_change_is_kept_apart_in_the_report():
+    o = Options()
+    c = Comparison()
+    for kind in ("fixed", "dynamic"):
+        c.add_replay("2026-06", kind, {"cost_c": 300.0, "imp": 10.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0,
+                                       "grid_charged": 0.0, "stored_c": -120.0, "peak_kw": 2.0})
+    c.month("2026-06")["replay_days"] = 1
+    assert c.report("2026-06", o)["with_strategy"]["fixed"]["stored_eur"] == -1.2

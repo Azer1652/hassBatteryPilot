@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.11.3
+
+- **Best battery use no longer charges a day for energy the next day uses.** The replay paid for
+  everything bought but gave nothing back for the energy left in its simulated battery at
+  midnight, so a winter evening that filled the battery for tomorrow made that day look dear.
+  This mattered most with only a few replayed days. Energy the battery holds more (or less) at
+  the end of a day than at its start is now credited (or charged) at the value the plan gives it.
+- The comparison shows, under each best-use amount, the kWh that replay bought, plus a note:
+  best use covers whole replayed days, while Fixed and Dynamic cover the quarter-hours that have
+  a price, so in a month that has just started the two can differ.
+
 ## 2.11.2
 
 - **The comparison no longer favours the contract with the lower yearly fee in a month that has

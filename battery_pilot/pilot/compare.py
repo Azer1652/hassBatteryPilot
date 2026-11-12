@@ -13,7 +13,9 @@ Two views, kept per month:
   its own simulated battery from day to day. This answers "what would each
   contract have cost me, with the battery used the best way for it".
   Battery wear (wear cost x kWh discharged) is included, because a strategy
-  that cycles more wears the battery more.
+  that cycles more wears the battery more. What the simulated battery holds more (or less)
+  at midnight than it did the midnight before is credited (or charged) at the value the
+  planner gives stored energy, so a day is not charged for what the next day uses.
 
 Contract fees and the capacity tariff are added at report time, for the part of the month
 the amounts cover (the quarter-hours with a price, or the days replayed).
@@ -21,6 +23,7 @@ the amounts cover (the quarter-hours with a price, or the days replayed).
 from __future__ import annotations
 
 import calendar
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -51,7 +54,8 @@ def _blank():
             # the same three for the quarters that have a market price (what both contracts are priced on)
             "p_imp_day": 0.0, "p_imp_night": 0.0, "p_exp": 0.0,
             "dyn_c": 0.0, "quarters": 0, "replay": {k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0,
-                                                        "discharged": 0.0, "grid_charged": 0.0, "peak_kw": 0.0}
+                                                        "discharged": 0.0, "grid_charged": 0.0, "stored_c": 0.0,
+                                                        "peak_kw": 0.0}
                        for k in KINDS},
             "replay_days": 0, "peak_kw": 0.0, "estimated": 0}
 
@@ -104,7 +108,7 @@ class Comparison:
     # ---------------------------------------------------------------- replay
     def add_replay(self, key: str, kind: str, result: dict) -> None:
         r = self.month(key)["replay"][kind]
-        for k in ("cost_c", "imp", "exp", "charged", "discharged", "grid_charged"):
+        for k in ("cost_c", "imp", "exp", "charged", "discharged", "grid_charged", "stored_c"):
             r[k] = r.get(k, 0.0) + result.get(k, 0.0)
         r["peak_kw"] = max(r["peak_kw"], result["peak_kw"])
 
@@ -150,6 +154,7 @@ class Comparison:
                             "bought_kwh": round(r["imp"], 1), "sold_kwh": round(r["exp"], 1),
                             "battery_in_kwh": round(r["charged"], 1), "battery_out_kwh": round(r["discharged"], 1),
                             "grid_charged_kwh": round(r.get("grid_charged", 0.0), 1),
+                            "stored_eur": round(r.get("stored_c", 0.0) / 100, 2),
                             "peak_kw": round(r["peak_kw"], 2)}
             out["with_strategy"] = ws
         if key in self.imported:
@@ -206,6 +211,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     `solar_hold`: it has a feed-in priority switch, so the plan may put solar charging off.
     `on_replan(quarters so far, time)` is called before each plan: the forecast corrects itself with
     the solar measured so far that day, as the app does (`PvForecast.observe`).
+    `cost_c` includes `stored_c`: the change in stored energy over the day, valued as the planner
+    values what is left in the battery (negative when the battery ends fuller: a credit).
     """
     recs = sorted(records, key=lambda r: r.start)
     good = [r for r in recs if r.covered.get("load", 0) >= 0.5 and r.covered.get("pv", 0) >= 0.5]
@@ -215,7 +222,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     tar = tariff(kind, o)
     soc = soc0
     out = {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "peak_kw": 0.0,
-           "grid_charged": 0.0, "soc_end": soc0, "flows": []}
+           "grid_charged": 0.0, "stored_c": 0.0, "soc_end": soc0, "flows": []}
+    buys = []
     plan = None
     for i, r in enumerate(recs):
         if plan is None or (i % (4 * replan_every_h) == 0):
@@ -247,7 +255,9 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         res = sim_step(b, soc, action, target, load_kwh, pv_kwh, 0.25, slot_left_h=left,
                        curtail=block_negative and sell < 0, limit_kw=st.limit_kw if st else None,
                        reserve=st.reserve if st else None)
-        out["cost_c"] += res.import_kwh * tar.buy(local, market) - res.export_kwh * sell
+        buy = tar.buy(local, market)
+        buys.append(buy)
+        out["cost_c"] += res.import_kwh * buy - res.export_kwh * sell
         # Battery wear counts too: a strategy that cycles more wears the battery more.
         out["cost_c"] += res.discharge_dc_kwh * o.wear_cost_c_kwh
         out["imp"] += res.import_kwh
@@ -260,6 +270,12 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
         out["flows"].append((r.start, res.import_kwh, res.export_kwh))
         soc = res.soc
     out["soc_end"] = soc
+    # The battery ends the day fuller or emptier than it started; the next day's replay starts from
+    # there. Value the difference as the planner values stored energy (planner.make_plan, `terminal`),
+    # or a winter evening that fills the battery for tomorrow charges today for tomorrow's power.
+    value = max(min(statistics.median(buys), statistics.fmean(buys)) * b.eta_d - b.wear_c_kwh, 0.0)
+    out["stored_c"] = -b.kwh(soc - soc0) * value
+    out["cost_c"] += out["stored_c"]
     return out
 
 

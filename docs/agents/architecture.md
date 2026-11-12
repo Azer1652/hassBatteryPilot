@@ -135,7 +135,9 @@ replaces the plan's step by `fill_step` (charge to 100 % in the current clock ho
 ## The contract comparison (`compare.py`)
 
 `compare.Comparison`: per-month "same usage" shadow bill + nightly `replay_day()` per contract
-(plans hourly with forecasts, simulates with measured load/PV, includes wear). Fees and capacity
+(plans hourly with forecasts, simulates with measured load/PV, includes wear; `cost_c` also holds
+`stored_c`, the day's change in stored DC kWh at the planner's terminal value, so evening charging
+for tomorrow is not billed to today and consecutive days telescope). Fees and capacity
 tariff are added in `report()`, for the share of the month the amounts cover (priced quarters, or
 replayed days, over the calendar month; a month taken over from Playbook counts whole): a full month
 of fees against a few priced hours made the contract with the lower fee look cheaper. Both contracts must cover the same hours: a month with market prices

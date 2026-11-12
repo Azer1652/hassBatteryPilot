@@ -121,7 +121,9 @@ the inverter back in self-use when it stops, when its measurements are lost and 
   consumption and solar. For each contract the planner decides every hour as it would
   have on that contract (cheap-hour charging, export, selling surplus solar, the
   winter night target). A simulated battery follows its commands, and wear is
-  included. With *Battery Pilot block negative export* on (and an export-limit
+  included. What that battery holds more (or less) at the end of the day than at its
+  start is credited (or charged) at the value the plan gives stored energy, so energy
+  bought in the evening for tomorrow does not count against today. With *Battery Pilot block negative export* on (and an export-limit
   entity), the replay also blocks export whenever that contract's sell price is
   negative, as Battery Pilot would; otherwise those exports cost money. While export
   was really blocked the inverter held your panels back, so for those quarter-hours the
@@ -132,7 +134,9 @@ the inverter back in self-use when it stops, when its measurements are lost and 
 Both include the contract fees and the capacity tariff, for the part of the month the
 amounts cover: a month that is not complete (the current one, or the month you installed
 the app or added prices) shows "3.2 of 30 days" and carries the fees of those days only.
-A few days say little yet. The sidebar page shows every
+A few days say little yet, and the two views can cover different spans: same usage the
+quarter-hours with a price, best use whole replayed days (the kWh each replay bought are
+shown under its amount). The sidebar page shows every
 month; the sensor `sensor.battery_pilot_contract_comparison` holds the 12-month
 difference (negative means dynamic is cheaper).
 

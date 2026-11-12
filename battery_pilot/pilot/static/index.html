@@ -493,6 +493,11 @@ function efficiencyNote(e) {
   return s;
 }
 
+function best(w) {
+  // A replayed contract: its cost, and what it bought (to set against the Bought column)
+  return `${eur(w.eur)}<span class="sub">${fmt(w.bought_kwh, 0)} kWh bought</span>`;
+}
+
 function comparison(c) {
   const rows = c.months || [];
   const sum = [];
@@ -509,13 +514,18 @@ function comparison(c) {
     h += `<tr><td>${esc(r.month)}${r.imported_from_playbook ? " *" : ""}${r.estimated_quarters ? " †" : ""}${cover}</td><td>${fmt(r.bought_kwh, 0)} kWh</td><td>${fmt(r.sold_kwh, 0)} kWh</td>
       <td>${r.market_avg_eur_mwh === null ? "–" : "€" + fmt(r.market_avg_eur_mwh, 0) + "/MWh"}</td>
       <td>${eur(r.same_usage.fixed_eur)}</td><td>${eur(r.same_usage.dynamic_eur)}</td>
-      <td>${ws ? eur(ws.fixed.eur) : "–"}</td><td>${ws ? eur(ws.dynamic.eur) : "–"}</td><td>${r.replay_days}</td></tr>`;
+      <td>${ws ? best(ws.fixed) : "–"}</td><td>${ws ? best(ws.dynamic) : "–"}</td><td>${r.replay_days}</td></tr>`;
   }
   $("cmp").innerHTML = h;
   const notes = [];
   if (rows.some((r) => r.days !== undefined && r.days < r.month_days - 0.5))
     notes.push("A month with fewer days than the calendar month is not complete: the contract fees and the capacity " +
                "tariff are counted for those days only, so a few days say little yet.");
+  if (rows.some((r) => r.with_strategy))
+    notes.push("Best use covers the replayed days only (whole days, yesterday and before), so it can differ from " +
+               "the Fixed and Dynamic columns, which cover the quarter-hours with a price. Energy the simulated " +
+               "battery holds more (or less) at the end of a day than at its start is credited (or charged) at " +
+               "the value the plan gives it.");
   if (rows.some((r) => r.estimated_quarters))
     notes.push("† Some quarter-hours had no market price; both contracts use the price of the day before there.");
   $("cmpnote").textContent = notes.join(" ");

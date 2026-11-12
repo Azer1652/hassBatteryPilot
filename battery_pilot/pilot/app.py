@@ -953,7 +953,7 @@ class App:
             self.comparison.month(key)["replay_days"] += 1
             f, d = results["fixed"]["cost_c"] / 100, results["dynamic"]["cost_c"] / 100
             blocked = "; export blocked at negative prices" if block_negative else ""
-            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f} (energy and battery wear{blocked}).")
+            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f} (energy, wear, stored energy{blocked}).")
 
     # ---------------------------------------------------------------- alerts
     async def alert(self, title: str, message: str, key: str | None, phone: bool = True):
