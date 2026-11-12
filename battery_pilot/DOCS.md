@@ -166,29 +166,40 @@ Each loop takes the first rule that applies, from top to bottom. Higher rules wi
 
 ```mermaid
 flowchart TD
-    Z(["Every 10 s"]) --> A{"Battery Pilot control on?"}
-    A -- no --> A1["Self-use if Battery Pilot set another mode, then shadow mode"]
-    A -- yes --> B{"Car charging and the house above the import limit? Needs the peak-shaving switch"}
-    B -- yes --> B1["Peak shaving: the grid up to the limit, the battery the rest, down to minimum + peak buffer"]
-    B -- no --> C{"Fill switch on, car not charging?"}
-    C -- yes --> C1["The plan step is replaced by: charge to 100 % under the limit, then peak shaving"]
-    C -- no --> D{"Is there a plan?"}
-    C1 --> E
+    Z(["Every 10 s"]) --> A{"Control on?"}
+    A -- no --> A1["Shadow mode<br/>(self-use first if Battery Pilot<br/>had set another mode)"]
+    A -- yes --> B{"Car charging?"}
+    B -- yes --> B1["Peak shaving<br/>grid up to the limit, battery the rest,<br/>down to minimum + peak buffer"]
+    B -- no --> C{"Fill switch on?"}
+    C -- yes --> C1["Plan step replaced by:<br/>charge to 100 %, then keep it"]
+    C -- no --> D{"Plan?"}
     D -- no --> D1["Self-use"]
-    D -- yes --> E{"Step: charge, below its SOC?"}
-    E -- yes --> E1["Grid charge under the import limit; self-use while the house needs the room"]
-    E -- no --> F{"Step: discharge, above its floor?"}
-    F -- yes --> F1["Discharge / export, paced"]
-    F -- no --> G{"Peak buffer set and the SOC at or below minimum + buffer?"}
-    G -- yes --> G1["Peak shaving; 3 points below: grid charge back to the level"]
-    G -- no --> H{"Winter day with a winter level, the SOC under level + 5?"}
-    H -- yes --> H1["Peak shaving at or below the level, otherwise self-use; band and 15-minute wait"]
-    H -- no --> I{"Step: peak shaving?"}
+    D -- yes --> E{"Charge step?"}
+    C1 --> E
+    E -- yes --> E1["Grid charge<br/>under the import limit"]
+    E -- no --> F{"Discharge step?"}
+    F -- yes --> F1["Discharge / export<br/>paced, not below its floor"]
+    F -- no --> G{"At the<br/>peak buffer?"}
+    G -- yes --> G1["Peak shaving<br/>3 points below it:<br/>grid charge back"]
+    G -- no --> H{"Near the<br/>winter level?"}
+    H -- yes --> H1["Peak shaving at or below it,<br/>self-use 5 points above it,<br/>15 minutes between switches"]
+    H -- no --> I{"Peak-shaving step?"}
     I -- yes --> I1["Peak shaving"]
-    I -- no --> J{"Step: solar hold?"}
-    J -- yes --> J1["Solar hold with at least 0.3 kW surplus, otherwise self-use"]
+    I -- no --> J{"Solar-hold step?"}
+    J -- yes --> J1["Solar hold<br/>with at least 0.3 kW surplus"]
     J -- no --> K["Self-use"]
 ```
+
+Notes on the rules:
+
+- **Car:** peak shaving needs the peak-shaving switch. The car starts it once the house asks
+  more than the import limit.
+- **Charge step:** only while the battery is below the step's SOC. Charging pauses in
+  self-use while the house needs the room under the limit.
+- **Peak buffer:** only with *Peak buffer* set.
+- **Winter level:** only on a winter day with *Winter: keep the battery at* set, and while
+  the battery is less than 5 points above the level.
+- **Solar hold:** below 0.3 kW of surplus the inverter stays in self-use.
 
 ### What the plan chooses
 
@@ -197,18 +208,21 @@ counts prices, losses, battery wear, the capacity tariff and your usual peaks. S
 decides* above.
 
 ```mermaid
-flowchart LR
-    W{"Winter day? Solar after shade below the threshold"} -- yes --> T{"full_day and night charging pays?"}
-    T -- yes --> T1["Night target: grid charge at night to carry the day; no export"]
-    T -- no --> T2["Keep enough for the usual peaks"]
-    W -- no --> S{"Sunny day that fills the battery anyway?"}
-    S -- yes --> S1["Sell beforehand what the house will not need"]
+flowchart TD
+    W{"Winter day?"} -- yes --> T{"full_day, and night<br/>charging pays?"}
+    T -- yes --> T1["Night target<br/>grid charge at night to carry the day,<br/>no export"]
+    T -- no --> T2["Keep enough<br/>for the usual peaks"]
+    W -- no --> S{"Sun fills the<br/>battery anyway?"}
+    S -- yes --> S1["Sell beforehand what<br/>the house will not need"]
     S -- no --> S2["Self-use"]
-    T1 & T2 & S1 & S2 --> X{"Dynamic contract with a spread that pays?"}
-    X -- yes --> X1["Charge in cheap hours, export in dear ones"]
-    X -- no --> Y["Peak shaving where the energy is worth more later; solar hold where room is worth more than storing"]
+    T1 & T2 & S1 & S2 --> X{"Dynamic contract<br/>with a spread<br/>that pays?"}
+    X -- yes --> X1["Charge in cheap hours,<br/>export in dear ones"]
+    X -- no --> Y["Peak shaving where the energy is worth more later,<br/>solar hold where room is worth more than storing"]
     X1 --> Y
 ```
+
+A winter day is one whose solar forecast, after shade, is below *Winter day when solar is
+below*.
 
 ### The peak buffer and the winter level
 
@@ -250,7 +264,7 @@ stateDiagram-v2
     Rising --> Charging: still there after 3 minutes
     Idle --> Charging: charger sensor above 1 kW
     Charging --> Idle: below half of car_min_kw above the level for 2 minutes, or no reading for 3 minutes
-    note right of Charging: peak shaving; the inverter baseline is minimum + peak buffer
+    note right of Charging: peak shaving, the inverter baseline at minimum + peak buffer
 ```
 
 ### The fill switch
