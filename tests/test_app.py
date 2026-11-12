@@ -255,6 +255,11 @@ async def test_dashboard_status_is_complete(tmpdata):
     kwh = app.status()["solar"]["shade_kwh"]
     assert len(kwh) == 12 and all(len(row) == 24 for row in kwh)
     assert kwh[0][13] == 1.0 and kwh[0][14] == 0.0
+    # the House tab: the learned peaks per weekday and hour, None where nothing is learned yet
+    app.load.learn_peak(2, 18, 3.4)
+    load = app.status()["load"]
+    assert len(load["peak"]) == 7 and all(len(row) == 24 for row in load["peak"])
+    assert load["peak"][2][18] == 3.4 and load["peak"][2][19] is None and len(load["kw"]) == 7
 
 
 async def test_zero_export_setting_is_left_alone(tmpdata):

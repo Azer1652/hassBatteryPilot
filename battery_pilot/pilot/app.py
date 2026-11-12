@@ -1185,7 +1185,7 @@ class App:
                       "today_factor": self.today_factor,
                       "shade": self.shade.to_json()["factors"], "shade_months": self.shade.month_summary(),
                       "shade_kwh": [[round(w, 1) for w in row] for row in self.shade.weights]},
-            "load": {"daily_kwh": self.load.daily_kwh(), "kw": self.load.to_json()["kw"]},
+            "load": {"daily_kwh": self.load.daily_kwh(), **self.load.to_json()},      # kw and peak, weekday x hour
             "peaks": {"months": self.peaks.months, "limit_kw": self.o.import_limit_kw,
                       "rolling_kw": self.peaks.rolling_average(self.o.capacity_min_kw)},
             "comparison": self.comparison.summary(self.o, now, self.tz),

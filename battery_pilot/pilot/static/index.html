@@ -199,6 +199,17 @@
     </div>
   </div>
 
+  <div class="card" data-tab="house">
+    <h2>Household peaks</h2>
+    <div class="kpis" id="housekpi"></div>
+    <p class="muted">The highest quarter-hour your house typically reaches in each hour of the week (cooking, kettle,
+      dishwasher), learned every night from the measured quarter-hours. Recent weeks count most (about three weeks
+      of memory) and the car is left out. Red hours go above the import limit: the plan keeps enough battery to
+      cover them. Tap or hover over a cell for its value.</p>
+    <div class="hchart" id="housepeaks"></div>
+    <p class="muted" id="housenote"></p>
+  </div>
+
   <div class="grid" data-tab="log">
     <div class="card"><h2>Inverter commands</h2><ul class="log" id="cmds"></ul></div>
     <div class="card"><h2>Events</h2><ul class="log" id="events"></ul></div>
@@ -635,6 +646,84 @@ function peaksChart(el, p) {
       return `<div><b>${name(k)}</b></div><div>highest quarter-hour <b>${fmt(v, 2)} kW</b></div>
         <div class="h">import limit ${fmt(p.limit_kw, 2)} kW${over ? ": this peak went above it" : ""}</div>`;
     }});
+}
+
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function housePeaksChart(el, load, limit) {
+  // load.peak / load.kw: kW per weekday (rows, Monday first) and hour (columns); null = not learned yet
+  const peak = (load && load.peak) || [], kw = (load && load.kw) || [];
+  const vals = peak.flat().filter((v) => v !== null && v !== undefined);
+  if (!vals.length) {
+    el.innerHTML = '<p class="muted">Nothing learned yet: the first night after a full day of measurements fills this.</p>';
+    el.hideTip = null;
+    return;
+  }
+  const W = Math.max(el.clientWidth, 260), left = 30, top = 4;
+  const cw = (W - left - 4) / 24, ch = W < 600 ? 18 : 24;
+  const max = Math.max(limit * 1.3, ...vals);
+  const charge = css("--charge"), warn = css("--warn"), line = css("--line");
+  let g = "";
+  DAYS.forEach((d, r) => {
+    g += `<text x="${left - 6}" y="${top + r * ch + ch / 2 + 4}" text-anchor="end">${d.slice(0, 2)}</text>`;
+    for (let h = 0; h < 24; h++) {
+      const v = peak[r] ? peak[r][h] : null, x = left + h * cw, y = top + r * ch;
+      if (v === null || v === undefined) {
+        g += `<rect x="${x + 0.5}" y="${y + 0.5}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="none" stroke="${line}"/>`;
+      } else {
+        const over = v > limit;
+        const op = over ? 0.55 + 0.45 * Math.min((v - limit) / Math.max(max - limit, 0.01), 1) : 0.12 + 0.68 * v / limit;
+        g += `<rect x="${x}" y="${y}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="${over ? warn : charge}"
+               fill-opacity="${op.toFixed(2)}"/>`;
+      }
+    }
+  });
+  for (let h = 0; h < 24; h += 3) g += `<text x="${left + h * cw + cw / 2}" y="${top + 7 * ch + 12}" text-anchor="middle">${h}h</text>`;
+  g += `<rect class="xh" x="0" y="0" width="${cw - 1}" height="${ch - 1}" rx="2" fill="none" stroke="${css("--text")}"
+          stroke-width="2" visibility="hidden"/>`;
+  const H = top + 7 * ch + 18;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" tabindex="0" role="img"
+      aria-label="Household peaks by weekday and hour (kW). Use the arrow keys to read the values.">${g}</svg>
+    <div class="tip" hidden></div>`;
+  chartTip(el, {key: "house", W, box: [left, left + 24 * cw, top, top + 7 * ch], grid: true,
+    value: (fx, fy) => [Math.floor(fy * 7), Math.floor(fx * 24)],
+    norm: ([d, h]) => [clamp(d, 0, 6), clamp(h, 0, 23)],
+    step: ([d, h], s, axis) => axis === "y" ? [d + s, h] : [d, h + s],
+    x: ([, h]) => left + h * cw + cw / 2,
+    mark: ([d, h]) => ({x: left + h * cw, y: top + d * ch}),
+    first: () => {
+      const now = new Date(), wd = new Date(now.toLocaleString("en-US", {timeZone: tz})).getDay();
+      return [(wd + 6) % 7, Number(now.toLocaleString("en-GB", {hour: "numeric", hourCycle: "h23", timeZone: tz}))];
+    },
+    html: ([d, h]) => {
+      const v = peak[d] ? peak[d][h] : null, a = kw[d] ? kw[d][h] : null;
+      let t = `<div><b>${DAYS[d]}, ${pad2(h)}:00–${pad2(h + 1)}:00</b></div>`;
+      if (v === null || v === undefined) return t + '<div class="n">not learned yet: the same hour of the other days is used</div>';
+      t += `<div>highest quarter-hour <b>${fmt(v, 2)} kW</b></div>`;
+      if (a !== null && a !== undefined) t += `<div>average ${fmt(a, 2)} kW</div>`;
+      t += v > limit ? `<div class="h">${fmt(v - limit, 2)} kW above the import limit: the battery covers it</div>`
+                     : `<div class="h">under the import limit of ${fmt(limit, 2)} kW</div>`;
+      return t;
+    }});
+}
+
+function houseCard(load, limit) {
+  const peak = (load && load.peak) || [];
+  let best = null, over = 0, known = 0;
+  peak.forEach((row, d) => row.forEach((v, h) => {
+    if (v === null || v === undefined) return;
+    known += 1;
+    if (v > limit) over += 1;
+    if (!best || v > best[0]) best = [v, d, h];
+  }));
+  $("housekpi").innerHTML = best
+    ? kpi("highest peak", `${fmt(best[0], 2)} kW`) + kpi("when", `${DAYS[best[1]].slice(0, 3)} ${pad2(best[2])}:00`) +
+      kpi("hours above the limit", `${over} of ${known}`) + kpi("usual use", `${fmt(load.daily_kwh, 1)} kWh/day`)
+    : kpi("usual use", `${fmt(load && load.daily_kwh, 1)} kWh/day`);
+  $("housenote").textContent = known && known < 168
+    ? `${168 - known} of the 168 hours of the week are not learned yet; until then the same hour of the other days counts.`
+    : "";
+  housePeaksChart($("housepeaks"), load, limit);
 }
 
 // ---------------------------------------------------------------- planned vs actual
@@ -1163,6 +1252,7 @@ let render = function (s) {
       `the rest of today is planned ${sun < 1 ? "lower" : "higher"}.` : "";
   shadeChart($("shade"), s.solar.shade, s.solar.shade_kwh);
   peaksChart($("peaks"), s.peaks);
+  houseCard(s.load, s.peaks.limit_kw);
   $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW.` +
     (s.breakeven.night === null ? "" :      // (none when the dynamic price does not follow the market)
       ` Break-even market price: night €${s.breakeven.night}/MWh, day €${s.breakeven.day}/MWh` +
@@ -1206,7 +1296,7 @@ window.addEventListener("resize", () => { if (last) _render(last); renderHistory
 
 // ---------------------------------------------------------------- tabs: one card at a time
 const TABS = [["plan", "Plan"], ["history", "Planned vs actual"], ["compare", "Fixed or dynamic"], ["solar", "Solar"],
-              ["peaks", "Peaks"], ["log", "Log"], ["settings", "Settings"]];
+              ["peaks", "Peaks"], ["house", "House"], ["log", "Log"], ["settings", "Settings"]];
 function showTab(name) {
   const all = name === "all";                           // (#all: every card, for a full-page print or screenshot)
   if (!all && !TABS.some(([k]) => k === name)) name = "plan";

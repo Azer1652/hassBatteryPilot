@@ -8,8 +8,15 @@ sidebar.
 ![The Battery Pilot page: the 36-hour plan of a winter day, the battery kept for the evening peak by peak shaving](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/plan.png)
 
 The page has tabs under the figures at the top: *Plan*, *Planned vs actual*, *Fixed or
-dynamic*, *Solar*, *Peaks*, *Log* (inverter commands and events) and *Settings*. It opens
-on the tab you used last.
+dynamic*, *Solar*, *Peaks*, *House*, *Log* (inverter commands and events) and *Settings*. It
+opens on the tab you used last.
+
+The *House* tab shows the household peaks Battery Pilot has learned: for each weekday and
+hour, the highest quarter-hour your house typically reaches (cooking, kettle, dishwasher),
+with the car left out. They are learned every night; recent weeks count most (about three
+weeks of memory), and an hour not learned yet borrows the same hour of the other days. Hours
+above the import limit are red: the plan keeps enough battery to cover them. Tap or hover
+over a cell (or focus the chart and use the arrow keys) for the peak and the average load.
 
 *Demo data. Each bar is one hour or quarter-hour: its height is the price you pay per kWh
 (left axis), its colour what the battery does (blue: grid charge). Green: the battery level

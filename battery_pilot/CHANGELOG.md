@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.14.0
+
+- **New House tab:** the household peaks Battery Pilot has learned, per weekday and hour: the
+  highest quarter-hour the house typically reaches, with the hours above the import limit in red
+  (the plan keeps battery for those). Tap a cell for the peak and the average load. Nothing new is
+  learned: this shows what the planner already used.
+
 ## 2.13.0
 
 **How much of the car charges under the import limit.**
