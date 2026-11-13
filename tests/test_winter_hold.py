@@ -84,6 +84,41 @@ def test_a_winter_day_is_decided_once():
     assert late is None                                               # not forecast yet: not decided
 
 
+def dull_then(tomorrow_kw):
+    """A pv forecast: nothing today, `tomorrow_kw` from 08:00 to 16:00 local tomorrow."""
+    tomorrow = T0.astimezone(TZ).date() + timedelta(days=1)
+
+    def pv(a, b):
+        kwh, t = 0.0, a
+        while t < b:
+            u = min(t + timedelta(minutes=15), b)
+            loc = t.astimezone(TZ)
+            if loc.date() == tomorrow and 8 <= loc.hour < 16:
+                kwh += tomorrow_kw * (u - t).total_seconds() / 3600
+            t = u
+        return kwh
+    return pv
+
+
+def test_the_level_is_let_go_on_the_evening_before_a_sunny_day():
+    def run(tomorrow_kw, until=None):
+        return make_plan(T0, TZ, OPTS, tariff("fixed", OPTS), [], flat(0.6), dull_then(tomorrow_kw), 60,
+                         forecast_until=until, peak_shave=True)
+    today = T0.astimezone(TZ).date()
+    night = OPTS.night_start_time
+    sunny = run(5.0)                                                     # 40 kWh tomorrow: refills the battery
+    for s in sunny.steps:
+        loc = (s.start + timedelta(hours=s.hours / 2)).astimezone(TZ)
+        if loc.date() == today:
+            assert s.hold == (0 if loc.time() >= night else 50), loc
+    late = [s for s in sunny.steps if s.start.astimezone(TZ).date() == today and s.start.astimezone(TZ).time() >= night]
+    assert late and min(s.soc_end for s in sunny.steps if s.start.astimezone(TZ).date() == today) < 50
+    dull = run(0.0)                                                      # dull tomorrow too: held all evening
+    assert all(s.hold == 50 for s in dull.steps)
+    unknown = run(5.0, until=T0 + timedelta(hours=6))                    # tomorrow not forecast yet: held
+    assert all(s.hold == 50 for s in unknown.steps if s.start.astimezone(TZ).date() == today)
+
+
 # ---------------------------------------------------------------- controller
 def step(action="self_use", hold=50.0):
     return Step(T0, 1.0, action, 60, 50, 0, 0, 0, 0, 27, 5, 0, hold=hold)

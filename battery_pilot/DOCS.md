@@ -255,6 +255,10 @@ below it. They differ in how they get back.
 The band and the wait keep the inverter from flipping between self-use and peak shaving.
 Without a grid refill, only solar can lift the battery the 5 points back to self-use.
 
+On the evening of a winter day followed by a day with enough sun (not a winter day), the winter
+level is let go from *Night start*: tomorrow's sun refills the battery, so what was kept would
+only push solar to the grid. When tomorrow is not forecast yet, or is dull too, the level stays.
+
 ```mermaid
 stateDiagram-v2
     [*] --> SelfUse

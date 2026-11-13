@@ -547,15 +547,25 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
     hold = winter_hold(o, b)
     if hold and peak_shave:
         days = {} if winter_days is None else winter_days
-        for i, sl in enumerate(slots):
-            d = (sl.start + timedelta(hours=sl.hours / 2)).astimezone(tz).date()
+
+        def winter(d: date) -> bool | None:
             if d not in days:
                 known = is_winter_day(d, tz, o, pv_kwh, forecast_until)
                 if known is None:
-                    continue
+                    return None
                 days[d] = known
-            if days[d]:
-                slots[i] = replace(sl, hold=hold)
+            return days[d]
+
+        for i, sl in enumerate(slots):
+            local = (sl.start + timedelta(hours=sl.hours / 2)).astimezone(tz)
+            d = local.date()
+            if not winter(d):
+                continue
+            # From the night start of a dull day before a day with enough sun, the level is let go:
+            # tomorrow's sun refills the battery, so what is kept would only push solar to the grid.
+            if local.time() >= o.night_start_time and winter(d + timedelta(days=1)) is False:
+                continue
+            slots[i] = replace(sl, hold=hold)
 
     targets: dict[int, float] = {}
     target_info = []
