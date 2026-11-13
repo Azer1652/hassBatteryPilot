@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.17.0
+
+**The car is seen after a restart; a switch to force peak shaving.**
+
+- Car detection without a charger sensor no longer misses a car that is already charging when
+  Battery Pilot starts (or after a few minutes without readings). There was no jump to see, so
+  the car was taken for the house: no peak shaving and its energy learned as house consumption.
+  The house's usual consumption for that hour is now the level the jump is measured from.
+- A car session that ran when the app stopped goes on after a restart within 15 minutes,
+  instead of being reported twice.
+- New switch *Force peak shaving* (`input_boolean.battery_pilot_force_peak_shaving`, created
+  automatically, and a button on the Plan tab): the inverter stays in peak shaving whatever the
+  plan says, until you turn it off. It needs Battery Pilot control on and the inverter's
+  peak-shaving switch.
+
 ## 2.16.0
 
 **The plan chart shows what the inverter does.**
