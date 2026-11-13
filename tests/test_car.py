@@ -67,6 +67,46 @@ def test_lost_readings_end_a_session_after_a_few_minutes():
     assert not src.update(T0, None).charging
 
 
+def feed_usual(src, seconds, kw, usual, t=T0, step_s=10):
+    out = []
+    for _ in range(int(seconds / step_s)):
+        out.append(src.update(t, kw, usual_kw=usual))
+        t += timedelta(seconds=step_s)
+    return out, t
+
+
+def test_a_car_that_already_charges_at_the_start_is_seen_against_the_usual_load():
+    src = LoadStepSource(3.5)
+    seen, t = feed_usual(src, 170, 5.4, usual=0.5)              # the first reading is the car already
+    assert not any(s.charging for s in seen)
+    seen, t = feed_usual(src, 30, 5.4, usual=0.5, t=t)
+    assert seen[-1].charging and seen[-1].power_kw == pytest.approx(4.9, abs=0.05)
+    seen, t = feed_usual(src, 180, 0.5, usual=0.5, t=t)
+    assert not seen[-1].charging
+    # without the usual load it stays unseen: the car is taken for the house
+    seen, _ = feed(LoadStepSource(3.5), [(1800, 5.4)])
+    assert not any(s.charging for s in seen)
+
+
+def test_the_usual_load_is_only_used_without_readings_before():
+    src = LoadStepSource(3.5)
+    seen, t = feed_usual(src, 600, 2.0, usual=0.5)              # the house uses more than usual tonight
+    seen, t = feed_usual(src, 600, 4.6, usual=0.5, t=t)         # above usual + 3.5, but no jump from 2.0
+    assert not any(s.charging for s in seen)
+    seen, t = feed_usual(src, 300, 8.5, usual=0.5, t=t)         # a jump from what the house used: the car
+    assert seen[-1].charging
+
+
+def test_a_session_resumed_after_a_restart_ends_when_the_car_stops():
+    src = LoadStepSource(3.5)
+    assert src.resume(0.4, 5.0).charging
+    seen, t = feed(src, [(600, 5.4)])
+    assert all(s.charging for s in seen) and seen[-1].power_kw == pytest.approx(5.0)
+    seen, _ = feed(src, [(180, 0.4)], t)
+    assert not seen[-1].charging
+    assert not LoadStepSource(3.5).resume(None, 5.0).charging
+
+
 def test_the_charger_sensor_is_used_as_it_is():
     src = ChargerPowerSource()
     assert not src.update(T0, 6.0, 0.02).charging                           # standby
@@ -218,6 +258,36 @@ async def test_during_a_session_the_page_and_the_sensor_say_so(tmp_path):
         await app.step()
         fake.advance(timedelta(seconds=30))
     assert fake.s[SHAVE]["state"] == "off"
+
+
+async def test_a_restart_while_the_car_charges_does_not_lose_it(tmp_path):
+    begin = utc(2026, 1, 14, 20, 0)
+    fake = FakeHA(utc(2026, 1, 14, 20, 30), soc=70, load=car_load(begin, 2), peak_shaving=True)
+    fake.s[CONTROL]["state"] = "on"
+
+    async def run(app, minutes):
+        end = fake.now + timedelta(minutes=minutes)
+        while fake.now < end:
+            await app.step()
+            fake.advance(timedelta(seconds=30))
+
+    # the app starts while the car already charges: no jump to see, the usual load is the level
+    app = App(Options(car_min_kw=3.5), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    await run(app, 5)
+    assert app.car_state.charging and app.car_state.power_kw > 3.5
+    assert fake.mode() == "peak_shave"
+    # a restart of the app: the session goes on (one session, not a second "detected")
+    await app.shutdown()
+    fake.advance(timedelta(minutes=1))
+    app2 = App(Options(car_min_kw=3.5), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app2.setup()
+    assert app2.car_state.charging
+    await run(app2, 90)
+    texts = [e["text"] for e in app2.events]
+    assert any(t.startswith("Car charging continues after the restart") for t in texts)
+    assert not any(t.startswith("Car charging detected") for t in texts)
+    assert any(t.startswith("Car charging ended: ") for t in texts) and not app2.car_state.charging
 
 
 async def test_without_the_peak_shaving_switch_the_car_is_only_measured(tmp_path):

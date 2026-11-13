@@ -510,11 +510,13 @@ at an extreme price.
 
 ### In Home Assistant
 
-- **Three switches**, created as normal helpers on the first start (off):
+- **Four switches**, created as normal helpers on the first start (off):
   `input_boolean.battery_pilot_control`,
-  `input_boolean.battery_pilot_block_negative_export` and
-  `input_boolean.battery_pilot_fill_battery_for_car` (see *Fill the battery for the car*).
-  Battery Pilot turns the last one off itself when the car has charged, or after 24 hours.
+  `input_boolean.battery_pilot_block_negative_export`,
+  `input_boolean.battery_pilot_fill_battery_for_car` (see *Fill the battery for the car*) and
+  `input_boolean.battery_pilot_force_peak_shaving` (see *Force peak shaving*).
+  Battery Pilot turns the fill switch off itself when the car has charged, or after 24 hours;
+  the force peak shaving switch stays on until you turn it off.
 - **Its sensors**, listed below. They are updated every 30 seconds and come back
   within 30 seconds after a Home Assistant restart.
 - **Notifications** in HA, and on your phone through the Companion app:
@@ -684,7 +686,11 @@ only the rest. The battery lasts much longer that way. When the car stops, the p
 followed again. Without the peak-shaving switch nothing changes: the car is only measured.
 
 - **Two sources.** With the charger entity, the car charges when it draws more than 1 kW.
-  Without it, the car is a jump in house consumption that stays (see `car_min_kw`).
+  Without it, the car is a jump in house consumption that stays (see `car_min_kw`). When
+  Battery Pilot starts while the car already charges (or the readings were gone for a few
+  minutes), there is no jump to see: then the house's usual consumption for that hour is the
+  level the jump is measured from. A session that ran when the app was stopped goes on after
+  a restart within 15 minutes.
 - **Learning.** The car's energy is kept out of what Battery Pilot learns as house
   consumption and as your usual peaks. While a session runs, the plan counts the car's
   power on top of the house for the next hour. The nightly replay uses peak shaving in
@@ -760,6 +766,17 @@ What it costs: the battery is filled at the rate of that moment (the day rate, o
 contract in the daytime), and about 10 % of that energy is lost in the battery. What it
 saves is the capacity tariff on the car's peak. The plan on the page is not changed by the
 switch; it is made again every 5 minutes from the battery level of that moment.
+
+### Force peak shaving
+
+The button *Force peak shaving* on the Battery Pilot page (the helper
+`input_boolean.battery_pilot_force_peak_shaving`, also usable on a dashboard or in an
+automation) is a manual override: while it is on, and *Battery Pilot control* is on, the
+inverter stays in peak shaving whatever the plan says. The grid gives the house up to the
+import limit, the battery only what is above it. It does not turn itself off: the plan is
+followed again only when you switch it off. It needs the inverter's peak-shaving switch;
+without it the switch has no effect. The chart shows peak shaving for every hour while it is
+on; the plan itself is still made every 5 minutes from the battery level of that moment.
 
 ## Measured efficiency
 

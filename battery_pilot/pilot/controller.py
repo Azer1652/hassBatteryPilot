@@ -112,10 +112,11 @@ def fill_step(r: Readings, mode: str, can_shave: bool) -> Step:
 
 def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str, amps_now: int,
            control_on: bool, mode_age_s: float = 1e9, car_kw: float = 0.0, can_shave: bool = False,
-           fill: bool = False, renew: bool = False) -> Decision:
+           fill: bool = False, renew: bool = False, force_shave: bool = False) -> Decision:
     """`car_kw`: what the electric car takes now (0: not charging). `can_shave`: the inverter has
     the peak-shaving switch. `fill`: the "fill the battery for the car" switch is on. `renew`: the
-    running force charge or discharge must be sent again before it lapses (`Solis.renew_due`)."""
+    running force charge or discharge must be sent again before it lapses (`Solis.renew_due`).
+    `force_shave`: the "force peak shaving" switch is on: peak shaving, whatever else, until it is off."""
     hour = r.t_local.strftime("%H:00:00")
     renewal = ("renew the hourly charge slot" if slot_hour != hour
                else "renew the force command" if renew else "")
@@ -123,6 +124,11 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         if mode in ACTIVE:
             return Decision("self_use", reason="Battery Pilot control is off")
         return Decision("none", reason="shadow mode: control is off")
+    if force_shave and can_shave:
+        if mode != "peak_shave":
+            return Decision("peak_shave", reason="force peak shaving switch: the grid gives up to the import "
+                                                 "limit, the battery the rest, until the switch is turned off")
+        return Decision("none", reason="peak shaving: forced by the switch")
     # The car charges and the house asks more than the import limit: the grid gives up to the limit
     # and the battery only the rest, whatever the plan says. In self-use the battery would feed the
     # whole car, run empty and leave the full charge to the grid (a capacity peak). It stays so until
@@ -256,7 +262,8 @@ MODES = ("charge", "discharge", "self_use", "peak_shave", "solar_hold")
 
 
 def expected_modes(steps: list[Step], o: Options, tz, start_mode: str, can_shave: bool, car_kw: float = 0.0,
-                   fill: bool = False, now: datetime | None = None, amps: int = 0) -> list[tuple[str, str]]:
+                   fill: bool = False, now: datetime | None = None, amps: int = 0,
+                   force_shave: bool = False) -> list[tuple[str, str]]:
     """The inverter mode, and why, in each plan step: `decide` run over the plan, step by step, with the
     step's own house load, solar and SOC, the mode carried from one step to the next. The page shows
     this, so the chart follows the inverter's logic (bands, waits, the car, the fill switch) and not
@@ -272,7 +279,7 @@ def expected_modes(steps: list[Step], o: Options, tz, start_mode: str, can_shave
         r = Readings(t, t.astimezone(tz), s.soc_start, load, pv, net, net, v)
         d = decide(s, r, o, mode, t.astimezone(tz).strftime("%H:00:00"), amps, True,
                    (t - changed).total_seconds() if changed else 1e9,
-                   car_kw=car_kw if i == 0 else 0.0, can_shave=can_shave, fill=fill)
+                   car_kw=car_kw if i == 0 else 0.0, can_shave=can_shave, fill=fill, force_shave=force_shave)
         if d.command in MODES:
             if d.command != mode:
                 changed = t

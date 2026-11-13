@@ -56,8 +56,8 @@ async def history_day(request: web.Request):
     return web.json_response(doc, dumps=_dumps)
 
 
-async def car_fill(request: web.Request):
-    """The page's button: turn the "fill the battery for the car" helper on or off."""
+async def _switch(request: web.Request, setter: str):
+    """A page button that turns a Battery Pilot helper on or off."""
     try:
         on = (await request.json())["on"]
     except Exception:  # noqa: BLE001
@@ -65,10 +65,20 @@ async def car_fill(request: web.Request):
     if not isinstance(on, bool):
         raise web.HTTPBadRequest(text='Expected {"on": true} or {"on": false}.')
     try:
-        await request.app[APP_KEY].set_fill(on)
+        await getattr(request.app[APP_KEY], setter)(on)
     except Exception as e:  # noqa: BLE001
         raise web.HTTPBadGateway(text=f"Home Assistant did not take the change: {e}") from e
     return web.json_response({"on": on})
+
+
+async def car_fill(request: web.Request):
+    """The page's button: turn the "fill the battery for the car" helper on or off."""
+    return await _switch(request, "set_fill")
+
+
+async def force_shave(request: web.Request):
+    """The page's button: turn the "force peak shaving" helper on or off."""
+    return await _switch(request, "set_force_shave")
 
 
 async def settings_export(request: web.Request):
@@ -129,6 +139,7 @@ def make_web(app, allowed_ips: set[str] | None = None) -> web.Application:
     w.router.add_get("/api/history", history_index)
     w.router.add_get("/api/history/{day}", history_day)
     w.router.add_post("/api/car_fill", car_fill)
+    w.router.add_post("/api/force_shave", force_shave)
     w.router.add_get("/api/settings", settings_export)
     w.router.add_post("/api/settings/check", settings_check)
     w.router.add_post("/api/settings", settings_import)

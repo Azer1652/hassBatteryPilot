@@ -6,7 +6,7 @@ run empty and leave the whole charge to the grid (a capacity peak), and the sess
 learned as "usual consumption".
 
 The rest of the app sees a `CarState` and nothing else. Where it comes from is a *source*, an
-object with `update(now, load_kw, charger_kw) -> CarState`:
+object with `update(now, load_kw, charger_kw, usual_kw) -> CarState`:
 
 * `LoadStepSource`    - no integration: a jump in house consumption that stays is the car;
 * `ChargerPowerSource` - a power sensor of the charger, when Home Assistant has one.
@@ -48,7 +48,11 @@ IDLE = CarState()
 class NoCar:
     """Car detection is off."""
 
-    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None) -> CarState:
+    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None,
+               usual_kw: float | None = None) -> CarState:
+        return IDLE
+
+    def resume(self, baseline: float | None, power_kw: float) -> CarState:
         return IDLE
 
 
@@ -58,7 +62,8 @@ class ChargerPowerSource:
     def __init__(self):
         self.state, self.seen = IDLE, None
 
-    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None) -> CarState:
+    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None,
+               usual_kw: float | None = None) -> CarState:
         if charger_kw is None:           # a short gap keeps the last state
             if self.seen is None or now - self.seen >= LOST_AFTER:
                 self.state = IDLE
@@ -67,11 +72,20 @@ class ChargerPowerSource:
         self.state = CarState(True, round(charger_kw, 3)) if charger_kw >= CHARGER_ON_KW else IDLE
         return self.state
 
+    def resume(self, baseline: float | None, power_kw: float) -> CarState:
+        """A session that ran before a restart (the next reading says whether it still does)."""
+        self.state = CarState(True, power_kw)
+        return self.state
+
 
 class LoadStepSource:
     """The car seen in the house consumption: at least `min_kw` more than the house used just
     before, for three minutes. Its power is what the house uses above that level. A long burst
-    of the hob or oven can pass for a car; the worst that happens is peak shaving while cooking."""
+    of the hob or oven can pass for a car; the worst that happens is peak shaving while cooking.
+
+    With no reading of the house before (just started, or after a gap in the readings) there is
+    nothing to jump from: a car that already charges would become the baseline and never be seen.
+    Then the house's usual consumption for this hour (`usual_kw`, learned) is the level instead."""
 
     def __init__(self, min_kw: float):
         self.min_kw = min_kw
@@ -85,7 +99,8 @@ class LoadStepSource:
     def _level(self) -> float | None:
         return statistics.median(v for _, v in self.samples) if self.samples else None
 
-    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None) -> CarState:
+    def update(self, now: datetime, load_kw: float | None, charger_kw: float | None = None,
+               usual_kw: float | None = None) -> CarState:
         if load_kw is None:
             if self.seen is None or now - self.seen >= LOST_AFTER:
                 self._end()
@@ -103,6 +118,8 @@ class LoadStepSource:
             self.state = CarState(True, round(max(load_kw - self.baseline, 0.0), 3))
             return self.state
         level = self._level()
+        if level is None and usual_kw is not None:
+            level = usual_kw
         if level is not None and load_kw >= level + self.min_kw:
             self.above_since = self.above_since or now      # (not added to the samples: it may be the car)
             if now - self.above_since >= START_AFTER:
@@ -113,6 +130,15 @@ class LoadStepSource:
         self.samples.append((now, load_kw))
         while self.samples and now - self.samples[0][0] > BASELINE_WINDOW:
             self.samples.popleft()
+        return self.state
+
+    def resume(self, baseline: float | None, power_kw: float) -> CarState:
+        """A session that ran before a restart: it goes on from the house level it began at."""
+        if baseline is None:
+            return self.state
+        self.baseline, self.below_since, self.above_since = baseline, None, None
+        self.samples.clear()
+        self.state = CarState(True, power_kw)
         return self.state
 
     def _end(self):

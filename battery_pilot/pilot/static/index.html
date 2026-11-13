@@ -137,6 +137,10 @@
       <button id="fillbtn" type="button" aria-pressed="false">Fill the battery for the car</button>
       <p class="muted" id="fillnote"></p>
     </div>
+    <div class="fill">
+      <button id="shavebtn" type="button" aria-pressed="false">Force peak shaving</button>
+      <p class="muted" id="shavenote"></p>
+    </div>
     <p class="muted" id="effnote"></p>
   </div>
 
@@ -519,6 +523,39 @@ async function toggleFill() {
   }
   b.disabled = false;
   setTimeout(refresh, 1500);
+}
+
+// The "force peak shaving" switch: a manual override that stays until it is turned off.
+let s_mode = "shadow";        // control on ("active") or off ("shadow"), from the last status
+function shaveNote(f) {
+  if (!f || !f.on) return "Keeps the inverter in peak shaving whatever the plan says: the grid gives up to the import " +
+    "limit, the battery only the rest. Stays on until you turn it off.";
+  if (!f.can_shave) return "On, but the inverter's peak-shaving switch was not found: no effect.";
+  if (s_mode !== "active") return "On, but Battery Pilot control is off: nothing is sent to the inverter.";
+  return f.active ? "On: the inverter is peak shaving until you turn this off." : "On: switching the inverter to peak shaving.";
+}
+
+
+async function toggleShave() {
+  const b = $("shavebtn"), on = b.getAttribute("aria-pressed") !== "true";
+  b.disabled = true;
+  try {
+    const r = await fetch("api/force_shave", {method: "POST", headers: {"Content-Type": "application/json"},
+                                              body: JSON.stringify({on})});
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    renderShave({on, can_shave: true, active: false});
+  } catch (e) {
+    $("shavenote").textContent = `Could not change the switch: ${e.message || e}`;
+  }
+  b.disabled = false;
+  setTimeout(refresh, 1500);
+}
+
+function renderShave(f) {
+  const on = !!(f && f.on);
+  $("shavebtn").setAttribute("aria-pressed", on);
+  $("shavebtn").textContent = on ? "Stop forced peak shaving" : "Force peak shaving";
+  $("shavenote").textContent = shaveNote(f);
 }
 
 function renderFill(c) {
@@ -1165,6 +1202,7 @@ function goDay(d) {
 }
 $("hprev").addEventListener("click", () => goDay(-1));
 $("fillbtn").addEventListener("click", toggleFill);
+$("shavebtn").addEventListener("click", toggleShave);
 
 // ---------------------------------------------------------------- settings: export and import
 const setNote = (t) => { $("setnote").textContent = t; };
@@ -1270,6 +1308,8 @@ let render = function (s) {
   $("carnote").textContent = carNote(s.car);
   $("carcover").innerHTML = carCover(s.car);       // (numbers and fixed text only)
   renderFill(s.car);
+  s_mode = s.mode;
+  renderShave(s.force_shave);
   const t = s.plan && s.plan.targets && s.plan.targets[0];
   const note = !t || t.forecast === false ? "" : !t.winter
     ? `Enough sun ahead (${t.solar_kwh} kWh after shade): no winter night charging.`

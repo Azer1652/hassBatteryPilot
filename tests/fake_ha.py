@@ -80,6 +80,7 @@ class FakeHA:
             s["input_boolean.battery_pilot_control"] = st("off")
             s["input_boolean.battery_pilot_block_negative_export"] = st("off")
             s["input_boolean.battery_pilot_fill_battery_for_car"] = st("off")
+            s["input_boolean.battery_pilot_force_peak_shaving"] = st("off")
         self.s = s
         self.helpers_created: list[str] = []
         self.advance(timedelta(0))

@@ -19,7 +19,7 @@ from .config import ConfigError, Options
 from .controller import ACTIVE, FILL_AGAIN, MODES, Decision, Readings, decide, expected_modes
 from .discovery import ENTITIES, NEEDED_FOR, SLOT_ONLY, charge_method, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
-from .helpers import CAR_FILL, CONTROL, CURTAIL, ensure_helpers
+from .helpers import CAR_FILL, CONTROL, CURTAIL, FORCE_SHAVE, ensure_helpers
 from .load import LoadProfile
 from .meter import MAX_GAP, PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from .migrate import migrate
@@ -43,6 +43,7 @@ RECORD_DAYS = 3
 BLIND_S = 60          # without SOC or grid import this long, a charge or discharge is stopped
 HELPER_GRACE_S = 60   # a helper switch that cannot be read keeps its last state this long
 FILL_MAX_H = 24       # the fill switch turns itself off this long after it was turned on
+CAR_RESUME_MAX = timedelta(minutes=15)   # a car session saved at a stop goes on after a restart this soon
 FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging at a real current is stale
 CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
 TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
@@ -108,6 +109,7 @@ class App:
         self.control_on = False
         self.curtail_on = False
         self.fill_on = False              # the "fill the battery for the car" helper
+        self.force_shave_on = False       # the "force peak shaving" helper (until turned off by hand)
         self.fill_since = ""              # when it was turned on (UTC, ISO; persisted)
         self._fill_done = False           # a car session ended: the helper is turned off at this tick
         self.curtailed_by_us = False      # we set the export limit to 0 (persisted)
@@ -120,6 +122,7 @@ class App:
         self._car_t: datetime | None = None
         self._car_session: tuple[datetime, float] | None = None    # (start, kWh so far)
         self._car_floor: float | None = None      # the SOC the car may take the battery down to (session running)
+        self._car_saved: dict | None = None       # a session that ran when the app stopped (resumed in setup)
         self.trading: dict = {}           # what trading would earn in the coming hours, per contract (display)
         self.boost_seen: dict = {}        # the boost window last announced in the events (persisted)
         self.over_since: datetime | None = None
@@ -195,6 +198,7 @@ class App:
                 "export_limit_before": s.get("export_limit_before"),
                 "day_logs": dict(s.get("day_logs") or {}), "boost_seen": dict(s.get("boost_seen") or {}),
                 "winter_days": {date.fromisoformat(k): bool(v) for k, v in (s.get("winter_days") or {}).items()},
+                "_car_saved": s.get("car_session") if isinstance(s.get("car_session"), dict) else None,
             }
             if s.get("load_default_kw"):
                 loaded["load"].default_kw = float(s["load_default_kw"])
@@ -230,7 +234,7 @@ class App:
              "export_limit_before": self.export_limit_before, "day_logs": self.day_logs,
              "boost_seen": self.boost_seen, "whole_day_averages": True,
              "efficiency": self.efficiency.to_json(), "car_months": self.car_months,
-             "fill_since": self.fill_since,
+             "fill_since": self.fill_since, "car_session": self._car_session_json(),
              "winter_days": {d.isoformat(): v for d, v in self.winter_days.items()}}
         write_json(self.state_file, s)
 
@@ -295,6 +299,7 @@ class App:
             return False
         self.ent_ids = {k: f.entity_id for k, f in self.ents.items() if f.entity_id}
         self.car = C.make_source(self.o, self.ent_ids)
+        self._resume_car()
         self.notify, how = find_notify(self.o, services)
         log.info("  %-8s notify: %s (%s)", "ok" if self.notify else "check", self.notify or "-", how)
         if not self.ent_ids.get("price_sensor") and self.o.fixed_sell_mult != 0:
@@ -403,10 +408,11 @@ class App:
                 "car_charger_power")
         sts = await self._states(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
-                                       return_exceptions=True)
+                                       self.ha.state(FORCE_SHAVE), return_exceptions=True)
         self.control_on = self._helper("control", helpers[0], self.control_on, now)
         self.curtail_on = self._helper("curtail", helpers[1], self.curtail_on, now)
         self.fill_on = self._helper("fill", helpers[2], self.fill_on, now)
+        self._force_shave_changed(self._helper("force_shave", helpers[3], self.force_shave_on, now))
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
         soc = self._num(sts.get("battery_soc"))
@@ -441,6 +447,7 @@ class App:
                                    (now - self._cmd_at).total_seconds() if self._cmd_at else 1e9,
                                    car_kw=self.car_state.power_kw if self.car_state.charging else 0.0,
                                    can_shave=self.can_peak_shave, fill=self.fill_on,
+                                   force_shave=self.force_shave_on,
                                    renew=self.solis.renew_due(now))
             if (self.decision.command == "none" and self.control_on and self.solis.mode == "peak_shave"
                     and self.solis.shave_set and self.solis.shave_set[1] != self.shave_level):
@@ -478,7 +485,8 @@ class App:
             if self._car_session:
                 self._car_session = (self._car_session[0], self._car_session[1] + kwh)
         self._car_t = now
-        self.car_state = self.car.update(now, load_kw, charger_kw)
+        local = now.astimezone(self.tz)
+        self.car_state = self.car.update(now, load_kw, charger_kw, usual_kw=self.load.kw_at(local.weekday(), local.hour))
         if self.car_state.charging and not was.charging:
             self._car_session = (now, 0.0)
             self._car_floor = self.car_floor(soc)
@@ -491,6 +499,35 @@ class App:
             self._car_session = None
             self._car_floor = None
             self._fill_done = True
+
+    def _car_session_json(self) -> dict | None:
+        """The running car session, saved so a restart of the app does not lose it."""
+        if not (self.car_state.charging and self._car_session):
+            return None
+        return {"start": self._car_session[0].isoformat(), "kwh": round(self._car_session[1], 3),
+                "power_kw": self.car_state.power_kw, "floor": self._car_floor,
+                "baseline": getattr(self.car, "baseline", None), "saved": self.clock().isoformat()}
+
+    def _resume_car(self):
+        """A car that charged when the app stopped still charges, most likely: go on with that session
+        (from the house level it began at) rather than wait for a jump that will not come."""
+        saved, self._car_saved = self._car_saved, None
+        if not saved:
+            return
+        try:
+            start, at = datetime.fromisoformat(saved["start"]), datetime.fromisoformat(saved["saved"])
+            if not timedelta(0) <= self.clock() - at <= CAR_RESUME_MAX:
+                return
+            state = self.car.resume(saved.get("baseline"), float(saved.get("power_kw") or 0.0))
+        except (KeyError, TypeError, ValueError):
+            return
+        if not state.charging:
+            return
+        self.car_state = state
+        self._car_session = (start, float(saved.get("kwh") or 0.0))
+        self._car_floor = saved.get("floor")
+        self._car_t = None
+        self.event(f"Car charging continues after the restart (about {state.power_kw:.1f} kW).")
 
     async def _fill(self, now: datetime):
         """The "fill the battery for the car" switch: note when it went on, and turn it off when the
@@ -523,6 +560,27 @@ class App:
         await self.ha.call("input_boolean", "turn_on" if on else "turn_off", {"entity_id": CAR_FILL})
         self.fill_on = on
         self._helper_seen["fill"] = self.clock()
+
+    def _force_shave_changed(self, on: bool):
+        """The "force peak shaving" switch: peak shaving until it is turned off (it never turns itself off)."""
+        was, self.force_shave_on = self.force_shave_on, on
+        if on == was:
+            return
+        if not on:
+            self.event("Force peak shaving: off; the plan is followed again.")
+        elif not self.can_peak_shave:
+            self.event("Force peak shaving: on, but the inverter's peak-shaving switch was not found; "
+                       "it has no effect.", logging.WARNING)
+        else:
+            self.event("Force peak shaving: on. The grid gives up to the import limit and the battery the rest, "
+                       "until you turn it off" + ("." if self.control_on else
+                                                  ", once Battery Pilot control is on."))
+
+    async def set_force_shave(self, on: bool):
+        """Turn the force peak shaving helper on or off (the page's button)."""
+        await self.ha.call("input_boolean", "turn_on" if on else "turn_off", {"entity_id": FORCE_SHAVE})
+        self._helper_seen["force_shave"] = self.clock()
+        self._force_shave_changed(on)
 
     def _helper(self, name: str, st, last: bool, now: datetime) -> bool:
         """A helper switch's state; a read that fails keeps the last known state for a minute."""
@@ -927,7 +985,7 @@ class App:
         start = live if live in MODES else "self_use"
         car = self.car_state.power_kw if self.car_state.charging else 0.0
         modes = expected_modes(p.steps, self.o, self.tz, start, self.can_peak_shave, car, self.fill_on, now,
-                               self.solis.amps if self.solis else 0)
+                               self.solis.amps if self.solis else 0, force_shave=self.force_shave_on)
         for s, (mode, why) in zip(p.steps, modes):
             s.mode, s.why = mode, why
         first = p.steps[0]
@@ -1205,6 +1263,9 @@ class App:
         return {
             "version": self.version, "now": now.isoformat(), "tz": str(self.tz), "problem": self.problem,
             "mode": "active" if self.control_on else "shadow", "contract": self.o.contract,
+            "force_shave": {"on": self.force_shave_on, "can_shave": self.can_peak_shave,
+                            "active": bool(self.force_shave_on and self.control_on and self.solis
+                                           and self.solis.mode == "peak_shave")},
             "readings": None if r is None else {"soc": r.soc, "load_kw": round(r.load_kw, 3), "pv_kw": round(r.pv_kw, 3),
                                                 "import_kw": round(r.import_kw, 3), "projection_kw": round(r.projection_kw, 2)},
             "decision": {"command": self.decision.command, "amps": self.decision.amps, "reason": self.decision.reason},

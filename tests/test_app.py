@@ -111,7 +111,8 @@ async def test_helpers_are_created_when_missing(tmpdata):
     app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
     assert set(fake.helpers_created) == {CONTROL, "input_boolean.battery_pilot_block_negative_export",
-                                         "input_boolean.battery_pilot_fill_battery_for_car"}
+                                         "input_boolean.battery_pilot_fill_battery_for_car",
+                                         "input_boolean.battery_pilot_force_peak_shaving"}
 
 
 async def test_takes_over_from_battery_playbook(tmp_path, tmpdata):

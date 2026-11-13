@@ -1,4 +1,4 @@
-"""The three switches the user controls, created as normal HA helpers.
+"""The four switches the user controls, created as normal HA helpers.
 
 They are UI helpers (Settings > Devices & services > Helpers), created over
 the websocket API: no YAML, no configuration.yaml change, no restart, and
@@ -13,10 +13,12 @@ log = logging.getLogger(__name__)
 CONTROL = "input_boolean.battery_pilot_control"
 CURTAIL = "input_boolean.battery_pilot_block_negative_export"
 CAR_FILL = "input_boolean.battery_pilot_fill_battery_for_car"
+FORCE_SHAVE = "input_boolean.battery_pilot_force_peak_shaving"
 HELPERS = (
     (CONTROL, "Battery Pilot control", "mdi:battery-sync"),
     (CURTAIL, "Battery Pilot block negative export", "mdi:transmission-tower-off"),
     (CAR_FILL, "Battery Pilot fill battery for car", "mdi:car-electric"),
+    (FORCE_SHAVE, "Battery Pilot force peak shaving", "mdi:transmission-tower-import"),
 )
 
 
