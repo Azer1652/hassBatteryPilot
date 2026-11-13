@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.17.1
+
+- The winter level (*Winter: keep the battery at*) is let go on the evening of a dull day
+  followed by a day with enough sun, from *Night start*: tomorrow's sun refills the battery, so
+  what was kept would only push solar to the grid. When tomorrow is not forecast yet, or is dull
+  too, the level stays as before.
+
 ## 2.17.0
 
 **The car is seen after a restart; a switch to force peak shaving.**
