@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.17.2
+
+- No more gap in the plan when it is redone in the last minute of an hour. The new plan began at
+  the next hour, so for those seconds there was no step: the log showed *self-use (no plan)* at
+  xx:59, and with the winter level peak shaving only came back 15 minutes later (xx:14), the
+  battery feeding the house in between. A plan now always starts at the moment it is made; those
+  seconds belong to the next slot, at its price.
+
 ## 2.17.1
 
 - The winter level (*Winter: keep the battery at*) is let go on the evening of a dull day

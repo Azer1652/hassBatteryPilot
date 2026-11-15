@@ -409,15 +409,20 @@ PvFn = Callable[[datetime, datetime], float]     # corrected solar kWh between t
 
 
 def slot_grid(now: datetime, end: datetime, tz: ZoneInfo, minutes: int) -> list[tuple[datetime, datetime]]:
-    """Slots from now to end, aligned to `minutes` in local time; the first one is partial."""
+    """Slots from now to end, aligned to `minutes` in local time; the first one is partial. The plan
+    has no gap: the first slot always starts at `now`. Less than a minute before a boundary, that
+    minute goes into the next slot (a plan that started at the boundary left the controller with
+    no step for those seconds: self-use, then 15 minutes before the winter level came back)."""
     local = now.astimezone(tz)
     floor = local.replace(minute=(local.minute // minutes) * minutes, second=0, microsecond=0)
     out = []
     t = now
     nxt = (floor + timedelta(minutes=minutes)).astimezone(timezone.utc)
+    if (nxt - now).total_seconds() < 60 and nxt + timedelta(minutes=minutes) <= end:
+        nxt += timedelta(minutes=minutes)
     while t < end:
         stop = min(nxt, end)
-        if (stop - t).total_seconds() >= 60:
+        if not out or (stop - t).total_seconds() >= 60:      # (a last few seconds at the horizon: left out)
             out.append((t, stop))
         t, nxt = stop, nxt + timedelta(minutes=minutes)
     return out
@@ -529,8 +534,9 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
         minutes = 15
     slots: list[Slot] = []
     for t0, t1 in slot_grid(now, end, tz, minutes):
-        market, _known = market_at(price_slots, t0)
-        mid_local = (t0 + (t1 - t0) / 2).astimezone(tz)
+        mid = t0 + (t1 - t0) / 2       # (a first slot can begin seconds before its price slot)
+        market, _known = market_at(price_slots, mid)
+        mid_local = mid.astimezone(tz)
         h = (t1 - t0).total_seconds() / 3600
         slots.append(Slot(t0, h, load_kwh(t0, t1), pv_kwh(t0, t1), tariff.buy(mid_local, market),
                           tariff.sell(mid_local, market, market_avg), market,

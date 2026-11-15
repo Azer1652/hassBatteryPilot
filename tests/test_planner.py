@@ -893,3 +893,19 @@ def test_the_simulator_exports_all_surplus_in_solar_hold():
     assert r.charge_dc_kwh == 0 and r.export_kwh == pytest.approx(2.5) and r.soc == 50
     r = step(B, 50, "solar_hold", 0, 1.0, 0.2, 1.0)                    # a deficit: as in self-use
     assert r.discharge_dc_kwh == pytest.approx(0.8 / B.eta_d) and r.import_kwh == pytest.approx(0)
+
+
+def test_a_plan_made_in_the_last_minute_before_a_boundary_starts_now():
+    """No gap: the seconds before the boundary belong to the next slot, at that slot's price."""
+    at = lambda h, m, s=0: datetime(2026, 6, 14, h, m, s, tzinfo=BXL).astimezone(timezone.utc)   # noqa: E731
+    prices = _prices(lambda t: 300 if t.hour == 15 else 50, minutes=15)
+    o = Options(contract="dynamic")
+    for now in (at(14, 59, 30), at(14, 44, 1), at(14, 59, 59)):
+        plan = make_plan(now, BXL, o, DynamicTariff(o), prices, _flat_load(0.5), lambda a, b: 0.0, soc=50,
+                         market_avg=90)
+        assert plan.steps[0].start == now and plan.step_at(now) is plan.steps[0]
+        for a, z in zip(plan.steps, plan.steps[1:]):
+            assert a.start + timedelta(hours=a.hours) == z.start                 # contiguous
+    first = plan.steps[0]                                                        # made at 14:59:59
+    assert first.start + timedelta(hours=first.hours) >= at(15, 15)
+    assert first.buy == pytest.approx(DynamicTariff(o).buy(at(15, 7).astimezone(BXL), 300))    # 15:00's price

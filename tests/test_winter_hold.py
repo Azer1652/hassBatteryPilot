@@ -224,3 +224,23 @@ def test_the_replay_keeps_the_level():
            for o in (Options(battery_min_soc=10), OPTS)}
     assert out[50]["soc_end"] == pytest.approx(50, abs=1) and out[0]["soc_end"] < 45
     assert out[50]["grid_charged"] == pytest.approx(0, abs=0.05)
+
+
+@pytest.mark.slow
+async def test_a_replan_in_the_last_minute_of_an_hour_leaves_no_gap(tmp_path):
+    """Seen on a real install: a replan at xx:59:xx made a plan that began at the next hour, so for
+    those seconds there was no step ("self-use (no plan)") and the winter level came back 15 min later."""
+    fake = FakeHA(utc(2026, 1, 14, 17, 4, 30), soc=48, load=lambda t: 0.8, pv=lambda t: 0.0, peak_shaving=True)
+    fake.s[CONTROL]["state"] = "on"
+    app = App(OPTS, fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    gaps = []
+    while fake.now < utc(2026, 1, 14, 20, 0):          # replans at xx:04:30 ... xx:59:30
+        await app.step()
+        if app.plan and app.plan.step_at(fake.now) is None:
+            gaps.append(fake.now)
+        fake.advance(timedelta(seconds=30))
+    assert not gaps
+    commands = [e["command"] for e in app.solis.log]
+    assert not any("no plan" in c for c in commands), commands
+    assert app.solis.mode == "peak_shave"

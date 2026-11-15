@@ -32,6 +32,9 @@ Things that cost time before. Read once.
   branch is unreachable when the plan labels the step peak shaving.
 - `Battery.from_options` is called everywhere without knowing which inverter switches exist, so
   an option that needs a switch is gated in `App.setup`, not in the default.
+- A plan must start at `now` (`slot_grid`): a `Plan.step_at(now)` of None makes the controller
+  go to self-use ("no plan"), and the winter level then waits 15 min to come back. Price a slot by
+  its middle, not its start: the first slot can begin seconds before its price slot.
 
 ## Home Assistant and the Supervisor
 
