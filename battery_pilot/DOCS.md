@@ -508,6 +508,11 @@ at an extreme price.
 - **Someone else changes the inverter:** while *Battery Pilot control* is on, the
   time-of-use switch is read back every tick and corrected if something else changed it.
   With control off, your own settings are never touched.
+- **Home Assistant restarts:** no command can reach the inverter then, so it keeps its
+  setting (a force command or a time-of-use slot ends by itself). The log shows one line when
+  Home Assistant goes away and one when it is back; Battery Pilot then sends its command again
+  and reads prices and the forecast. A sensor that stays unavailable a minute after the restart
+  is handled as above.
 - **The forecast or prices are unavailable:** it keeps planning with the last solar
   forecast and prices it received. Quarter-hours without a market price are priced in
   the comparison with the price of the day before (marked † on the page).

@@ -44,6 +44,12 @@ Things that cost time before. Read once.
   and wants optional `str?` options left out when empty: see `settings._typed`.
 - The page runs inside the ingress iframe, also in the Companion app, where file downloads are
   unreliable. Offer the text as well.
+- A restart of Home Assistant looks like this from the app: entities go `unavailable` while it
+  shuts down, then the Supervisor proxy answers 502 for 20-60 s, then entities are `unavailable`
+  again while integrations load. `HA` raises `HAUnreachable` (502/503/504, connection errors) for
+  the 502 part; `App.tick` waits it out without commands (`_ha_away` / `_ha_back`). Catch
+  `HAUnreachable` before a generic `except` where an ERROR or WARNING would be logged.
+  `FakeHA.away = True` simulates it.
 - The add-on linter in CI rejects unknown or deprecated keys in `config.yaml` (`watchdog`).
 
 ## The page

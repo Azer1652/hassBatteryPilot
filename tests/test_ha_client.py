@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from aiohttp import WSMsgType, web
 
-from pilot.ha import HA, HAError
+from pilot.ha import HA, HAError, HAUnreachable
 
 TOKEN = "secret"
 CALLS = web.AppKey("calls", list)
@@ -39,6 +39,10 @@ def make_app():
 
     async def service(request):
         auth(request)
+        if request.match_info["d"] == "restarting":           # the Supervisor proxy while HA restarts
+            return web.Response(status=502, text="502: Bad Gateway")
+        if request.match_info["d"] == "broken":
+            return web.Response(status=500, text="Internal Server Error")
         calls.append((request.match_info["d"], request.match_info["s"], await request.json()))
         return web.json_response([])
 
@@ -137,5 +141,18 @@ async def test_unreachable_home_assistant_is_reported(unused_tcp_port):
     try:
         assert not await ha.ping()
         assert ha.last_error.startswith("ClientConnectorError")
+        with pytest.raises(HAUnreachable):
+            await ha.state("sensor.x")
+        with pytest.raises(HAUnreachable):
+            await ha.ws({"type": "energy/solar_forecast"})
     finally:
         await ha.close()
+
+
+async def test_a_bad_gateway_is_home_assistant_restarting_and_other_errors_are_not(client):
+    ha, _ = client
+    with pytest.raises(HAUnreachable, match="HTTP 502"):
+        await ha.call("restarting", "x")
+    with pytest.raises(HAError, match="HTTP 500") as e:
+        await ha.call("broken", "x")
+    assert not isinstance(e.value, HAUnreachable)

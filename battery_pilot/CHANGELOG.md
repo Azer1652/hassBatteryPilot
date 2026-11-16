@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.17.3
+
+- **A Home Assistant restart is ridden out quietly.** While Home Assistant restarts, its API
+  answers *502 Bad Gateway* and the Solis Modbus integration is down with it, so no command can
+  reach the inverter. Battery Pilot used to count every reading as lost, try to put the inverter
+  in self-use (*ERROR Inverter command 'self_use' failed … 502*) and warn about the prices and
+  the solar forecast. Now it leaves the inverter as it is (a force command or a time-of-use slot
+  ends by itself), logs one line when Home Assistant goes away and one when it is back, sends
+  the current command again and reads prices and the forecast right away. Sensors that are still
+  loading just after the restart get a minute before a charge or discharge is stopped, and the
+  forecast two minutes before it is reported missing.
+
+- 
+
 ## 2.17.2
 
 - No more gap in the plan when it is redone in the last minute of an hour. The new plan began at

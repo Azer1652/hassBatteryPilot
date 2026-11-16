@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from pilot.ha import HAUnreachable
+
 TZ = ZoneInfo("Europe/Brussels")
 V = 51.2
 CAP = 16.0
@@ -88,8 +90,16 @@ class FakeHA:
     # ---------------------------------------------------------------- HA client interface
     ping_error: str | None = None        # set to make HA unreachable
     last_error: str | None = None
+    away = False                         # set: Home Assistant restarts (the Supervisor proxy answers 502)
+
+    def _check_away(self, what: str):
+        if self.away:
+            raise HAUnreachable(f"{what}: HTTP 502 502: Bad Gateway")
 
     async def ping(self):
+        if self.away:
+            self.last_error = "GET /: HTTP 502 502: Bad Gateway"
+            return False
         self.last_error = self.ping_error
         return self.ping_error is None
 
@@ -100,6 +110,7 @@ class FakeHA:
         return {k: {"entity_id": k, **v} for k, v in self.s.items()}
 
     async def state(self, eid):
+        self._check_away(f"GET /states/{eid}")
         v = self.s.get(eid)
         if v is not None and eid in self.override:
             v = {**v, "state": self.override[eid]}
@@ -120,6 +131,7 @@ class FakeHA:
         return out
 
     async def call(self, domain, service, data=None):
+        self._check_away(f"POST /services/{domain}/{service}")
         data = data or {}
         if self.fail and self.fail(domain, service, data):
             raise RuntimeError("Modbus timeout")
@@ -146,6 +158,7 @@ class FakeHA:
                 self.s[e]["state"] = "off"
 
     async def set_state(self, eid, state, attributes=None):
+        self._check_away(f"POST /states/{eid}")
         self.published[eid] = {"state": str(state), "attributes": attributes or {}}
 
     async def check_config(self):
@@ -155,6 +168,8 @@ class FakeHA:
         return {i: self.history_data[i] for i in ids if i in self.history_data}
 
     async def ws(self, *commands):
+        if self.away:
+            raise HAUnreachable("websocket: HTTP 502 Bad Gateway")
         out = []
         for c in commands:
             if c["type"] == "input_boolean/list":

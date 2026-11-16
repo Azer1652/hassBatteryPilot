@@ -18,6 +18,7 @@ update this file.
 | Fill switch | Charging to 100 % in the current clock hour and holding with peak shaving behaves as simulated. | `controller.fill_step` |
 | Saving settings | `POST /addons/self/options` on the Supervisor is allowed with `hassio_api: true` and accepts the merged options. | `App.save_options`, `HA.supervisor` |
 | Slots repeat daily | The Solis repeats a charge or discharge slot every day, so the app sets the current clock hour only and returns the inverter to self-use at a restart. | `solis.py`, `App` (`inverter.json`) |
+| Home Assistant restart | The inverter keeps its setting while Home Assistant restarts, and the Solis Modbus integration does not write registers when it loads. The owner's log (peak shaving before and after a 30-second restart) fits this; it is not confirmed. Battery Pilot sends its command again when HA is back either way. | `App._ha_away`, `App._ha_back` |
 | Blocking export | Setting the export-limit entity to 0 stops export at negative prices and the inverter throttles the panels. | `App._curtail` |
 | The page in the Companion app | Tabs, the file download and the file picker work inside the app's web view. | `static/index.html` |
 | ENTSO-e price list | The list is an attribute of the *Average electricity price* sensor (read from the integration's source, version 0.7.5). | `prices.py`, `App.refresh` |

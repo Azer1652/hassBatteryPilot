@@ -19,6 +19,7 @@ from .config import ConfigError, Options
 from .controller import ACTIVE, FILL_AGAIN, MODES, Decision, Readings, decide, expected_modes
 from .discovery import ENTITIES, NEEDED_FOR, SLOT_ONLY, charge_method, find_notify, resolve_all
 from .efficiency import EfficiencyMeter
+from .ha import HAUnreachable
 from .helpers import CAR_FILL, CONTROL, CURTAIL, FORCE_SHAVE, ensure_helpers
 from .load import LoadProfile
 from .meter import MAX_GAP, PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
@@ -48,6 +49,10 @@ FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging a
 CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
 TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
 CMD_PROBLEM = "The inverter does not accept commands"
+HA_BACK_GRACE_S = 120  # after Home Assistant comes back, integrations (forecast, Modbus) get this long to load
+HA_AWAY_PROBLEM = "waiting for Home Assistant (restarting?)"
+MODE_TEXT = {"charge": "charging", "discharge": "discharging", "self_use": "self-use",
+             "peak_shave": "peak shaving", "solar_hold": "solar hold"}
 HEALTH_S = 600        # the main loop must have gone round this recently (it sleeps 300 s between setup tries)
 
 
@@ -143,6 +148,9 @@ class App:
         self._shave_soc = float(opts.battery_min_soc)
         self._inverter_saved: dict | None = None
         self._forecast_out = False
+        self.ha_away_since: datetime | None = None   # Home Assistant does not answer since then (restart)
+        self.ha_back_at: datetime | None = None      # it last came back then
+        self._cmd_unreachable_told = False
         self._refresh_task: asyncio.Task | None = None
         self.alive_at = monotonic()            # last round of the main loop (the Docker health check)
         self._last = {"refresh": None, "save": None, "publish": None}
@@ -385,9 +393,51 @@ class App:
 
     # ---------------------------------------------------------------- reading HA
     async def _states(self, keys) -> dict[str, dict | None]:
+        return (await self._states_raw(keys))[0]
+
+    async def _states_raw(self, keys) -> tuple[dict[str, dict | None], bool]:
+        """The states, and whether every read failed because Home Assistant does not answer."""
         ids = [(k, self.ent_ids[k]) for k in keys if k in self.ent_ids]
         res = await asyncio.gather(*(self.ha.state(eid) for _, eid in ids), return_exceptions=True)
-        return {k: (r if isinstance(r, dict) else None) for (k, _), r in zip(ids, res)}
+        away = bool(res) and all(isinstance(r, HAUnreachable) for r in res)
+        return {k: (r if isinstance(r, dict) else None) for (k, _), r in zip(ids, res)}, away
+
+    def _in_ha_grace(self, now: datetime) -> bool:
+        """Home Assistant does not answer, or came back too recently for its integrations to be loaded."""
+        return self.ha_away_since is not None or (
+            self.ha_back_at is not None and (now - self.ha_back_at).total_seconds() < HA_BACK_GRACE_S)
+
+    def _ha_away(self, now: datetime):
+        """Home Assistant does not answer (a restart): no command can reach the inverter (the Solis
+        Modbus integration is down with it), so it keeps its setting; a force command or a
+        time-of-use slot lapses by itself. Wait, and say so once."""
+        if self.ha_away_since is None:
+            self.ha_away_since = now
+            mode = MODE_TEXT.get(self.solis.mode) if self.solis and self.control_on else None
+            keeps = f"the inverter keeps its current setting ({mode})" if mode else "the inverter keeps its setting"
+            self.event(f"Home Assistant does not answer (restarting?): {keeps} until it is back.")
+        self.readings = None
+        self.decision = Decision("none", reason="Home Assistant does not answer")
+        if not self.problem:
+            self.problem = HA_AWAY_PROBLEM
+
+    def _ha_back(self, now: datetime):
+        """Home Assistant answers again: start the blind minute afresh (its integrations are still
+        loading), send the current command again and read prices and the forecast again."""
+        gone = (now - self.ha_away_since).total_seconds()
+        self.ha_away_since, self.ha_back_at = None, now
+        self._cmd_unreachable_told = False
+        self.event(f"Home Assistant is back after {gone:.0f} s.")
+        if self.problem == HA_AWAY_PROBLEM:
+            self.problem = None
+        self.seen_at = now
+        for name in self._helper_seen:
+            self._helper_seen[name] = now
+        if self.solis and self.solis.mode in ACTIVE:
+            # what the inverter does after a restart is not known for sure: the next tick sends it again
+            self.solis.mode = "failed"
+            self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
+        self._last["refresh"] = None
 
     @staticmethod
     def _num(st: dict | None) -> float | None:
@@ -406,9 +456,14 @@ class App:
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_soc",
                 "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
                 "car_charger_power")
-        sts = await self._states(keys)
+        sts, away = await self._states_raw(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
                                        self.ha.state(FORCE_SHAVE), return_exceptions=True)
+        if away and all(isinstance(h, HAUnreachable) for h in helpers):
+            self._ha_away(now)
+            return
+        if self.ha_away_since is not None:
+            self._ha_back(now)
         self.control_on = self._helper("control", helpers[0], self.control_on, now)
         self.curtail_on = self._helper("curtail", helpers[1], self.curtail_on, now)
         self.fill_on = self._helper("fill", helpers[2], self.fill_on, now)
@@ -679,12 +734,19 @@ class App:
                 await self.solis.peak_shave(local, self.o.import_limit_kw, self.shave_level)
             else:
                 await self.solis.self_use(local, d.reason)
-            self._cmd_failures = 0
+            self._cmd_failures, self._cmd_unreachable_told = 0, False
             if self.problem and self.problem.startswith(CMD_PROBLEM):
                 self.problem = None
         except Exception as e:  # noqa: BLE001
             self.solis.mode = "failed"        # its state is not known: the next tick sends the command again
             self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
+            if isinstance(e, HAUnreachable):  # Home Assistant went away mid-command: not the inverter's fault
+                if not self._cmd_unreachable_told:
+                    self._cmd_unreachable_told = True
+                    self.event(f"Inverter command '{d.command}' not sent: Home Assistant does not answer "
+                               "(restarting?); it is sent again when it is back.")
+                self._save_inverter()
+                return
             self._cmd_failures += 1
             now, key = self.clock(), "cmdfail:" + d.command
             last = self._last.get(key)
@@ -807,6 +869,8 @@ class App:
                                "price_sensor to the sensor that has the list; for ENTSO-e that is "
                                "'Average electricity price'.", logging.WARNING)
                 self.price_slots = P.merge(self.price_slots, new, now - timedelta(days=RECORD_DAYS))
+            except HAUnreachable as e:        # a restart: the known prices are kept, read again when it is back
+                log.debug("prices not read: %s", e)
             except Exception as e:  # noqa: BLE001
                 self.event(f"Reading prices failed: {e}", logging.WARNING)
             self._update_daily_market(now)
@@ -850,7 +914,8 @@ class App:
             # received rather than with no sun at all, which would make every night a winter night.
             hourly = {t: v for t, v in ((datetime.fromisoformat(k), v) for k, v in self.forecast_archive.items())
                       if t >= now - timedelta(hours=1)}
-            if hourly and not self._forecast_out:
+            # (right after a restart of Home Assistant the forecast integration is still loading)
+            if hourly and not self._forecast_out and not self._in_ha_grace(now):
                 self._forecast_out = True
                 self.event("The solar forecast is unavailable; planning with the last one received.",
                            logging.WARNING)
@@ -1409,7 +1474,10 @@ class App:
         last = self._last.get("error:" + text)
         if last is None or (now - last).total_seconds() >= 300:
             self._last["error:" + text] = now
-            self.event(f"Error: {text}", logging.ERROR)
+            if isinstance(e, HAUnreachable):  # a restart of Home Assistant: waited out, not an error
+                self.event(f"Home Assistant does not answer: {e}")
+            else:
+                self.event(f"Error: {text}", logging.ERROR)
             log.debug("main loop", exc_info=e)
 
     async def shutdown(self):

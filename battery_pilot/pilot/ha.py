@@ -16,6 +16,14 @@ class HAError(Exception):
     pass
 
 
+class HAUnreachable(HAError):
+    """Home Assistant itself does not answer (restarting, stopped): the Supervisor proxy gives
+    502/503/504 or the connection fails. Not a missing entity or a refused service call."""
+
+
+UNREACHABLE_HTTP = (502, 503, 504)
+
+
 class HA:
     def __init__(self, api_url: str, ws_url: str, token: str, session: aiohttp.ClientSession | None = None,
                  supervisor_url: str | None = None):
@@ -43,14 +51,18 @@ class HA:
 
     async def _request(self, method: str, path: str, body=None, timeout: float = 30, base: str | None = None):
         url = (base or self.api) + path
-        async with self.session.request(method, url, json=body, headers=self._headers,
-                                        timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            if r.status >= 400:
-                text = await r.text()
-                raise HAError(f"{method} {path}: HTTP {r.status} {text[:200]}")
-            if r.content_type == "application/json":
-                return await r.json()
-            return await r.text()
+        try:
+            async with self.session.request(method, url, json=body, headers=self._headers,
+                                            timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                if r.status >= 400:
+                    text = await r.text()
+                    kind = HAUnreachable if r.status in UNREACHABLE_HTTP else HAError
+                    raise kind(f"{method} {path}: HTTP {r.status} {text[:200]}")
+                if r.content_type == "application/json":
+                    return await r.json()
+                return await r.text()
+        except (TimeoutError, aiohttp.ClientConnectionError) as e:
+            raise HAUnreachable(f"{method} {path}: {type(e).__name__}: {e}".rstrip(": ")) from e
 
     async def supervisor(self, method: str, path: str, body=None):
         """A call to the Supervisor itself (the app's own settings), not to Home Assistant."""
@@ -63,6 +75,7 @@ class HA:
         try:
             await self._request("GET", "/", timeout=10)
         except Exception as e:  # noqa: BLE001 - any failure means "not ready"
+            e = e.__cause__ or e                # (a connection error wrapped in HAUnreachable)
             text = str(e)
             self.last_error = text if isinstance(e, HAError) else f"{type(e).__name__}: {text}".rstrip(": ")
             return False
@@ -119,6 +132,16 @@ class HA:
     # ---------------------------------------------------------------- websocket
     async def ws(self, *commands: dict) -> list:
         """Run websocket commands in one short connection; returns their results in order."""
+        try:
+            return await self._ws(commands)
+        except aiohttp.WSServerHandshakeError as e:
+            if e.status in UNREACHABLE_HTTP:
+                raise HAUnreachable(f"websocket: HTTP {e.status} {e.message}") from e
+            raise
+        except (TimeoutError, aiohttp.ClientConnectionError) as e:
+            raise HAUnreachable(f"websocket: {type(e).__name__}: {e}".rstrip(": ")) from e
+
+    async def _ws(self, commands: tuple[dict, ...]) -> list:
         results = []
         async with self.session.ws_connect(self.ws_url, heartbeat=30) as ws:
             msg = await ws.receive_json(timeout=10)
