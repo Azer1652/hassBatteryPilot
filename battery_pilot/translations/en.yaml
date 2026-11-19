@@ -137,6 +137,9 @@ configuration:
   pv_power:
     name: "Solar power entity"
     description: "Leave empty to find it automatically. Needed to learn tree shade."
+  battery_power:
+    name: "Battery power entity"
+    description: "Leave empty to find it automatically (Battery Power Net: + discharging, - charging). Used to measure the inverter's own use."
   battery_soc:
     name: "Battery SOC entity"
     description: "Leave empty to find it automatically."

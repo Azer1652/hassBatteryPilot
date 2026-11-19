@@ -15,6 +15,8 @@ ENTITIES = {
     "grid_export_power": ("sensor", [r"grid_export_power", r"(?<!limit_)export_power$"], False, True),
     "house_load_power": ("sensor", [r"household_load_power", r"house(hold)?_load", r"load_power"], True, True),
     "pv_power": ("sensor", [r"total_pv_power", r"pv_power$"], False, True),
+    # signed DC battery power (+ discharge); not the unsigned `battery_power`
+    "battery_power": ("sensor", [r"battery_power_net$"], False, True),
     "battery_soc": ("sensor", [r"battery_soc$", r"battery_soc"], True, False),
     "battery_voltage": ("sensor", [r"battery_voltage$", r"battery_voltage"], False, False),
     "tou_switch": ("switch", [r"time_of_use$", r"time_of_use"], True, False),
@@ -49,6 +51,7 @@ FORCE_SERVICES = ("solis_force_battery_charge", "solis_force_battery_discharge",
 NEEDED_FOR = {
     "grid_export_power": "the contract comparison (sold kWh)",
     "pv_power": "learning tree shade",
+    "battery_power": "measuring the inverter's own use (the efficiency figure)",
     "battery_voltage": "amps to kW (the battery_voltage option is used without it)",
     "export_limit": "blocking export at negative prices",
     "peak_shaving_switch": "peak shaving: keeping the battery for a dearer hour while the grid feeds the house",

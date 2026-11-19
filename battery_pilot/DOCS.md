@@ -395,6 +395,7 @@ log says which setting to fill in.
 | `battery_soc` | `battery_soc` | required | Planning from the battery's real state, stopping a charge or export at its target, the nightly replay's starting point. | Battery Pilot does not start. |
 | `grid_export_power` | `grid_export_power` or `export_power` (not an export *limit*) | optional | kWh sold, in the "same usage" bill. | Sold kWh count as 0 in the comparison. |
 | `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
+| `battery_power` | `battery_power_net` (the Solis *Battery Power Net*: + discharging, − charging; not the unsigned *Battery Power*) | optional | Measuring the inverter's own use, so it can be shown on its own and left out of the measured round-trip efficiency (see *Measured efficiency*). | The measured efficiency includes the inverter's own use. |
 | `battery_voltage_sensor` | `battery_voltage` | optional | Turning amps into kW for the charge current and the plan. | The *Battery nominal voltage* setting is used. |
 
 Power sensors can be in W or kW: the unit is read from the entity.
@@ -795,17 +796,31 @@ the SOC change. Only quarters with complete data and a SOC between 15 and 95 % c
 older days weigh less (half-life 60 days). A value shows only after 150 SOC points of
 charging and 150 of discharging; until then the dashboard shows how far it is. The
 sensor `sensor.battery_pilot_efficiency` holds the measured value, with the split by
-grid charging and solar charging where known.
+grid charging and solar charging once each has 50 SOC points.
+
+**The inverter's own use.** A hybrid inverter draws some power all day (tens of watts),
+whether the battery moves or not, so it is not a cost of charging and discharging. The
+battery's flow above includes it, which makes the round trip look worse than it is, most of
+all when the battery charges or discharges slowly. With the `battery_power` entity
+(*Battery Power Net*), Battery Pilot measures it in quarter-hours without sun while the
+battery is idle (for example at night with the battery at its minimum, or held by peak
+shaving): there, what the grid gives beyond the house is the inverter's own use. After 8
+such hours it is shown on its own (`sensor.battery_pilot_inverter_draw`, in W and kWh a
+day), and the round trip is given without it, with the figure including it next to it.
+Measurements saved by an earlier version cannot have it taken off, so the round-trip
+measurement starts again after the update that added it.
 
 The plan does **not** use the measured value. It keeps using *Round-trip efficiency*. If
-the measured value stays 3 points or more from the setting, change the setting yourself.
+the measured value (without the inverter's own use, when it is known) stays 3 points or
+more from the setting, change the setting yourself.
 
 ## Sensors it publishes
 
 | Entity | State | Main attributes |
 | --- | --- | --- |
 | `sensor.battery_pilot_plan` | The inverter's mode now, as on the plan chart: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours, each with the inverter's `mode` and the plan's `action`) |
-| `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), or unknown until there is enough data | `round_trip_pct`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_round_trip_pct`, `solar_round_trip_pct` |
+| `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), without the inverter's own use when that is known, or unknown until there is enough data | `round_trip_pct`, `round_trip_with_draw_pct` (including the inverter's own use), `inverter_draw_w`, `inverter_kwh_day`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_points`, `solar_points`, `grid_round_trip_pct`, `solar_round_trip_pct`, `since` |
+| `sensor.battery_pilot_inverter_draw` | The inverter's own use (W), measured while the battery is idle without sun; unknown without the `battery_power` entity or before 8 idle hours | `kwh_per_day`, `idle_hours_measured`, `needed_hours` |
 | `sensor.battery_pilot_car_power` | What the car takes now (kW, 0 when not charging). Only published when car detection is on | `charging`, `source` (`house consumption` or `charger sensor`), `month_kwh`, `peak_shaving` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Solar forecast for today after shade and today's weather correction (kWh) | `forecast_kwh` (before correction), `today_factor` (what the panels gave in the last hours against the forecast after shade; 1.0 = as forecast) |

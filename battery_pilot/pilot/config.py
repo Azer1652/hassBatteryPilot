@@ -13,7 +13,7 @@ from datetime import date, time
 
 # Entity override keys (empty = find automatically). Order is the log order.
 ENTITY_KEYS = (
-    "grid_import_power", "grid_export_power", "house_load_power", "pv_power",
+    "grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_power",
     "battery_soc", "battery_voltage", "tou_switch", "grid_charge_switch",
     "charge_current", "discharge_current", "charge_start", "charge_end",
     "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",

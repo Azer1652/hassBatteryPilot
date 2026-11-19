@@ -35,8 +35,10 @@ def st(state, unit=None, **attrs):
 
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
-                 prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False):
+                 prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
+                 battery_power=False, inverter_draw_kw=0.0):
         self.now = now
+        self.inverter_draw_kw = inverter_draw_kw   # the inverter's own use, always from the grid
         self.force_action = force_action        # the Solis Modbus force charge/discharge actions exist
         self.forced: tuple[str, float, datetime] | None = None   # (charge|discharge, W, until) while one runs
         self.soc = soc
@@ -76,6 +78,9 @@ class FakeHA:
             s["number.solis_peak_baseline_soc"] = st(50, "%")
         if feed_in_priority:    # the Solis feed-in priority: solar surplus is exported, not stored
             s["switch.solis_feed_in_priority"] = st("off")
+        if battery_power:       # Solis "Battery Power Net" (DC, + discharging), and the unsigned one beside it
+            s["sensor.solis_battery_power_net"] = st(0, "W")
+            s["sensor.solis_battery_power"] = st(0, "W")
         if prices is not None:
             s["sensor.current_electricity_market_price"] = st(0.1, "€/kWh", prices=prices)
         if with_helpers:
@@ -247,6 +252,7 @@ class FakeHA:
                 ch = min(-net * 0.97, 2.56, room / h if h else 9e9)
                 batt, grid = ch, net + ch / 0.97
         self.soc = min(max(self.soc + batt * h / CAP * 100, 0), 100)
+        grid += self.inverter_draw_kw
         self.import_kw = max(grid, 0)
         self.now += dt
         self.s["sensor.solis_grid_import_power"]["state"] = str(round(max(grid, 0) * 1000))
@@ -254,6 +260,8 @@ class FakeHA:
         self.s["sensor.solis_household_load_power"]["state"] = str(round(self.load_fn(self.now) * 1000))
         self.s["sensor.solis_total_pv_power"]["state"] = str(round(self.pv_fn(self.now) * 1000))
         self.s["sensor.solis_battery_soc"]["state"] = str(round(self.soc, 1))
+        if "sensor.solis_battery_power_net" in self.s:     # DC, + discharging
+            self.s["sensor.solis_battery_power_net"]["state"] = str(round(-batt * 1000))
 
     def solis_calls(self):
         return [c for c in self.calls if c[0] in ("switch", "number", "time", "solis_modbus")]

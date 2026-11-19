@@ -202,6 +202,16 @@ def test_finds_the_peak_shaving_entities_when_the_integration_has_them():
     assert found["grid_import_power"].entity_id == "sensor.solis_grid_import_power"
 
 
+def test_finds_the_signed_battery_power_and_not_the_unsigned_one():
+    found, _ = discovery.resolve_all(Options(), SOLIS)
+    assert found["battery_power"].entity_id is None                               # optional
+    states = SOLIS | {"sensor.solis_s6_eh1p_battery_power": _state("W"),
+                      "sensor.solis_s6_eh1p_battery_power_net": _state("W")}
+    found, missing = discovery.resolve_all(Options(), states)
+    assert missing == [] and found["battery_power"].entity_id == "sensor.solis_s6_eh1p_battery_power_net"
+    assert found["battery_power"].scale == 0.001
+
+
 def test_slot_set_switch_picks_the_other_entities():
     found, _ = discovery.resolve_all(Options(slot_entities="grid_time_of_use"), SOLIS)
     assert found["discharge_end"].entity_id == "time.solis_grid_time_of_use_discharge_end_slot_1"

@@ -193,8 +193,14 @@ higher). `load.LoadProfile`: 7 × 24 kW EMA.
 `efficiency.EfficiencyMeter`: the battery's measured round-trip efficiency (battery AC flow = load +
 export − import − pv against the SOC change, quarters with complete data and SOC 15-95 %, 60-day
 half-life, a value after 150 SOC points each way). `learn_records` is called from `App.nightly()`.
-Display only (`status["efficiency"]`, `sensor.battery_pilot_efficiency`): the plan keeps using
-`round_trip_efficiency_pct`.
+The inverter's own use: with the optional `battery_power` entity (Solis *Battery Power Net*, DC,
++ discharging; meter channel `battery`, the only optional channel in `meter.CHANNELS`), quarters
+with |battery| and pv under 5 Wh give `import − load − export` as the draw (kept between −50 and
+200 W). After 8 such hours `round_trip_pct` is without it (draw × hours of each kind taken off what
+went in, added to what came out) and `round_trip_with_draw_pct` keeps it; `hours` per kind are
+counted for that, and state saved without them starts over (`from_json`). Display only
+(`status["efficiency"]`, `sensor.battery_pilot_efficiency`, `sensor.battery_pilot_inverter_draw`):
+the plan keeps using `round_trip_efficiency_pct`.
 
 `trading.margins()`: display only (`status["trading"]`, the `#tradenote` line in the plan card): the
 best buy-then-sell pair and the best buy-to-avoid-buying pair of the next 24 h per contract, per kWh

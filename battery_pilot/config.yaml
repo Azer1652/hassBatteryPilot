@@ -104,6 +104,7 @@ schema:
   grid_export_power: str?
   house_load_power: str?
   pv_power: str?
+  battery_power: str?
   battery_soc: str?
   battery_voltage_sensor: str?
   tou_switch: str?

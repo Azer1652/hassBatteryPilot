@@ -588,13 +588,23 @@ function tradeNote(t) {
 function efficiencyNote(e) {
   // Measured round-trip efficiency; the plan keeps using the setting.
   if (!e) return "";
+  // Without the inverter's own use when it is known (it draws that whether the battery moves or not).
   const cfg = e.configured_pct;
-  if (e.round_trip_pct === null || e.round_trip_pct === undefined) {
+  const has = (v) => v !== null && v !== undefined;
+  const draw = has(e.inverter_draw_w)
+    ? ` Inverter's own use: ${fmt(e.inverter_draw_w, 0)} W (${fmt(e.inverter_kwh_day, 1)} kWh a day).`
+    : has(e.draw_hours) && e.draw_hours > 0
+    ? ` Inverter's own use: measuring (${fmt(e.draw_hours, 0)} of ${fmt(e.needed_draw_hours, 0)} idle hours).` : "";
+  const from = e.since ? ` since ${dayName(e.since)}` : "";
+  if (!has(e.round_trip_pct)) {
     const n = Math.min(e.charge_points || 0, e.discharge_points || 0);
-    return `Round trip: not enough data yet (${fmt(n, 0)} of ${e.needed_points || 150} SOC points).`;
+    return `Round trip: not enough data yet (${fmt(n, 0)} of ${e.needed_points || 150} SOC points${from}).` + draw;
   }
-  let s = `Round trip: measured ${fmt(e.round_trip_pct, 0)} % (setting ${fmt(cfg, 0)} %).`;
-  if (cfg !== undefined && cfg !== null && Math.abs(e.round_trip_pct - cfg) >= 3)
+  let s = `Round trip: measured ${fmt(e.round_trip_pct, 0)} % (setting ${fmt(cfg, 0)} %)`;
+  s += has(e.inverter_draw_w) && has(e.round_trip_with_draw_pct)
+    ? `, without the inverter's own use; with it ${fmt(e.round_trip_with_draw_pct, 0)} %.` : ".";
+  s += draw;
+  if (has(cfg) && Math.abs(e.round_trip_pct - cfg) >= 3)
     s += " Consider changing the round-trip efficiency setting.";
   return s;
 }

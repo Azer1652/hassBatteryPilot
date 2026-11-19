@@ -453,8 +453,8 @@ class App:
     # ---------------------------------------------------------------- the 10-second tick
     async def tick(self):
         now = self.clock()
-        keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_soc",
-                "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
+        keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_power",
+                "battery_soc", "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
                 "car_charger_power")
         sts, away = await self._states_raw(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
@@ -469,7 +469,8 @@ class App:
         self.fill_on = self._helper("fill", helpers[2], self.fill_on, now)
         self._force_shave_changed(self._helper("force_shave", helpers[3], self.force_shave_on, now))
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
-              "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts)}
+              "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts),
+              "battery": self._kw("battery_power", sts)}
         soc = self._num(sts.get("battery_soc"))
         self._blocked = self._blocked or self.curtailed_by_us
         self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None,
@@ -1313,6 +1314,12 @@ class App:
                         "unknown" if eff["round_trip_pct"] is None else eff["round_trip_pct"], {
                             "friendly_name": "Battery Pilot measured round-trip efficiency",
                             "unit_of_measurement": "%", "icon": "mdi:battery-sync", **eff}))
+        sensors.append(("sensor.battery_pilot_inverter_draw",
+                        "unknown" if eff["inverter_draw_w"] is None else eff["inverter_draw_w"], {
+                            "friendly_name": "Battery Pilot inverter's own use",
+                            "unit_of_measurement": "W", "device_class": "power", "icon": "mdi:power-plug-outline",
+                            "kwh_per_day": eff["inverter_kwh_day"], "idle_hours_measured": eff["draw_hours"],
+                            "needed_hours": eff["needed_draw_hours"]}))
         for eid, state, attrs in sensors:
             try:
                 await self.ha.set_state(eid, state, attrs)

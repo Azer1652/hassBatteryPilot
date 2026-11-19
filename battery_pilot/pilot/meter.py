@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-CHANNELS = ("import", "export", "load", "pv")
+CHANNELS = ("import", "export", "load", "pv", "battery")    # battery: DC power, + discharging (optional)
 MAX_GAP = timedelta(minutes=3)
 QUARTER = timedelta(minutes=15)
 
