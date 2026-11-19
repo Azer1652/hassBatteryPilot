@@ -1,14 +1,19 @@
 """Export and import of the settings from the page."""
 import json
+import os
+import re
 
 import pytest
 import yaml
 from fake_ha import FakeHA, utc
 
+from pilot import settings
 from pilot.app import App
 from pilot.config import ConfigError, Options
 from pilot.settings import prepare
 from pilot.web import make_web
+
+CONFIG_YAML = os.path.join(os.path.dirname(__file__), "..", "battery_pilot", "config.yaml")
 
 with open("battery_pilot/config.yaml", encoding="utf-8") as _f:
     SAVED = yaml.safe_load(_f)["options"]
@@ -117,3 +122,46 @@ def test_a_whole_number_for_a_decimal_setting_is_fine():
     with pytest.raises(ConfigError):
         prepare({"winter_night_charge": "yes"} if isinstance(SAVED.get("winter_night_charge"), bool)
                 else {"peak_buffer_pct": True}, dict(SAVED))
+
+
+def test_a_settings_import_outside_the_add_on_schema_is_refused():
+    """settings.prepare checks types but not the ranges in config.yaml: the check says fine, then the
+    Supervisor refuses the save. An empty optional text (notify_service) is also passed on."""
+    with open(CONFIG_YAML, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    current = dict(cfg["options"])
+    accepted = []
+    for key, rule in cfg["schema"].items():
+        m = re.fullmatch(r"(int|float)\(([-\d.]+),([-\d.]+)\)\??", str(rule))
+        if not m:
+            continue
+        kind, lo, hi = m.group(1), float(m.group(2)), float(m.group(3))
+        outside = (int(lo) - 1, int(hi) + 1) if kind == "int" else (round(lo - 0.1, 3), round(hi + 0.1, 3))
+        for value in outside:
+            try:
+                settings.prepare({key: value}, current)
+            except ConfigError:
+                continue
+            accepted.append(f"{key}={value} ({rule})")
+    assert not accepted, f"{len(accepted)} out-of-range values accepted: {', '.join(accepted)}"
+    merged, _, _ = settings.prepare({"notify_service": ""}, current)
+    assert "notify_service" not in merged, "an empty notify_service is passed on to the Supervisor"
+
+
+def test_the_ranges_checked_are_those_of_the_add_on_schema():
+    with open(CONFIG_YAML, encoding="utf-8") as f:
+        schema = yaml.safe_load(f)["schema"]
+    found = {}
+    for key, rule in schema.items():
+        m = re.fullmatch(r"(int|float)\(([-\d.]+),([-\d.]+)\)\??", str(rule))
+        if m:
+            found[key] = (float(m.group(2)), float(m.group(3)))
+    assert {k: (float(lo), float(hi)) for k, (lo, hi) in settings.RANGES.items()} == found
+
+
+def test_every_optional_text_of_the_add_on_schema_is_left_out_when_empty():
+    """The Supervisor wants an empty `str?` option left out, not saved as ""."""
+    with open(CONFIG_YAML, encoding="utf-8") as f:
+        schema = yaml.safe_load(f)["schema"]
+    optional = {k for k, rule in schema.items() if str(rule) == "str?"}
+    assert optional <= settings.OPTIONAL_TEXT, f"not in settings.OPTIONAL_TEXT: {sorted(optional - settings.OPTIONAL_TEXT)}"

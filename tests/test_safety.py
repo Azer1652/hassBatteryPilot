@@ -269,3 +269,20 @@ async def test_a_damaged_state_file_does_not_stop_battery_pilot(tmpdata, content
     assert os.path.exists(os.path.join(tmpdata, "state.json.bad"))
     with open(os.path.join(tmpdata, "state.json")) as f:
         assert isinstance(json.load(f), dict)            # a good one is written again
+
+
+async def test_a_big_battery_charging_slowly_is_not_taken_for_a_frozen_soc(tmp_path):
+    """FROZEN_S (30 min) does not scale with the battery: 48 kWh at 15 A moves one whole SOC point in about 40 min."""
+    fake = FakeHA(utc(2026, 1, 15, 1, 0), soc=40)
+    o = Options(battery_capacity_kwh=48.0)
+    app = App(o, fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    app.solis.mode, app.solis.amps = "charge", 15                        # a paced charge at 15 A
+    dc_kw = 15 * 51.2 / 1000 * o.charge_efficiency
+    t, soc, frozen_at = fake.now, 40.0, None
+    for _ in range(6 * 120):                                             # two hours of 10-second ticks
+        soc += dc_kw * 10 / 3600 / (o.battery_capacity_kwh / 100)
+        if app._frozen(t, float(int(soc))) and frozen_at is None:        # the Solis reports whole points
+            frozen_at = (t - fake.now).total_seconds() / 60
+        t += timedelta(seconds=10)
+    assert frozen_at is None, f"a battery that charges normally was declared frozen after {frozen_at:.0f} minutes"

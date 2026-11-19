@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from pilot.config import Options
-from pilot.controller import Readings, decide, follow_amps, paced_amps
+from pilot.controller import Readings, decide, fill_step, follow_amps, paced_amps
 from pilot.planner import Plan, Step, step_to_follow
 from pilot.simulate import Battery
 
@@ -236,3 +236,18 @@ async def test_the_inverter_driver_turns_feed_in_priority_off_before_anything_el
     ha.calls.clear()
     await s.self_use(T)                                   # already off: not written again
     assert ("turn_off", "feed_in_priority_switch") not in ha.calls
+
+
+def test_an_unknown_inverter_state_is_not_taken_for_a_charge():
+    """`failed` (after a failed command or a Home Assistant restart) is treated like `charge` in the peak-buffer
+    branch of decide() and in fill_step: the battery is then charged from the grid."""
+    o = Options(battery_min_soc=10, peak_buffer_pct=20)                  # buffer level 30 %
+    t = datetime(2026, 1, 15, 19, 10, tzinfo=TZ).astimezone(timezone.utc)
+    step = Step(t.replace(minute=0), 1.0, "self_use", 29, 28, 0, 0, 0.5, 0, 25, 5, 0)
+    r = Readings(t, t.astimezone(TZ), 29.0, 0.6, 0.0, 0.6, 0.6, 51.2)  # in the band: under the level, above level - 3
+
+    def cmd(mode):
+        return decide(step, r, o, mode, t.astimezone(TZ).strftime("%H:00:00"), 0, True, can_shave=True).command
+    assert cmd("failed") == cmd("self_use") == "peak_shave", f"mode 'failed' in the buffer band gives {cmd('failed')!r}"
+    full = Readings(t, t.astimezone(TZ), 97.0, 0.6, 0.0, 0.6, 0.6, 51.2)
+    assert fill_step(full, "failed", True).action == "peak_shave", "fill switch at 97 %: 'failed' starts a grid charge"

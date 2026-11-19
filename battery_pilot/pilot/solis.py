@@ -38,8 +38,10 @@ FORCE_RENEW_S = 10 * 60         # sent again this often while it should go on
 
 
 def hour_slot(t_local: datetime) -> tuple[str, str]:
+    """The slot of the clock hour. The 23:00 slot ends at 00:00 (a slot across midnight, as a night
+    window 22:00-06:00 is set on a Solis): ending it at 23:59 left the last minute in self-use."""
     start = t_local.strftime("%H:00:00")
-    end = "23:59:00" if t_local.hour == 23 else f"{t_local.hour + 1:02d}:00:00"
+    end = f"{(t_local.hour + 1) % 24:02d}:00:00"
     return start, end
 
 

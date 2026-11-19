@@ -9,9 +9,10 @@ import pytest
 from fake_ha import RATES_EARLY_2026
 
 from pilot.config import Options
-from pilot.planner import Slot, Step, make_plan, night_target, night_windows, optimize
+from pilot.planner import Slot, Step, make_plan, night_target, night_windows, optimize, slot_grid
 from pilot.prices import PriceSlot
 from pilot.simulate import Battery, step
+from pilot.simulate import step as sim_step
 from pilot.solar import PvForecast, ShadeModel
 from pilot.tariffs import DynamicTariff, FixedTariff
 
@@ -534,18 +535,19 @@ def test_extreme_negative_price_charges_as_fast_as_possible_above_the_limit():
 
 
 def test_a_trial_level_that_charges_nothing_above_the_limit_is_not_a_boost(monkeypatch):
-    """A higher trial limit also relaxes the peak cover, so its plan can be cheaper without charging
-    above the limit at all. That one used to win the comparison, and the real boost was dropped."""
+    """A trial level's plan can be cheaper without charging above the limit at all. That one used to
+    win the comparison, and the real boost was dropped."""
     import pilot.planner as planner
     real, normal_limit, tried = planner.optimize, Options().import_limit_kw, []
 
     def optimize_(b, slots, soc, *a, **k):
-        if b.import_limit_kw <= normal_limit:
+        level = k.get("charge_limit_kw")                                              # a trial boost level
+        if level is None or level <= normal_limit:
             return real(b, slots, soc, *a, **k)
-        tried.append(b.import_limit_kw)
+        tried.append(level)
         if len(tried) > 1:
             return real(b, slots, soc, *a, **k)
-        steps = real(replace(b, import_limit_kw=normal_limit), slots, soc, *a, **k)   # the first trial level:
+        steps = real(b, slots, soc, *a, **{**k, "charge_limit_kw": None})              # the first trial level:
         steps[0].cost_c -= 10_000                                                     # the normal plan, far cheaper
         return steps
 
@@ -909,3 +911,89 @@ def test_a_plan_made_in_the_last_minute_before_a_boundary_starts_now():
     first = plan.steps[0]                                                        # made at 14:59:59
     assert first.start + timedelta(hours=first.hours) >= at(15, 15)
     assert first.buy == pytest.approx(DynamicTariff(o).buy(at(15, 7).astimezone(BXL), 300))    # 15:00's price
+
+
+def energy(kw_at):
+    """kWh between two UTC times for a load given in kW as a function of time (15-minute steps)."""
+    def kwh(a, z):
+        total, t = 0.0, a
+        while t < z:
+            t2 = min(t + timedelta(minutes=15), z)
+            total += kw_at(t) * (t2 - t).total_seconds() / 3600
+            t = t2
+        return total
+    return kwh
+
+
+def _boost_plan(spike: float):
+    """14 March, 10:00: an evening at 3.4 kW (price 150) before a dear morning (400, 3.0 kW), battery at 40 %."""
+    o = Options(contract="dynamic")
+    start = datetime(2026, 3, 14, tzinfo=BXL).astimezone(timezone.utc)
+    prices = []
+    for h in range(72):
+        t = start + timedelta(hours=h)
+        loc = t.astimezone(BXL)
+        p = spike if (loc.day == 14 and loc.hour == 13) else 150.0 if 18 <= loc.hour < 21 \
+            else 400.0 if 7 <= loc.hour < 9 else 100.0
+        prices.append(PriceSlot(t, t + timedelta(hours=1), p))
+
+    def kw_at(t):
+        h = t.astimezone(BXL).hour
+        return 3.4 if 18 <= h < 21 else 3.0 if 7 <= h < 9 else 0.45
+    now = datetime(2026, 3, 14, 10, 0, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, DynamicTariff(o), prices, energy(kw_at), lambda a, z: 0.0, soc=40,
+                     peak_kw=lambda a, z: max(kw_at(a), kw_at(z - timedelta(seconds=1))), peak_shave=True)
+    return o, plan
+
+
+def _drift(o, plan) -> list[tuple[str, str, float]]:
+    """Replay the plan's steps through the simulator with their own fields: (time, action, SOC simulated - planned)."""
+    b, soc, out = Battery.from_options(o), plan.steps[0].soc_start, []
+    for s in plan.steps:
+        soc = sim_step(b, soc, s.action, s.soc_end, s.load_kwh, s.pv_kwh, s.hours, limit_kw=s.limit_kw,
+                       reserve=s.reserve, hold=s.hold).soc
+        out.append((f"{s.start.astimezone(BXL):%d %H:%M}", s.action, round(soc - s.soc_end, 1)))
+    return out
+
+
+def test_a_boosted_plan_agrees_with_the_simulator():
+    """A boost re-plans the whole horizon with the higher import limit, but only its charge steps get
+    `limit_kw`: its peak-shaving steps leave up to the boost level to the grid, while the inverter
+    (Solis.peak_shave at o.import_limit_kw) and the replay (simulate.step) shave at the normal limit."""
+    o, normal = _boost_plan(100.0)                                       # the same days without the spike: no boost
+    assert not normal.boost and all(abs(d[2]) <= 3 for d in _drift(o, normal)), "precondition: 3 points is a fair margin"
+    o, plan = _boost_plan(-8000.0)
+    assert plan.boost, "precondition: this scenario plans a boost"
+    drift = _drift(o, plan)
+    first = next((d for d in drift if abs(d[2]) > 3), None)
+    worst = min(drift, key=lambda d: d[2])
+    assert first is None, (f"the battery leaves the boosted plan at {first[0]} ({first[1]}, {first[2]} SOC points) and "
+                           f"ends up to {worst[2]} points under it: planned at the boost limit "
+                           f"{plan.boost['limit_kw']} kW, shaved at {o.import_limit_kw} kW")
+
+
+def test_the_winter_level_is_kept_all_day_with_a_night_window_inside_one_day():
+    """make_plan lets the level go from `night_start` on a dull day before a sunny one; with a window that does not
+    cross midnight (01:00-06:00) that is 01:00 of the dull day itself, so the whole day loses its level."""
+    def pv_kw(t):
+        loc = t.astimezone(BXL)
+        return (3.0 if loc.day == 14 else 30.0) / 7 if 9 <= loc.hour < 16 else 0.0   # dull 14 Jan, sunny 15 Jan
+    o = Options(night_start="01:00", night_end="06:00", winter_hold_soc=40, weekend_is_night=False)
+    now = datetime(2026, 1, 14, 0, 30, tzinfo=BXL).astimezone(timezone.utc)
+    plan = make_plan(now, BXL, o, FixedTariff(o), [], energy(lambda t: 0.5), energy(pv_kw), 60, peak_shave=True,
+                     forecast_until=datetime(2026, 1, 16, 16, 0, tzinfo=BXL).astimezone(timezone.utc))
+    dull = [s for s in plan.steps if (s.start + timedelta(hours=s.hours / 2)).astimezone(BXL).day == 14]
+    lost = [f"{s.start.astimezone(BXL):%H:%M}" for s in dull if s.hold != 40]
+    assert not lost, f"the dull day loses its winter level from {lost[0]} ({len(lost)} of {len(dull)} steps)"
+
+
+@pytest.mark.parametrize("now,minutes", [(datetime(2026, 10, 25, 0, 50, tzinfo=timezone.utc), 15),
+                                         (datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc), 60)])
+def test_no_long_first_slot_in_the_first_hour_of_the_autumn_clock_change(now, minutes):
+    """slot_grid adds timedelta to a local time (wall-clock arithmetic): in the first 02:xx (CEST) the first
+    slot runs to 03:00 CET, 70 instead of 10 minutes (quarter-hours) or 90 instead of 30 (hours)."""
+    grid = slot_grid(now, now + timedelta(hours=3), BXL, minutes)
+    longest = max((b - a).total_seconds() / 60 for a, b in grid)
+    assert longest <= minutes, f"a slot of {longest:.0f} minutes at {now.astimezone(BXL):%H:%M %Z} ({minutes}-minute grid)"
+    inner = [b for _, b in grid[:-1]]
+    assert all(b.minute % minutes == 0 and b.second == 0 for b in inner)

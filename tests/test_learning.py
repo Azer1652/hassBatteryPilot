@@ -4,6 +4,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from pilot.compare import Comparison
+from pilot.config import Options
 from pilot.load import LoadProfile
 from pilot.meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
 from pilot.solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, intraday_factor, parse_energy_forecast
@@ -269,3 +271,58 @@ def test_history_to_hourly_handles_unavailable():
     assert kwh == pytest.approx(0.5 + 0.5)        # 1 kW x 30 min + 2 kW x 15 min
     assert cov == pytest.approx(0.75)
     assert out[t0 + timedelta(hours=1)] == (pytest.approx(2.0), 1.0)
+
+
+def test_a_partly_measured_quarter_counts_at_its_measured_power():
+    """PeakTracker.add and Comparison.add_quarter take kWh x 4 without scaling by the share of the quarter measured."""
+    t = datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc)
+    rec = QuarterRecord(t, {"import": 0.6, "export": 0.0, "load": 0.6, "pv": 0.0},       # 4 kW for 60 % of the quarter
+                        {"import": 0.6, "export": 0.6, "load": 0.6, "pv": 0.6})
+    peaks, cmp = PeakTracker(), Comparison()
+    peaks.add(rec, BXL)
+    cmp.add_quarter(rec, None, Options(), BXL)
+    assert peaks.month_peak(t, BXL) == pytest.approx(4.0), f"peak tracker: {peaks.month_peak(t, BXL)} kW"
+    assert cmp.months["2026-01"]["peak_kw"] == pytest.approx(4.0), f"comparison: {cmp.months['2026-01']['peak_kw']} kW"
+
+
+def test_a_clock_that_steps_back_does_not_count_energy_twice():
+    """QuarterMeter.add takes an earlier time as the new last sample: the overlap is integrated twice."""
+    t0 = datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc)
+    kw = {"import": 2.0, "export": 0.0, "load": 2.0, "pv": 0.0}
+    m, t = QuarterMeter(), t0
+    for _ in range(30):                                                  # five minutes of 10-second samples
+        m.add(t, kw)
+        t += timedelta(seconds=10)
+    t -= timedelta(seconds=60)                                           # the clock is set back a minute (NTP)
+    closed = []
+    while not closed:
+        closed = m.add(t, kw)
+        t += timedelta(seconds=10)
+    assert closed[0].kwh["import"] == pytest.approx(0.5, abs=0.01), f"{closed[0].kwh['import']:.3f} kWh for 2 kW x 15 min"
+
+
+def _meter_run(m, t, end, kw, out):
+    while t < end:
+        out += m.add(t, kw)
+        t += timedelta(seconds=10)
+    return t
+
+
+def test_a_clock_set_back_five_minutes_is_waited_out():
+    """The review's case: 5 minutes back at 18:10 at a steady 2 kW gave the quarter 0.661 kWh."""
+    kw = {"import": 2.0, "export": 0.0, "load": 2.0, "pv": 0.0}
+    m, out = QuarterMeter(), []
+    t = _meter_run(m, datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc), datetime(2026, 1, 15, 18, 10, tzinfo=timezone.utc),
+                   kw, out)
+    _meter_run(m, t - timedelta(minutes=5), datetime(2026, 1, 15, 18, 16, tzinfo=timezone.utc), kw, out)
+    assert out[0].start.minute == 0 and out[0].kwh["import"] == pytest.approx(0.5, abs=0.01)
+
+
+def test_a_quarter_never_closes_twice_after_a_big_step_back():
+    kw = {"import": 2.0, "export": 0.0, "load": 2.0, "pv": 0.0}
+    m, out = QuarterMeter(), []
+    t = _meter_run(m, datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc), datetime(2026, 1, 15, 18, 40, tzinfo=timezone.utc),
+                   kw, out)
+    _meter_run(m, t - timedelta(minutes=30), datetime(2026, 1, 15, 19, 0, 10, tzinfo=timezone.utc), kw, out)
+    starts = [r.start for r in out]
+    assert len(starts) == len(set(starts)) == 4 and starts == sorted(starts)

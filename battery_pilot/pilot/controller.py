@@ -105,7 +105,7 @@ def fill_step(r: Readings, mode: str, can_shave: bool) -> Step:
     """The step the fill switch puts in the plan's place: charge to 100 % within this clock hour
     (so at the current the import limit allows), and once full keep the battery."""
     start = r.t.replace(minute=0, second=0, microsecond=0)
-    filling = r.soc < FILL_AGAIN or (mode in ("charge", "failed") and r.soc < 100)
+    filling = r.soc < FILL_AGAIN or (mode == "charge" and r.soc < 100)   # not "failed": an unknown state
     action = "charge" if filling or not can_shave else "peak_shave"
     return Step(start, 1.0, action, r.soc, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -189,7 +189,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
     # limit (peak shaving); used by a peak, it is charged again under the import limit.
     if can_shave and o.peak_buffer_pct > 0 and not (step.action == "solar_hold" and r.pv_kw >= r.load_kw):
         level = o.battery_min_soc + o.peak_buffer_pct
-        if r.soc <= level - BUFFER_GAP or (mode in ("charge", "failed") and r.soc < level):
+        if r.soc <= level - BUFFER_GAP or (mode == "charge" and r.soc < level):
             refill = Step(r.t.replace(minute=0, second=0, microsecond=0), 1.0, "charge", r.soc, float(level),
                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             follow = follow_amps(r, o)

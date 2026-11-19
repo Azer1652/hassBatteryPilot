@@ -12,7 +12,8 @@ power into quarter-hour `QuarterRecord`s → peaks, shadow bill, stored records.
 `current_electricity_market_price` without a list is followed to it, and a sensor without a list is logged once) and the solar forecast (websocket
 `energy/solar_forecast`, else daily totals spread by `solar.hourly_from_daily`), then `replan()`.
 `controller.decide()` turns the current plan step + live readings into one `solis.Solis` command.
-Once a night `nightly()` learns shade and load from yesterday's records and replays yesterday.
+Once a night `nightly()` learns shade and load from yesterday's records and replays yesterday (the
+replay runs in a thread; from the main loop `nightly(wait=False)` leaves it running, so ticks go on).
 
 ## Module map
 
@@ -66,7 +67,9 @@ the end of the night window, and no export. The target is set only when `night_c
 does not, and a forced refill also made the plan hold the battery with a day-rate trickle charge
 in the evening. Tests that need a winter night charge use `fake_ha.CHEAP_NIGHT`. Two rules give way to money: in `extreme_slots()`
 (selling beats buying back at the dearest later price) export is allowed in winter and down to the
-minimum (`Step.reserve`); `_boost()` re-plans with higher import limits and keeps one only when it
+minimum (`Step.reserve`); `_boost()` re-plans with higher import limits for charging only
+(`optimize(charge_limit_kw=...)`: peak shaving and self-use stay at the import limit, as the
+inverter and the replay do) and keeps one only when it
 beats the normal plan after the capacity cost, priced once per month above
 max(month peak so far, `capacity_min_kw`) (`Step.limit_kw`, `Plan.boost`). Controller, simulator
 and replay follow those step fields. These constants were tuned against observed

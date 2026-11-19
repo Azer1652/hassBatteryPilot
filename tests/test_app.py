@@ -14,6 +14,10 @@ from pilot.meter import QuarterRecord
 from pilot.migrate import MARK
 from pilot.web import make_web
 
+CURTAIL = "input_boolean.battery_pilot_block_negative_export"
+EXPORT_LIMIT = "number.solis_export_power_limit"
+PRICE = "sensor.current_electricity_market_price"
+
 CONTROL = "input_boolean.battery_pilot_control"
 
 
@@ -449,3 +453,64 @@ async def test_nightly_replay_charges_above_the_limit_at_an_extreme_price(tmpdat
     replay = app.comparison.months["2026-03"]["replay"]
     assert replay["dynamic"]["peak_kw"] > Options().import_limit_kw + 0.5    # paid to take energy: worth a peak
     assert replay["fixed"]["peak_kw"] <= Options().import_limit_kw + 0.1     # the fixed contract has no reason
+
+
+async def test_lifting_the_export_block_puts_back_the_inverters_own_limit(tmp_path):
+    """App._curtail restores min(the limit it found, export_limit_kw) instead of the limit it found."""
+    day = datetime(2026, 6, 14, tzinfo=TZ)
+    prices = [{"time": (day + timedelta(hours=h)).isoformat(), "price": -0.05 if 12 <= h < 13 else 0.08} for h in range(48)]
+    fake = FakeHA(utc(2026, 6, 14, 11, 50), soc=60, prices=prices, pv=lambda t: 4.0)
+    fake.s[EXPORT_LIMIT]["state"] = "8000"                               # the installation's own export limit
+    fake.s[CONTROL]["state"] = "on"
+    fake.s[CURTAIL]["state"] = "on"
+    app = App(Options(contract="dynamic", export_limit_kw=5.0), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    await run_until(app, fake, utc(2026, 6, 14, 12, 10), step_s=10)
+    assert fake.s[EXPORT_LIMIT]["state"] == "0", "precondition: export is blocked in the negative hour"
+    await run_until(app, fake, utc(2026, 6, 14, 13, 10), step_s=10)
+    assert fake.s[EXPORT_LIMIT]["state"] == "8000", f"the 8000 W export limit was put back as {fake.s[EXPORT_LIMIT]['state']} W"
+
+
+async def test_a_night_charge_goes_on_through_the_last_minute_before_midnight(tmp_path):
+    """solis.hour_slot ends the 23:00 slot at 23:59:00: from 23:59 to 00:00 the inverter is back in self-use.
+    (The slot end is exclusive in tests/fake_ha.py; on a real Solis this is not confirmed.)"""
+    def dull(day):
+        return {datetime(day.year, day.month, day.day, h, tzinfo=TZ).astimezone(timezone.utc): 2 / 7 for h in range(9, 16)}
+    fake = FakeHA(utc(2026, 1, 14, 22, 50), soc=11, load=lambda t: 0.4,
+                  forecast={**dull(datetime(2026, 1, 14)), **dull(datetime(2026, 1, 15))})
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(**CHEAP_NIGHT, safety_margin_pct=60), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    seen = {}
+
+    def watch(a, f):
+        loc = f.now.astimezone(TZ)
+        if (loc.hour, loc.minute) >= (23, 57) or (loc.hour, loc.minute) < (0, 2):
+            seen[f"{loc:%H:%M:%S}"] = f.mode()
+    await run_until(app, fake, utc(2026, 1, 15, 0, 2), step_s=10, each=watch)
+    assert seen.get("23:58:00") == "charge", "precondition: charging before midnight"
+    gap = sorted(t for t, m in seen.items() if m != "charge")
+    assert not gap, f"not charging from {gap[0]} to {gap[-1]} ({len(gap) * 10} s)"
+
+
+async def test_a_price_sensor_without_a_unit_is_reported_once(tmp_path):
+    """prices.unit_factor guesses the unit from the size of the numbers when the sensor has none; 25 c/kWh and
+    25 EUR/MWh look the same, so the user must be told what was assumed."""
+    day = datetime(2026, 1, 14, tzinfo=TZ)
+    prices = [{"time": (day + timedelta(hours=h)).isoformat(), "price": 18.0 + (h % 24) / 2} for h in range(48)]
+
+    async def events(unit):
+        fake = FakeHA(utc(2026, 1, 14, 12, 0), prices=prices)
+        if unit is None:
+            del fake.s[PRICE]["attributes"]["unit_of_measurement"]
+        else:
+            fake.s[PRICE]["attributes"]["unit_of_measurement"] = unit
+        app = App(Options(contract="dynamic"), fake, data_dir=str(tmp_path / str(unit)), clock=lambda: fake.now)
+        assert await app.setup()
+        for _ in range(2):
+            fake.advance(timedelta(minutes=5))
+            await app.refresh()
+        return [e["text"] for e in app.events if PRICE in e["text"] and "unit" in e["text"]]
+    assert await events("c/kWh") == []
+    told = await events(None)
+    assert len(told) == 1, f"no unit on {PRICE}: {len(told)} events say which unit was assumed"

@@ -271,6 +271,8 @@ class FakeHA:
         start = self.s[f"time.solis_time_charging_{kind}_start_slot_1"]["state"]
         end = self.s[f"time.solis_time_charging_{kind}_end_slot_1"]["state"]
         hhmmss = local.strftime("%H:%M:%S")
+        if start > end:                                  # a slot across midnight (23:00-00:00)
+            return hhmmss >= start or hhmmss < end
         return start != end and start <= hhmmss < end
 
     def mode(self):

@@ -95,7 +95,7 @@ class Comparison:
         m[when] += imp
         m["exp"] += exp
         m["quarters"] += 1
-        m["peak_kw"] = max(m["peak_kw"], imp * 4)
+        m["peak_kw"] = max(m["peak_kw"], imp * 4 / min(rec.covered["import"], 1.0))   # power of the part measured
         if market is not None:
             m["market_sum"] += market
             m["market_n"] += 1

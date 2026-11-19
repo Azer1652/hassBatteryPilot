@@ -565,7 +565,7 @@ or more than 2.5 kW).
 
 | Command | When | What it sets |
 | --- | --- | --- |
-| Charge | The plan says grid-charge in this slot and there is room under the import limit (or the higher limit the plan pays for at a price spike). | With the force action: *Force battery charge* with the power (charge current × battery voltage) for 30 minutes; *time of use* off and *allow grid charging* on when those entities exist. With the time-of-use slots: charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–23:59 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
+| Charge | The plan says grid-charge in this slot and there is room under the import limit (or the higher limit the plan pays for at a price spike). | With the force action: *Force battery charge* with the power (charge current × battery voltage) for 30 minutes; *time of use* off and *allow grid charging* on when those entities exist. With the time-of-use slots: charge slot 1 start/end = the current clock hour (e.g. 02:00–03:00; 23:00–00:00 in the last hour), discharge slot 1 = 00:00–00:00, *allow grid charging* on, charge current, *time of use* on. |
 | Discharge (export) | The plan says export in this slot. | With the force action: *Force battery discharge* with the power for 30 minutes. With the time-of-use slots: discharge slot 1 = the current clock hour, charge slot 1 = 00:00–00:00, discharge current, *time of use* on. |
 | Change current | While charging or exporting, when the right current changes by 10 A or more (house load, pacing). | Charge or discharge current only (with the force action: the force command again with the new power). |
 | Renew | At every new clock hour while still charging or exporting, and every 10 minutes with the force action. | The same as Charge / Discharge. |
@@ -586,7 +586,8 @@ at an extreme price.
 ### When something goes wrong
 
 - **Measurements lost:** without the battery SOC or grid import for a minute (or a SOC
-  that does not move for 30 minutes while charging or discharging), a charge or
+  that does not move for 30 minutes while charging or discharging, or for the time two SOC
+  points take at that current when that is longer, as on a big battery at a low current), a charge or
   discharge goes back to self-use until the readings return. A missing house-load reading
   alone is estimated from the grid, solar and the charge current, so it doesn't stop a
   night charge.
@@ -684,7 +685,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
 | Grid import limit | `import_limit_kw` | 2.3 kW | The quarter-hour average import Battery Pilot aims to stay under. Grid charging is planned 0.3 kW under it and pauses above it; the battery keeps energy for your usual peaks above it; warnings start 0.3 kW over it. Crossed only at a price that earns more than the higher capacity peak costs (see *Price spike* under *How it decides*); with *Capacity tariff* 0 it is never crossed. |
-| Normal export limit | `export_limit_kw` | 5.0 kW | The most your installation may export (Fluvius allows 5 kW on a single-phase connection). The plan never counts on more, and it is the value restored after a negative-price block. |
+| Normal export limit | `export_limit_kw` | 5.0 kW | The most your installation may export (Fluvius allows 5 kW on a single-phase connection). The plan never counts on more. After a negative-price block the inverter's export limit is put back to what it was before the block; this setting is used only when that could not be read. |
 | Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
 | Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
 | Car: smallest charging power | `car_min_kw` | 0 kW (off) | Switches car detection on. A jump in house consumption of at least this many kW above the level of the last 10 minutes, lasting 3 minutes, is taken as the car charging. The session ends when consumption is below that level plus half this value for 2 minutes. For a charger limited to 5 kW, about 3.5 is a good value. Not needed with the `car_charger_power` entity. See *Electric car*. |
