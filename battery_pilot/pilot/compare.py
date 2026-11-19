@@ -1,4 +1,5 @@
-"""Fixed versus dynamic contract, from your own measured energy flows.
+"""Fixed versus dynamic contract (and a variable one, when it is filled in), from your own
+measured energy flows.
 
 Two views, kept per month:
 
@@ -35,9 +36,16 @@ from .planner import make_plan, market_at, sticky_action
 from .prices import PriceSlot, price_at
 from .simulate import Battery
 from .simulate import step as sim_step
-from .tariffs import capacity_month_eur, is_night, tariff
+from .tariffs import capacity_month_eur, is_night, kinds, tariff
 
-KINDS = ("fixed", "dynamic")
+KINDS = ("fixed", "dynamic", "variable")      # kept for each month; `tariffs.kinds` says which are compared
+
+
+def _replay_blank():
+    return {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "grid_charged": 0.0,
+            "stored_c": 0.0, "peak_kw": 0.0, "days": 0,
+            # (variable only) fixed on the same days, so the two are set against each other on equal terms
+            "fixed_cost_c": 0.0, "fixed_peak_kw": 0.0}
 
 
 def _month(t: datetime, tz: ZoneInfo) -> str:
@@ -53,10 +61,7 @@ def _blank():
     return {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "market_sum": 0.0, "market_n": 0,
             # the same three for the quarters that have a market price (what both contracts are priced on)
             "p_imp_day": 0.0, "p_imp_night": 0.0, "p_exp": 0.0,
-            "dyn_c": 0.0, "quarters": 0, "replay": {k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0,
-                                                        "discharged": 0.0, "grid_charged": 0.0, "stored_c": 0.0,
-                                                        "peak_kw": 0.0}
-                       for k in KINDS},
+            "dyn_c": 0.0, "quarters": 0, "replay": {k: _replay_blank() for k in KINDS},
             "replay_days": 0, "peak_kw": 0.0, "estimated": 0}
 
 
@@ -76,6 +81,8 @@ class Comparison:
                 m["p_" + k] = m.get(k, 0.0) * share
         for k, v in _blank().items():                     # older state files: add new fields
             m.setdefault(k, v)
+        for k in KINDS:                                   # (before 2.20.0: no variable contract)
+            m["replay"].setdefault(k, _replay_blank())
         return m
 
     # ---------------------------------------------------------------- same usage
@@ -106,11 +113,16 @@ class Comparison:
             m["dyn_c"] += imp * dyn.buy(local, market) - exp * dyn.sell(local, market)
 
     # ---------------------------------------------------------------- replay
-    def add_replay(self, key: str, kind: str, result: dict) -> None:
+    def add_replay(self, key: str, kind: str, result: dict, fixed: dict | None = None) -> None:
+        """`fixed`: for the variable contract, fixed's result of the same day."""
         r = self.month(key)["replay"][kind]
         for k in ("cost_c", "imp", "exp", "charged", "discharged", "grid_charged", "stored_c"):
             r[k] = r.get(k, 0.0) + result.get(k, 0.0)
         r["peak_kw"] = max(r["peak_kw"], result["peak_kw"])
+        r["days"] = r.get("days", 0) + 1
+        if fixed is not None:
+            r["fixed_cost_c"] = r.get("fixed_cost_c", 0.0) + fixed["cost_c"]
+            r["fixed_peak_kw"] = max(r.get("fixed_peak_kw", 0.0), fixed["peak_kw"])
 
     # ---------------------------------------------------------------- report
     def report(self, key: str, o: Options) -> dict:
@@ -127,6 +139,14 @@ class Comparison:
         counted = m["market_n"] if p else m["quarters"]
         share = min(counted / (days * 96), 1.0) if m["quarters"] else 1.0     # (taken over from Playbook: whole month)
         cap = capacity_month_eur(m["peak_kw"], o) * share
+        variable_eur = None
+        if o.variable_set and m["market_n"]:
+            # its index: the one published for the month when it was set (kept with the month), else the average
+            var = tariff("variable", o, m.get("variable_index") or avg)
+            # Its price is the same all month, apart from day and night: priced on the month's totals.
+            variable_eur = round((m["p_imp_day"] * var.rate(False) + m["p_imp_night"] * var.rate(True)
+                                  - m["p_exp"] * var.sell(None)) / 100
+                                 + o.variable_yearly_fee_eur / 12 * share + cap, 2)
         out = {
             "month": key,
             "market_avg_eur_mwh": round(avg, 1) if avg is not None else None,
@@ -137,6 +157,7 @@ class Comparison:
                 "fixed_eur": round(fixed_energy + o.fixed_yearly_fee_eur / 12 * share + cap, 2),
                 "dynamic_eur": round(m["dyn_c"] / 100 + o.dynamic_yearly_fee_eur / 12 * share + cap, 2)
                 if m["market_n"] else None,
+                **({"variable_eur": variable_eur} if o.variable_set else {}),
             },
             "days": round(days * share, 1),          # days of the month the same-usage amounts cover
             "month_days": days,
@@ -146,16 +167,23 @@ class Comparison:
         }
         if m["replay_days"]:
             ws = {}
-            part = min(m["replay_days"] / days, 1.0)         # the replayed days' part of the month
-            for kind in KINDS:
+            for kind in kinds(o):
                 r = m["replay"][kind]
-                fee = (o.fixed_yearly_fee_eur if kind == "fixed" else o.dynamic_yearly_fee_eur) / 12
+                # fixed and dynamic are replayed together (`replay_days`); variable counts its own days
+                n = r.get("days", 0) if kind == "variable" else m["replay_days"]
+                if not n:           # (a variable contract filled in after this month's replays began)
+                    continue
+                part = min(n / days, 1.0)         # the replayed days' part of the month
+                fee = tariff(kind, o).yearly_fee_eur / 12
                 ws[kind] = {"eur": round(r["cost_c"] / 100 + (fee + capacity_month_eur(r["peak_kw"], o)) * part, 2),
                             "bought_kwh": round(r["imp"], 1), "sold_kwh": round(r["exp"], 1),
                             "battery_in_kwh": round(r["charged"], 1), "battery_out_kwh": round(r["discharged"], 1),
                             "grid_charged_kwh": round(r.get("grid_charged", 0.0), 1),
                             "stored_eur": round(r.get("stored_c", 0.0) / 100, 2),
-                            "peak_kw": round(r["peak_kw"], 2)}
+                            "peak_kw": round(r["peak_kw"], 2), "days": n}
+                if kind == "variable":       # fixed on the same days (it may have been filled in mid-month)
+                    ws[kind]["fixed_eur"] = round(r.get("fixed_cost_c", 0.0) / 100 + (
+                        o.fixed_yearly_fee_eur / 12 + capacity_month_eur(r.get("fixed_peak_kw", 0.0), o)) * part, 2)
             out["with_strategy"] = ws
         if key in self.imported:
             out["imported_from_playbook"] = self.imported[key]
@@ -173,12 +201,25 @@ class Comparison:
             d = sum(r["same_usage"]["dynamic_eur"] for r in same)
             res["same_usage"] = {"fixed_eur": round(f, 2), "dynamic_eur": round(d, 2),
                                  "dynamic_minus_fixed_eur": round(d - f, 2), "months": len(same)}
+            var = [r for r in same if r["same_usage"].get("variable_eur") is not None]
+            if var:          # over the months it has, against fixed over the same months
+                v = sum(r["same_usage"]["variable_eur"] for r in var)
+                fv = sum(r["same_usage"]["fixed_eur"] for r in var)
+                res["same_usage"].update({"variable_eur": round(v, 2), "variable_minus_fixed_eur": round(v - fv, 2),
+                                          "variable_months": len(var)})
         if strat:
             f = sum(r["with_strategy"]["fixed"]["eur"] for r in strat)
             d = sum(r["with_strategy"]["dynamic"]["eur"] for r in strat)
             res["with_strategy"] = {"fixed_eur": round(f, 2), "dynamic_eur": round(d, 2),
                                     "dynamic_minus_fixed_eur": round(d - f, 2),
                                     "days": sum(r["replay_days"] for r in strat)}
+            var = [r for r in strat if "variable" in r["with_strategy"]]
+            if var:
+                ws = [r["with_strategy"] for r in var]
+                v = sum(w["variable"]["eur"] for w in ws)
+                fv = sum(w["variable"]["fixed_eur"] for w in ws)
+                res["with_strategy"].update({"variable_eur": round(v, 2), "variable_minus_fixed_eur": round(v - fv, 2),
+                                             "variable_days": sum(w["variable"]["days"] for w in ws)})
         return res
 
     def prune(self, keep: int = 14) -> None:
@@ -211,6 +252,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     `solar_hold`: it has a feed-in priority switch, so the plan may put solar charging off.
     `on_replan(quarters so far, time)` is called before each plan: the forecast corrects itself with
     the solar measured so far that day, as the app does (`PvForecast.observe`).
+    `market_avg`: the month's average market price; for the variable contract, its index for the month.
     `cost_c` includes `stored_c`: the change in stored energy over the day, valued as the planner
     values what is left in the battery (negative when the battery ends fuller: a credit).
     """
@@ -219,7 +261,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     if len(recs) < 88 or len(good) < 0.75 * len(recs):
         return None
     b = Battery.from_options(o)
-    tar = tariff(kind, o)
+    tar = tariff(kind, o, market_avg)
     soc = soc0
     car_at: float | None = None          # the floor of the car session that runs (see below)
     winter_days: dict = {}               # each date is a winter day or not once, as in the app

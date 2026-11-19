@@ -619,18 +619,25 @@ function comparison(c) {
   const sum = [];
   if (c.same_usage) sum.push(kpi(`same usage, ${c.same_usage.months} month(s): dynamic − fixed`, signed(c.same_usage.dynamic_minus_fixed_eur)));
   if (c.with_strategy) sum.push(kpi(`best battery use, ${c.with_strategy.days} day(s): dynamic − fixed`, signed(c.with_strategy.dynamic_minus_fixed_eur)));
+  // A variable (monthly-indexed) contract, when it is filled in: its own columns
+  const su = c.same_usage || {}, wsum = c.with_strategy || {};
+  if (su.variable_minus_fixed_eur != null) sum.push(kpi(`same usage, ${su.variable_months} month(s): variable − fixed`, signed(su.variable_minus_fixed_eur)));
+  if (wsum.variable_minus_fixed_eur != null) sum.push(kpi(`best battery use, ${wsum.variable_days} day(s): variable − fixed`, signed(wsum.variable_minus_fixed_eur)));
   if (!sum.length) sum.push(kpi("comparison", "collecting data"));
   $("cmpsum").innerHTML = sum.join("");
-  let h = `<tr><th>Month</th><th>Bought</th><th>Sold</th><th>Market</th><th>Fixed</th><th>Dynamic</th>
-           <th>Fixed, best use</th><th>Dynamic, best use</th><th>Days replayed</th></tr>`;
+  const vr = rows.some((r) => "variable_eur" in r.same_usage);
+  let h = `<tr><th>Month</th><th>Bought</th><th>Sold</th><th>Market</th><th>Fixed</th><th>Dynamic</th>${vr ? "<th>Variable</th>" : ""}
+           <th>Fixed, best use</th><th>Dynamic, best use</th>${vr ? "<th>Variable, best use</th>" : ""}<th>Days replayed</th></tr>`;
   for (const r of rows.slice().reverse()) {
     const ws = r.with_strategy;
+    const v1 = vr ? `<td>${r.same_usage.variable_eur == null ? "–" : eur(r.same_usage.variable_eur)}</td>` : "";
+    const v2 = vr ? `<td>${ws && ws.variable ? best(ws.variable) : "–"}</td>` : "";
     const partial = r.days !== undefined && r.days < r.month_days - 0.5;
     const cover = partial ? `<span class="sub">${fmt(r.days, r.days < 10 ? 1 : 0)} of ${r.month_days} days</span>` : "";
     h += `<tr><td>${esc(r.month)}${r.imported_from_playbook ? " *" : ""}${r.estimated_quarters ? " †" : ""}${cover}</td><td>${fmt(r.bought_kwh, 0)} kWh</td><td>${fmt(r.sold_kwh, 0)} kWh</td>
       <td>${r.market_avg_eur_mwh === null ? "–" : "€" + fmt(r.market_avg_eur_mwh, 0) + "/MWh"}</td>
-      <td>${eur(r.same_usage.fixed_eur)}</td><td>${eur(r.same_usage.dynamic_eur)}</td>
-      <td>${ws ? best(ws.fixed) : "–"}</td><td>${ws ? best(ws.dynamic) : "–"}</td><td>${r.replay_days}</td></tr>`;
+      <td>${eur(r.same_usage.fixed_eur)}</td><td>${eur(r.same_usage.dynamic_eur)}</td>${v1}
+      <td>${ws ? best(ws.fixed) : "–"}</td><td>${ws ? best(ws.dynamic) : "–"}</td>${v2}<td>${r.replay_days}</td></tr>`;
   }
   $("cmp").innerHTML = h;
   const notes = [];
@@ -644,6 +651,10 @@ function comparison(c) {
                "the value the plan gives it.");
   if (rows.some((r) => r.estimated_quarters))
     notes.push("† Some quarter-hours had no market price; both contracts use the price of the day before there.");
+  if (vr)
+    notes.push("Variable prices each month at its index: the month's average market price, or the index you entered " +
+               "for that month. A supplier that weighs Belpex by a typical household's usage (Belpex RLP) bills a little " +
+               "differently from the plain average. Its total against fixed covers the days it has a result for.");
   $("cmpnote").textContent = notes.join(" ");
 }
 const signed = (v) => `<span class="${v < 0 ? "neg" : "pos"}">${v < 0 ? "−" : "+"}€${Math.abs(v).toFixed(0)}</span>`;

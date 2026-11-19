@@ -1,12 +1,19 @@
 """Contract price models, in c/kWh.
 
-Both contracts pay the same grid fees and taxes on every bought kWh and the
+All contracts pay the same grid fees and taxes on every bought kWh and the
 same injection fee on every sold kWh; only the energy part differs.
 
 Fixed:   buy  = day or night rate + grid fees
          sell = fixed_sell_mult x (this month's average market price, EUR/MWh) + fixed_sell_add - injection fee
 Dynamic: buy  = (dynamic_buy_mult x market + dynamic_buy_add) x (1 + VAT) + grid fees
          sell = dynamic_sell_mult x market + dynamic_sell_add - injection fee
+Variable (a Belgian monthly-indexed contract: the price changes each month, not each hour):
+         buy  = (variable_{day|night}_mult x index + variable_{day|night}_add) x (1 + VAT) + grid fees
+         sell = variable_sell_mult x index + variable_sell_add - injection fee
+         index = the month's average market price (EUR/MWh), or the index published for that month
+         (variable_index_eur_mwh for variable_index_month; the app keeps it with the month).
+         Suppliers mostly use Belpex, the Belgian day-ahead price, as a monthly average (often weighted
+         by the household load profile, "Belpex RLP"); the plain average is close to it.
 """
 from __future__ import annotations
 
@@ -78,8 +85,49 @@ class DynamicTariff(Tariff):
         return self.o.dynamic_sell_mult * m + self.o.dynamic_sell_add - self.o.injection_fee_c_kwh
 
 
-def tariff(kind: str, opts: Options) -> Tariff:
-    return FixedTariff(opts) if kind == "fixed" else DynamicTariff(opts)
+class VariableTariff(Tariff):
+    kind = "variable"
+
+    def __init__(self, opts: Options, market_avg: float | None = None):
+        super().__init__(opts)
+        self.market_avg = market_avg
+
+    @property
+    def yearly_fee_eur(self) -> float:
+        return self.o.variable_yearly_fee_eur
+
+    def index(self) -> float | None:
+        """The month's index in EUR/MWh, as given when the tariff was made (`App.variable_index`).
+        The `market_avg` passed to `sell` is not used: the index is the one of the month priced."""
+        return self.market_avg
+
+    def buy(self, t_local, market=None):
+        return self.rate(is_night(t_local, self.o))
+
+    def rate(self, night: bool) -> float:
+        """The buy price this month, day or night (grid fees included)."""
+        idx = self.index() or 0.0
+        o = self.o
+        mult, add = o.variable_night if night else (o.variable_day_mult, o.variable_day_add)
+        return (mult * idx + add) * (1 + o.variable_vat_pct / 100) + o.grid_fees_c_kwh
+
+    def sell(self, t_local, market=None, market_avg=None):
+        idx = self.index() or 0.0
+        return self.o.variable_sell_mult * idx + self.o.variable_sell_add - self.o.injection_fee_c_kwh
+
+
+def tariff(kind: str, opts: Options, market_avg: float | None = None) -> Tariff:
+    """`market_avg`: for a variable contract, its index for the month priced."""
+    if kind == "fixed":
+        return FixedTariff(opts)
+    if kind == "variable":
+        return VariableTariff(opts, market_avg)
+    return DynamicTariff(opts)
+
+
+def kinds(opts: Options) -> tuple[str, ...]:
+    """The contracts priced and compared: fixed and dynamic, and variable when it is filled in."""
+    return ("fixed", "dynamic", "variable") if opts.variable_set else ("fixed", "dynamic")
 
 
 def breakeven_eur_mwh(fixed_rate: float, opts: Options) -> float | None:

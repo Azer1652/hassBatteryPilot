@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.20.0
+
+A third contract type: **variable**, a Belgian monthly-indexed contract whose price changes
+each month with an index (usually Belpex, the Belgian day-ahead price).
+
+- **Variable contract.** Enter the formula from your supplier's tariff sheet: a factor times the
+  index plus a fixed part, for day, night and injection, and the yearly fee (the new *Variable*
+  settings; leave night at 0 for a single-rate meter). Battery Pilot works out the index as the
+  month's average market price from the price sensor it already reads. When your supplier
+  publishes a month's index (for example Belpex RLP), enter it with that month in *Variable:
+  published index* and *Variable: month of that index*: only that month uses it, and it stays
+  with that month when you enter the next one.
+- **Plan on it** with *Your contract now* set to `variable`. Within a month the price is the
+  same every hour apart from day and night, so the battery is planned as on a fixed contract.
+- **Compare it** without switching: once its formula is filled in, the comparison gets a
+  variable column (same usage and best battery use) and a "variable − fixed" total. Days
+  replayed before you filled it in count for fixed and dynamic only; the "variable − fixed"
+  total sets variable against fixed on the same days.
+- Nothing changes for an existing install until the variable settings are filled in: they
+  default to 0, which leaves the variable contract out.
+
 ## 2.19.2
 
 - **Marstek: the taurgis integration works too.** Besides Marstek Local API (jaapp), the

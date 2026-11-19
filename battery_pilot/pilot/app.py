@@ -15,7 +15,7 @@ from . import history as H
 from . import marstek as M
 from . import prices as P
 from . import trading
-from .compare import KINDS, Comparison, day_records, replay_day
+from .compare import Comparison, day_records, replay_day
 from .config import ConfigError, Options
 from .controller import ACTIVE, FILL_AGAIN, MODES, Decision, Readings, decide, expected_modes
 from .discovery import ENTITIES, NEEDED_FOR, SLOT_ONLY, charge_method, find_notify, resolve_all
@@ -31,7 +31,7 @@ from .solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, 
 from .solis import NEEDED as SOLIS_NEEDED
 from .solis import OPTIONAL as SOLIS_OPTIONAL
 from .solis import Solis
-from .tariffs import breakeven_eur_mwh, capacity_month_eur, is_night, tariff
+from .tariffs import breakeven_eur_mwh, capacity_month_eur, is_night, kinds, tariff
 
 log = logging.getLogger("battery_pilot")
 
@@ -1019,6 +1019,26 @@ class App:
             return statistics.fmean(p.eur_mwh for p in self.price_slots)
         return None
 
+    def variable_index(self, t: datetime) -> float | None:
+        """A variable contract's index for the month of `t`: the one published for that month (set in the
+        options, and kept with the month so a later month's setting does not change it), else the month's
+        average market price."""
+        key = t.astimezone(self.tz).strftime("%Y-%m")
+        o = self.o
+        if o.variable_index_eur_mwh > 0 and o.variable_index_month.strip() == key:
+            return o.variable_index_eur_mwh
+        kept = (self.comparison.months.get(key) or {}).get("variable_index")
+        return kept if kept else self.market_avg_month(t)
+
+    def _keep_variable_index(self):
+        """The index set in the options belongs to its month: keep it there (for the comparison)."""
+        key = self.o.variable_index_month.strip()
+        if self.o.variable_index_eur_mwh > 0 and key:
+            m = self.comparison.months.get(key)
+            if m is None and key < min(self.comparison.months, default=key):
+                return                        # a month older than any kept: nothing to price
+            self.comparison.month(key)["variable_index"] = self.o.variable_index_eur_mwh
+
     def market_avg_30d(self) -> float | None:
         vals = [v for _, v in sorted(self.daily_market.items())[-30:]]
         return round(statistics.fmean(vals), 1) if vals else None
@@ -1179,12 +1199,19 @@ class App:
         if soc is None:
             st = self.meter.soc_at_start
             soc = st if st is not None else 50.0
-        tar = tariff(self.o.contract, self.o)
+        self._keep_variable_index()
+        tar = tariff(self.o.contract, self.o,
+                     self.variable_index(now) if self.o.contract == "variable" else self.market_avg_month(now))
         if self.o.contract == "dynamic" and not self.price_slots:
             self.plan = None
             self.problem = "Dynamic contract but no prices: check the price sensor."
             return
-        if self.problem and self.problem.startswith("Dynamic contract"):
+        if self.o.contract == "variable" and tar.index() is None:
+            self.plan = None
+            self.problem = ("Variable contract but no market prices for its monthly index: check the price sensor, "
+                            "or set this month's index (variable_index_eur_mwh and variable_index_month).")
+            return
+        if self.problem and self.problem.startswith(("Dynamic contract", "Variable contract")):
             self.problem = None
         current = sticky_action(self.plan, now, soc, self.o.battery_reserve_soc) if self.readings else None
         # Today's weather against the forecast, from the quarters measured so far.
@@ -1211,7 +1238,9 @@ class App:
         self.label_plan(now)
         self._log_plan(now)
         avg = self.market_avg_month(now)
-        self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz, avg) for k in KINDS}
+        self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz,
+                                           self.variable_index(now) if k == "variable" else avg)
+                        for k in kinds(self.o)}
         boost, seen = self.plan.boost, self.boost_seen
         # The plan is redone every few minutes while a boost runs: announce a window once, unless
         # a new one starts after it or the level goes up clearly.
@@ -1270,9 +1299,9 @@ class App:
         market = P.price_at(self.price_slots, now)
         avg = self.market_avg_month(now)
         out = {"market": market}
-        for kind in KINDS:
-            t = tariff(kind, self.o)
-            if kind == "dynamic" and market is None:
+        for kind in kinds(self.o):
+            t = tariff(kind, self.o, self.variable_index(now) if kind == "variable" else avg)
+            if (kind == "dynamic" and market is None) or (kind == "variable" and t.index() is None):
                 out[kind] = None
                 continue
             out[kind] = {"buy": round(t.buy(local, market), 2), "sell": round(t.sell(local, market, avg), 2)}
@@ -1303,13 +1332,15 @@ class App:
             self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
             if self.price_slots or self.o.contract == "fixed":
                 # The replay is CPU work: run it in a thread on copies, apply the results here.
-                soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
-                peak0 = {k: self.comparison.month(y.strftime("%Y-%m"))["replay"][k]["peak_kw"] for k in KINDS}
+                soc0 = {k: self.comparison.sim_soc.get(k) for k in kinds(self.o)}
+                peak0 = {k: self.comparison.month(y.strftime("%Y-%m"))["replay"][k]["peak_kw"] for k in kinds(self.o)}
                 block = self.blocks_negative_export
                 avg = self.market_avg_month(start)   # here: the loop changes daily_market while the thread runs
+                self._keep_variable_index()
+                var_idx = self.variable_index(start)
                 job = asyncio.get_running_loop().run_in_executor(
                     None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive),
-                    soc0, block, peak0, avg)
+                    soc0, block, peak0, avg, var_idx)
                 self._replay_task = asyncio.ensure_future(self._finish_replay(job, y, block))
                 if wait:
                     await self._replay_task
@@ -1338,19 +1369,23 @@ class App:
             self.event(f"Storing the history of {day} failed: {e}", logging.WARNING)
 
     def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict,
-                block_negative: bool = False, peak0: dict | None = None, avg: float | None = None):
+                block_negative: bool = False, peak0: dict | None = None, avg: float | None = None,
+                var_idx: float | None = None):
         """Runs in a worker thread: it reads only the copies it is given, and the learned load and shade
         (changed only by nightly(), which does not run meanwhile)."""
         archive = {datetime.fromisoformat(k): v for k, v in forecast_archive.items()}
         pv_fc = PvForecast(archive, self.shade, self.tz)
         results = {}
-        for kind in KINDS:
+        for kind in kinds(self.o):
             if kind == "dynamic" and not price_slots:
+                continue
+            if kind == "variable" and var_idx is None:
                 continue
             s0 = soc0.get(kind)
             if s0 is None:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
-            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
+            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0,
+                             var_idx if kind == "variable" else avg,
                              block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold,
                              on_replan=lambda past, t: pv_fc.observe(past, t, export_limit_kw=self.o.export_limit_kw))
@@ -1364,16 +1399,19 @@ class App:
             self.event(f"Replay of {day} skipped: too much data missing.")
             return
         key = day.strftime("%Y-%m")
-        both = len(results) == len(KINDS)
+        # A day replayed for fixed only (no prices) would count for that one alone: fixed and dynamic
+        # both, or neither. The variable contract counts its own days (it may be filled in later).
+        both = "fixed" in results and "dynamic" in results
         for kind, res in results.items():
-            if both:          # a day replayed for one contract only would count for that one alone
-                self.comparison.add_replay(key, kind, res)
+            if both:
+                self.comparison.add_replay(key, kind, res, results["fixed"] if kind == "variable" else None)
             self.comparison.sim_soc[kind] = res["soc_end"]
         if both:
             self.comparison.month(key)["replay_days"] += 1
             f, d = results["fixed"]["cost_c"] / 100, results["dynamic"]["cost_c"] / 100
+            v = f", variable €{results['variable']['cost_c'] / 100:.2f}" if "variable" in results else ""
             blocked = "; export blocked at negative prices" if block_negative else ""
-            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f} (energy, wear, stored energy{blocked}).")
+            self.event(f"Replayed {day}: fixed €{f:.2f}, dynamic €{d:.2f}{v} (energy, wear, stored energy{blocked}).")
 
     # ---------------------------------------------------------------- alerts
     async def alert(self, title: str, message: str, key: str | None, phone: bool = True):
@@ -1440,10 +1478,13 @@ class App:
         parts = [f"Same usage: fixed €{su['fixed_eur']:.0f}"]
         if su["dynamic_eur"] is not None:
             parts.append(f"dynamic €{su['dynamic_eur']:.0f}")
+        if su.get("variable_eur") is not None:
+            parts.append(f"variable €{su['variable_eur']:.0f}")
         ws = r.get("with_strategy")
         if ws:
+            var = f", variable €{ws['variable']['eur']:.0f}" if "variable" in ws else ""
             parts.append(f"with the best battery use for each ({r['replay_days']} days): fixed €{ws['fixed']['eur']:.0f},"
-                         f" dynamic €{ws['dynamic']['eur']:.0f}")
+                         f" dynamic €{ws['dynamic']['eur']:.0f}{var}")
         if r.get("market_avg_eur_mwh") is not None:
             parts.append(f"market average €{r['market_avg_eur_mwh']:.0f}/MWh")
         return " · ".join(parts) + "."
@@ -1492,7 +1533,8 @@ class App:
         if pr.get("buy") is not None:
             sensors.append(("sensor.battery_pilot_buy_price", pr["buy"], {
                 "friendly_name": "Battery Pilot buy price", "unit_of_measurement": "c/kWh", "icon": "mdi:cash-minus",
-                "contract": self.o.contract, "fixed": pr["fixed"], "dynamic": pr["dynamic"], "market_eur_mwh": pr["market"]}))
+                "contract": self.o.contract, "fixed": pr["fixed"], "dynamic": pr["dynamic"], "market_eur_mwh": pr["market"],
+                **({"variable": pr["variable"]} if "variable" in pr else {})}))
             sensors.append(("sensor.battery_pilot_sell_price", pr["sell"], {
                 "friendly_name": "Battery Pilot sell price", "unit_of_measurement": "c/kWh", "icon": "mdi:cash-plus",
                 "contract": self.o.contract}))
@@ -1503,6 +1545,7 @@ class App:
                 "friendly_name": "Battery Pilot dynamic minus fixed", "unit_of_measurement": "EUR",
                 "icon": "mdi:compare-horizontal", "basis": "with_strategy" if s.get("with_strategy") else "same_usage",
                 "fixed_eur": best["fixed_eur"], "dynamic_eur": best["dynamic_eur"],
+                "variable_eur": best.get("variable_eur"), "variable_minus_fixed_eur": best.get("variable_minus_fixed_eur"),
                 "same_usage": s.get("same_usage"), "with_strategy": s.get("with_strategy")}))
         car = self.car_status(now)
         if car["enabled"]:
