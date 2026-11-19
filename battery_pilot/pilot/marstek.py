@@ -2,17 +2,20 @@
 
 Two Home Assistant integrations can see the same battery, and Battery Pilot uses both:
 
-* **Marstek Local API** (`marstek_local_api`, jaapp/ha-marstek-local-api): the battery's own
-  UDP API on the LAN. Readings (SOC, power, voltage) and the only way to steer it:
-  `marstek_local_api.set_passive_mode` (power in W, negative = charge, positive = discharge,
-  for a duration in seconds) and the *Auto mode* button (the battery's own self-consumption on
-  its CT or P1 meter, which is self-use here).
+* **a local integration**, on the battery's own UDP API on the LAN: Marstek Local API
+  (`marstek_local_api`, jaapp/ha-marstek-local-api) or Marstek (`marstek`,
+  taurgis/has-marstek-local-api), see `INTEGRATIONS`. Readings (SOC, power, voltage) and the only
+  way to steer it: `<domain>.set_passive_mode` (power in W, negative = charge, positive =
+  discharge, for a duration in seconds) and Auto mode (the battery's own self-consumption on its
+  CT or P1 meter, which is self-use here): jaapp's *Auto mode* button, taurgis's operating-mode
+  select.
 * **Marstek Cloud** (`marstek_cloud`, DoctaShizzle/marstek_cloud): the same battery through
   Marstek's cloud. Readings only (SOC, charge and discharge power, report time).
 
-The local link drops out now and then. The local integration then keeps showing its last values
+The local link drops out now and then. jaapp's integration then keeps showing its last values
 and only its *Last message received* sensor grows, so a reading counts as fresh only while that
-is under `marstek_stale_s`; otherwise the cloud's reading is used, when its report is fresh.
+is under `marstek_stale_s` (taurgis's has no such sensor: its entities turn unavailable instead);
+otherwise the cloud's reading is used, when its report is fresh.
 With neither fresh, the SOC is unknown and the app's blind rule returns the battery to self-use.
 
 Commands have no second path (the cloud integration cannot steer), so they are made to fail
@@ -46,35 +49,6 @@ from .solis import hour_slot
 log = logging.getLogger(__name__)
 
 LOCAL = "marstek_local_api"
-
-
-@dataclass(frozen=True)
-class Integration:
-    """A local Marstek integration: its domain (platform and actions) and how its readings look."""
-    domain: str
-    name: str
-    power_plus_charging: bool      # its battery power sensor is + while charging
-    last_message: bool             # it has a "Last message received" sensor (else: unavailable when silent)
-
-
-JAAPP = Integration(LOCAL, "Marstek Local API (jaapp/ha-marstek-local-api)", True, True)
-# taurgis/has-marstek-local-api: the same `set_passive_mode` (power, negative charges; duration), an
-# operating-mode select (auto, ai, manual, passive), battery power + discharging, and entities that
-# turn unavailable after a few failed polls (they show cached values until then).
-TAURGIS = Integration("marstek", "Marstek (taurgis/has-marstek-local-api)", False, False)
-INTEGRATIONS = (JAAPP, TAURGIS)
-
-
-def pick_integration(services: list, registry: list | None) -> Integration | None:
-    """The local Marstek integration Home Assistant has (with its set_passive_mode action); with both,
-    the one whose entities are in the registry."""
-    have = [i for i in INTEGRATIONS
-            if any(d.get("domain") == i.domain and PASSIVE_SERVICE in (d.get("services") or {})
-                   for d in services or [])]
-    if len(have) > 1:
-        used = [i for i in have if any(e.get("platform") == i.domain for e in registry or [])]
-        have = used or have
-    return have[0] if have else None
 CLOUD = "marstek_cloud"
 PASSIVE_SERVICE = "set_passive_mode"
 PASSIVE_S = 5 * 60           # every passive command lapses by itself after this (a lost link gives the battery back)
@@ -95,7 +69,7 @@ class MarstekTimeout(Exception):
 # entity names chosen by the user (or by Marstek's cloud) do not matter.
 REGISTRY = {
     "battery_soc": (LOCAL, "battery_soc"),
-    "battery_power": (LOCAL, "battery_power"),            # W, + charging
+    "battery_power": (LOCAL, "battery_power"),            # W, + charging (jaapp), + discharging (taurgis)
     "battery_voltage": (LOCAL, "battery_voltage"),
     "marstek_last_message": (LOCAL, "last_message_received"),
     "marstek_auto_mode_button": (LOCAL, "auto_mode_button"),
@@ -107,15 +81,51 @@ REGISTRY = {
 }
 
 
-def auto_option(options) -> str:
-    """The option of an operating-mode select that is Auto mode (its spelling varies)."""
+@dataclass(frozen=True)
+class Integration:
+    """A local Marstek integration: its domain (platform and actions) and how its readings look."""
+    domain: str
+    name: str
+    power_plus_charging: bool      # its battery power sensor is + while charging
+    last_message: bool             # it has a "Last message received" sensor (else: unavailable when silent)
+    auto_entity: str               # the entity key that switches to Auto mode
+    auto: str                      # the select's Auto option when its list of options cannot be read
+
+
+JAAPP = Integration(LOCAL, "Marstek Local API (jaapp/ha-marstek-local-api)", True, True,
+                    "marstek_auto_mode_button", "Auto")
+# taurgis/has-marstek-local-api: the same `set_passive_mode` (power, negative charges; duration), an
+# operating-mode select (auto, ai, manual, passive), battery power + discharging, and entities that
+# turn unavailable after a few failed polls (they show cached values until then: 3 polls of 30 s by
+# default, longer when its failure threshold or poll interval is raised). Its Venus E mini on
+# firmware 301 refuses passive mode.
+TAURGIS = Integration("marstek", "Marstek (taurgis/has-marstek-local-api)", False, False,
+                      "marstek_mode_select", "auto")
+INTEGRATIONS = (JAAPP, TAURGIS)
+
+
+def pick_integration(services: list, registry: list | None) -> Integration | None:
+    """The local Marstek integration Home Assistant has (with its set_passive_mode action); with both,
+    the one whose entities are in the registry."""
+    have = [i for i in INTEGRATIONS
+            if any(d.get("domain") == i.domain and PASSIVE_SERVICE in (d.get("services") or {})
+                   for d in services or [])]
+    if len(have) > 1:
+        used = [i for i in have if any(e.get("platform") == i.domain for e in registry or [])]
+        have = used or have
+    return have[0] if have else None
+
+
+def auto_option(options, default: str = "Auto") -> str:
+    """The option of an operating-mode select that is Auto mode (its spelling varies); `default`
+    when the options cannot be read."""
     for o in options or []:
         if str(o).strip().lower() in ("auto", "auto mode", "automatic"):
             return str(o)
     for o in options or []:
         if "auto" in str(o).lower():
             return str(o)
-    return "Auto"
+    return default
 
 
 # Unique IDs that end like one above but are something else.

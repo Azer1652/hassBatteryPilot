@@ -128,7 +128,7 @@ have `set_passive_mode`): jaapp's (`marstek_local_api`, power + charging, *Last 
 taurgis's (`marstek`, power + discharging, no last-message sensor: entities go unavailable, so age 0
 while available). `registry_match(local=...)` swaps the platform. Charge/discharge =
 `<domain>.set_passive_mode` (W = amps × volts, negative = charge, `PASSIVE_S`, renewed every
-`RENEW_S`), self-use = the *Auto mode* button or the operating-mode select's auto option. Passive, not
+`RENEW_S`), self-use = jaapp's *Auto mode* button or taurgis's operating-mode select (`Integration.auto_entity`). Passive, not
 Manual: Manual writes schedule slots that stay on the battery; Passive is a setpoint with a countdown
 (Open API Rev 3.1, mirrored in the taurgis repository's docs folder as marstek_device_openapi.MD). Discovery uses the entity registry
 (`config/entity_registry/list`, matched by platform + unique-ID suffix in `marstek.REGISTRY`), with the

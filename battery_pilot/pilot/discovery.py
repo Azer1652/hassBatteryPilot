@@ -179,12 +179,12 @@ def resolve_all(opts: Options, states: dict, force: bool = False, registry: list
     registry, where a Marstek battery's entities are found)."""
     out = {k: resolve(k, opts, states, registry, integration.domain) for k in ENTITIES}
     if opts.marstek:
-        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
+        missing = [k for k in ("grid_import_power", "house_load_power", integration.auto_entity)
                    + (("marstek_last_message",) if integration.last_message else ())
                    if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)
                    and not (k == "house_load_power" and out["pv_power"].entity_id)]
         if "marstek_auto_mode_button" in missing and out["marstek_mode_select"].entity_id:
-            missing.remove("marstek_auto_mode_button")      # Auto mode through the operating-mode select
+            missing.remove("marstek_auto_mode_button")      # a select set by hand does Auto mode too
         if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:
             missing.append("battery_soc")
         return out, missing

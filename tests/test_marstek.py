@@ -424,35 +424,36 @@ async def test_the_last_message_sensor_is_required(tmpdata):
     assert "marstek_last_message" in missing
 
 
-async def test_auto_mode_through_the_operating_mode_select(tmpdata):
-    """Without the Auto mode button, the operating-mode select picks Auto."""
-    from fake_ha import st
-
-    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
-    del fake.s["button.marstek_venuse_auto_mode"]
-    fake.registry = [e for e in fake.registry if e["entity_id"] != "button.marstek_venuse_auto_mode"]
-    fake.s["select.marstek_venuse_operating_mode"] = st("Manual", options=["Auto", "AI", "Manual", "Passive"])
-    fake.registry.append({"entity_id": "select.marstek_venuse_operating_mode", "platform": "marstek_local_api",
-                          "unique_id": "aabbcc_operating_mode", "device_id": "dev1", "disabled_by": None})
-    fake.registry.append({"entity_id": "sensor.marstek_venuse_operating_mode", "platform": "marstek_local_api",
-                          "unique_id": "aabbcc_operating_mode", "device_id": "dev1", "disabled_by": None})
-    fake.s["sensor.marstek_venuse_operating_mode"] = st("Manual")
+async def test_taurgis_auto_option_without_a_list_of_options(tmpdata):
+    """When the select's options cannot be read at startup, taurgis's own spelling (auto) is sent."""
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek="taurgis")
+    del fake.s["select.marstek_venuse_operating_mode"]["attributes"]["options"]
     app = await start(tmpdata, fake)
-    assert app.ent_ids["marstek_mode_select"] == "select.marstek_venuse_operating_mode"
+    assert app.solis.auto_option == "auto"
+    fake.s["select.marstek_venuse_operating_mode"]["attributes"]["options"] = ["auto", "ai", "manual", "passive"]
     fake.s[FILL]["state"] = "on"
     await run_until(app, fake, fake.now + timedelta(minutes=3))
-    assert app.solis.mode == "charge"
     fake.s[CONTROL]["state"] = "off"
     await run_until(app, fake, fake.now + timedelta(minutes=1))
-    assert ("select", "select_option", {"entity_id": "select.marstek_venuse_operating_mode", "option": "Auto"}) \
+    assert ("select", "select_option", {"entity_id": "select.marstek_venuse_operating_mode", "option": "auto"}) \
         in fake.calls
-    assert fake.mode() == "self_use" and fake.s["select.marstek_venuse_operating_mode"]["state"] == "Auto"
+
+
+async def test_taurgis_without_the_select_names_the_select(tmpdata):
+    """A taurgis install has no Auto mode button, so the message asks for the select."""
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek="taurgis")
+    del fake.s["select.marstek_venuse_operating_mode"]
+    fake.registry = [e for e in fake.registry if not e["entity_id"].startswith("select.")]
+    app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert not await app.setup()
+    assert "marstek_mode_select" in app.problem and "marstek_auto_mode_button" not in app.problem
 
 
 def test_auto_option_spellings():
     assert M.auto_option(["AI", "Auto", "Manual"]) == "Auto"
     assert M.auto_option(["ai", "auto_mode", "manual"]) == "auto_mode"
     assert M.auto_option(None) == "Auto"
+    assert M.auto_option(None, "auto") == "auto"
 
 
 async def test_without_the_passive_action_it_says_which_integration(tmpdata):

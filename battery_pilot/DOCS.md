@@ -479,17 +479,20 @@ grid, so it uses Passive: nothing is written to the schedule, and if Battery Pil
 stops, the battery is back in its own mode within 5 minutes. Leave your Manual schedules
 disabled (or the battery in Auto) when Battery Pilot is not steering.
 
-**Venus E 2.0.** The taurgis integration supports it experimentally: on this model the local
+**Venus E 2.0 and E mini.** The taurgis integration supports it experimentally: on this model the local
 API and the battery's own meter share one Wi-Fi channel, and a busy API can make it lose the
 meter. Update the battery to Control firmware 156 or newer (Marstek's fix for the local API).
-Its passive power is limited to 2.5 kW each way, so keep *Maximum charge current* and *Maximum
+The Venus E mini on firmware 301 has no passive mode, so Battery Pilot
+cannot steer it (every command fails, and the page says so). Passive power is limited to 2.5 kW
+each way, so keep *Maximum charge current* and *Maximum
 discharge current* times *Battery nominal voltage* at 2.5 kW or below: a larger
 command is refused by the integration.
 
 The local link drops out now and then. The jaapp integration then keeps showing its last
 values, so Battery Pilot watches its *Last message received* sensor (the taurgis integration has
 none: its entities turn unavailable after three failed polls instead, and a value is used while it
-is available): with no message for
+is available; with its default settings that is 90 s at most, so if you raise its *failure
+threshold* or *poll interval*, keep their product under `marstek_stale_s`): with no message for
 *Marstek: reading too old after* (`marstek_stale_s`, 300 s), the cloud's SOC and power are used
 instead, as long as the cloud's report is not that old either. The log says when it switches
 and back, and the *Log* tab shows where the readings come from. With neither fresh, the SOC is
@@ -504,8 +507,8 @@ through, the last passive command ends by itself within 5 minutes.
 | `battery_soc` | the local integration's *State of charge* (jaapp) or *Battery level* (taurgis) | required, unless the cloud's is found |
 | `battery_power` | the local integration's *Power* (jaapp, + charging) or *Battery power* (taurgis, + discharging) | optional: the house-load correction below, the efficiency figure |
 | `battery_voltage_sensor` | the Local API's *Voltage* | optional |
-| `marstek_auto_mode_button` | the Local API's *Auto mode* button | required, unless the select below is found |
-| `marstek_mode_select` | a select `marstek_…_operating_mode` (an operating-mode select, as some versions of the integration have) | used for Auto mode before the button: Battery Pilot picks its option with *auto* in the name |
+| `marstek_auto_mode_button` | jaapp's *Auto mode* button | required with jaapp's integration |
+| `marstek_mode_select` | taurgis's *Operating mode* select | required with taurgis's integration: Battery Pilot picks its *auto* option for self-use |
 | `marstek_last_message` | the Local API's *Last message received* | required with jaapp's integration: without it a silent local link (whose values freeze) cannot be noticed; not used with taurgis's |
 | `battery_soc_backup` | the cloud's *State of Charge* | optional: the backup |
 | `battery_charge_power_backup`, `battery_discharge_power_backup` | the cloud's *Charge Power* and *Discharge Power* | optional |

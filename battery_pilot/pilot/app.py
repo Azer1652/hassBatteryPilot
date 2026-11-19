@@ -368,11 +368,12 @@ class App:
                                              if k in ("marstek_auto_mode_button", "marstek_mode_select",
                                                       "export_limit")},
                                    device_id=device, volts=self.o.battery_voltage, domain=integration.domain,
+                                   auto_option=integration.auto,
                                    max_charge_w=int(self.o.max_charge_kw * 1000),
                                    max_discharge_w=int(self.o.max_discharge_kw * 1000))
             if "marstek_mode_select" in self.ent_ids:
                 opts = ((states.get(self.ent_ids["marstek_mode_select"]) or {}).get("attributes") or {}).get("options")
-                self.solis.auto_option = M.auto_option(opts)
+                self.solis.auto_option = M.auto_option(opts, integration.auto)
                 log.info("  ok       marstek auto mode: %s → %s", self.ent_ids["marstek_mode_select"],
                          self.solis.auto_option)
         else:
