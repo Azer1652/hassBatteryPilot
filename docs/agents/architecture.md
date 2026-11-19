@@ -124,7 +124,8 @@ passive at 0 W and `App._follow` calls `Marstek.follow` every tick with the grid
 passive power (`shave_power`: integral on the power last sent, battery only above the limit, surplus
 charged, nothing below the shaving level), so planner and simulator semantics are what a Solis does.
 `grid_power` (one signed meter, a P1), `quarter_average_power` (`QuarterMeter.projection_kw`) and
-`month_peak_power` (`PeakTracker.observe`) are auto-found only with a Marstek. `full_power` (any battery):
+`month_peak_power` (`PeakTracker.observe`) are auto-found only with a Marstek. Without `house_load_power` (Marstek only; `pv_power` then required) `App.tick` uses
+import − export + pv + battery. `full_power` (any battery):
 `controller.decide` charges at the follow current and discharges at the maximum instead of pacing; the
 energy per slot, and so planner and simulator, are unchanged. `tests/fake_ha.py` with
 `marstek=True` is a Solax + Marstek house (`local_down`, `cloud_down`); `tests/test_marstek.py`.

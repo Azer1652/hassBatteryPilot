@@ -283,3 +283,24 @@ async def test_full_power_charges_at_the_limit_not_paced(tmpdata):
     fast = decide(step, r, Options(**MARSTEK, full_power=True), "self_use", "", 0, True)
     assert paced.command == fast.command == "charge"
     assert paced.amps < fast.amps == 35           # the import limit, not the hour
+
+
+async def test_without_a_house_load_sensor_the_load_is_the_balance(tmpdata):
+    """P1 for the grid, the Solax for solar, the Marstek for the battery: house = grid + solar + battery."""
+    fake = FakeHA(utc(2026, 6, 19, 12), soc=40, load=lambda t: 1.2, pv=lambda t: 0.4, marstek=True)
+    del fake.s["sensor.solax_house_load"], fake.s["sensor.solax_house_load_alt"]
+    real = fake._marstek_sensors
+
+    def sensors(grid, batt, dt):
+        fake.s["sensor.solax_house_load"] = {"state": "0", "attributes": {}}
+        real(grid, batt, dt)
+        del fake.s["sensor.solax_house_load"]
+
+    fake._marstek_sensors = sensors
+    app = await start(tmpdata, fake)
+    assert "house_load_power" not in app.ent_ids
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=4))
+    assert app.solis.mode == "charge"
+    assert app.readings.load_kw == pytest.approx(1.2, abs=0.1)
+    assert app.readings.pv_kw == pytest.approx(0.4, abs=0.01)

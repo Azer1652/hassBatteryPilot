@@ -179,7 +179,8 @@ def resolve_all(opts: Options, states: dict, force: bool = False,
     out = {k: resolve(k, opts, states, registry) for k in ENTITIES}
     if opts.marstek:
         missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
-                   if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)]
+                   if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)
+                   and not (k == "house_load_power" and out["pv_power"].entity_id)]
         if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:
             missing.append("battery_soc")
         return out, missing

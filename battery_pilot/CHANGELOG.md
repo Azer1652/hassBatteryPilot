@@ -20,6 +20,8 @@
 - **A HomeWizard P1 meter** can be the grid reading (`grid_power`, + import), and its own
   quarter-hour average and month peak (`quarter_average_power`, `month_peak_power`) feed the
   capacity-peak projection and the month's peak. Found by themselves with a Marstek battery.
+- With a Marstek, a missing house-load sensor is worked out as grid (P1) + solar (the
+  inverter) + the battery's discharge.
 - **Charge and discharge at full power** (`full_power`, off): as fast as the limits allow
   instead of spread over the hour, for batteries whose converter draws a fixed power while it
   runs.

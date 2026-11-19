@@ -559,6 +559,11 @@ class App:
             if self.o.marstek_load_includes_battery and kw["load"] is not None:
                 # the house-load sensor sees the Marstek on the house side: its charging as load
                 kw["load"] = None if kw["battery"] is None else max(kw["load"] + kw["battery"], 0.0)
+            if "house_load_power" not in self.ent_ids:
+                # no house-load sensor: the balance of the grid meter, the solar inverter and the battery
+                parts = (kw["import"], kw["pv"], kw["battery"])
+                kw["load"] = None if None in parts else \
+                    max(kw["import"] - (kw["export"] or 0.0) + kw["pv"] + kw["battery"], 0.0)
         self._blocked = self._blocked or self.curtailed_by_us
         self._car(now, kw["load"], self._kw("car_charger_power", sts) if "car_charger_power" in self.ent_ids else None,
                   soc)

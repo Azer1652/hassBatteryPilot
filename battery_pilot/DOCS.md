@@ -393,7 +393,7 @@ log says which setting to fill in.
 | Setting | Found automatically | Needed | Used for | Without it |
 | --- | --- | --- | --- | --- |
 | `grid_import_power` | a sensor named like `grid_import_power` or `import_power` | required | The quarter-hour meter: monthly capacity peak, the projection of where this quarter-hour is heading, peak warnings, pausing charging, and the "same usage" bill (kWh bought). | Battery Pilot does not start. |
-| `house_load_power` | `household_load_power`, `house_load` or `load_power` | required | Grid-charge current that keeps import under the limit (it follows the house load), learning your consumption pattern and your usual quarter-hour peaks, the night target, and the nightly replay. | Battery Pilot does not start. |
+| `house_load_power` | `household_load_power`, `house_load` or `load_power` | required (with a Marstek: or worked out from grid, solar and battery) | Grid-charge current that keeps import under the limit (it follows the house load), learning your consumption pattern and your usual quarter-hour peaks, the night target, and the nightly replay. | Battery Pilot does not start. |
 | `battery_soc` | `battery_soc` | required | Planning from the battery's real state, stopping a charge or export at its target, the nightly replay's starting point. | Battery Pilot does not start. |
 | `grid_export_power` | `grid_export_power` or `export_power` (not an export *limit*) | optional | kWh sold, in the "same usage" bill. | Sold kWh count as 0 in the comparison. |
 | `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
@@ -498,6 +498,12 @@ grid, so it counts the Marstek's charging as consumption and its discharging as 
 consumption. With *Marstek: house load includes the battery* (`marstek_load_includes_battery`,
 on) Battery Pilot adds the battery's power back (so it learns your real consumption); turn it
 off if your house-load sensor already leaves the battery out.
+
+**Who measures what.** The P1 meter measures only what goes to and comes from the grid; solar
+comes from the inverter (`pv_power`, the Solax *PV Power Total*), and the battery's power from
+the Marstek. Without a house-load sensor (a Solax without its own meter, for one), Battery Pilot
+works the house load out from the three: grid (+ import) + solar + the battery's discharge
+(− its charge). `pv_power` is then required.
 
 **Settings for a Venus E** (5.12 kWh, 2.5 kW): *Battery capacity* 5.12, *Battery nominal
 voltage* 51.2, *Maximum charge current* and *Maximum discharge current* 48 (2.5 kW; 15 for a
