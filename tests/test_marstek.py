@@ -1,0 +1,226 @@
+"""A Marstek Venus (local API with the cloud as a backup) beside a Solax, through the whole app."""
+import logging
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fake_ha import FakeHA, utc
+
+from pilot import marstek as M
+from pilot.app import App
+from pilot.config import ConfigError, Options, from_dict
+from pilot.discovery import resolve_all
+
+CONTROL = "input_boolean.battery_pilot_control"
+FILL = "input_boolean.battery_pilot_fill_battery_for_car"
+MARSTEK = {"battery_system": "marstek"}
+
+
+@pytest.fixture
+def tmpdata(tmp_path):
+    return str(tmp_path / "data")
+
+
+async def run_until(app, fake, end, step_s=30, each=None):
+    while fake.now < end:
+        await app.step()
+        if each:
+            each(app, fake)
+        fake.advance(timedelta(seconds=step_s))
+
+
+async def start(tmpdata, fake, control=True, **opts):
+    fake.s[CONTROL]["state"] = "on" if control else "off"
+    app = App(Options(**{**MARSTEK, **opts}), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup(), app.problem
+    return app
+
+
+def passive(fake):
+    return [c for c in fake.calls if c[0] == "marstek_local_api"]
+
+
+# ---------------------------------------------------------------- pure parts
+
+def test_choose_prefers_a_fresh_local_reading():
+    r = M.choose(M.Source(50, 1.0, 20), M.Source(48, 0.9, 30), 300)
+    assert (r.soc, r.kw, r.source) == (50, 1.0, "local")
+
+
+def test_choose_falls_back_to_the_cloud_when_the_local_api_is_silent():
+    r = M.choose(M.Source(50, 1.0, 400), M.Source(48, 0.9, 60), 300)
+    assert (r.soc, r.source) == (48, "cloud")
+    assert "400 s" in r.why
+    r = M.choose(M.Source(None, None, None), M.Source(48, 0.9, None), 300)
+    assert r.source == "cloud"
+
+
+def test_choose_gives_nothing_when_both_are_old():
+    r = M.choose(M.Source(50, 1.0, 400), M.Source(48, 0.9, 900), 300)
+    assert (r.soc, r.kw, r.source) == (None, None, "none")
+
+
+def test_report_time_in_epoch_seconds_milliseconds_or_iso():
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+    t = now - timedelta(seconds=90)
+    assert M.age_s(str(int(t.timestamp())), now) == pytest.approx(90)
+    assert M.age_s(str(int(t.timestamp() * 1000)), now) == pytest.approx(90)
+    assert M.age_s(t.isoformat(), now) == pytest.approx(90)
+    assert M.age_s("unavailable", now) is None and M.age_s("12", now) is None
+
+
+def test_battery_system_is_checked():
+    with pytest.raises(ConfigError):
+        from_dict({"battery_system": "tesla"})
+    assert from_dict({"battery_system": "marstek", "marstek_device_id": " abc "}).marstek_device_id == "abc"
+
+
+async def test_discovery_finds_the_solax_and_both_marstek_integrations():
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek=True)
+    states, reg = await fake.states(), fake.registry
+    found, missing = resolve_all(Options(**MARSTEK), states, True, reg)
+    ids = {k: f.entity_id for k, f in found.items()}
+    assert missing == []
+    assert ids["grid_import_power"] == "sensor.solax_grid_import"
+    assert ids["grid_export_power"] == "sensor.solax_grid_export"
+    assert ids["house_load_power"] == "sensor.solax_house_load"
+    assert ids["pv_power"] == "sensor.solax_pv_power_total"
+    assert ids["export_limit"] == "number.solax_export_control_user_limit"
+    assert ids["battery_soc"] == "sensor.marstek_venuse_state_of_charge"
+    assert ids["battery_power"] == "sensor.marstek_venuse_power"
+    assert ids["marstek_auto_mode_button"] == "button.marstek_venuse_auto_mode"
+    assert ids["battery_soc_backup"] == "sensor.venus_state_of_charge"
+    assert ids["battery_charge_power_backup"] == "sensor.venus_charge_power"     # not the total charge
+    assert ids["battery_report_time_backup"] == "sensor.venus_report_time"
+    assert ids["tou_switch"] is None and "not used" in found["tou_switch"].how
+    # without the registry the local integration's default names still do
+    found, missing = resolve_all(Options(**MARSTEK), states, True, None)
+    assert missing == [] and found["battery_soc"].entity_id == "sensor.marstek_venuse_state_of_charge"
+    assert found["battery_soc_backup"].entity_id is None
+
+
+async def test_a_solis_setup_does_not_look_for_marstek_entities():
+    fake = FakeHA(utc(2026, 11, 19, 12))
+    found, missing = resolve_all(Options(), await fake.states())
+    assert missing == [] and found["marstek_auto_mode_button"].entity_id is None
+
+
+async def test_without_the_device_it_stops_with_a_clear_message(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek=True)
+    fake.registry = []
+    app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert not await app.setup()
+    assert "marstek_device_id" in app.problem
+    app = App(Options(**MARSTEK, marstek_device_id="dev1"), fake, data_dir=tmpdata + "2", clock=lambda: fake.now)
+    assert await app.setup()
+
+
+# ---------------------------------------------------------------- the whole app
+
+async def test_fill_switch_charges_through_passive_mode_and_renews_it(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=20))
+    calls = passive(fake)
+    assert calls, fake.calls
+    assert all(c[2]["power"] < 0 and c[2]["device_id"] == "dev1" for c in calls)
+    assert all(c[2]["duration"] == M.PASSIVE_S for c in calls)
+    assert len(calls) >= 4                           # sent again every RENEW_S (5 min)
+    assert app.solis.mode == "charge" and fake.soc > 41
+    assert app.battery_source == "local"
+    assert app.status()["inverter"]["source"] == "local"
+    # import stays under the limit while it charges
+    assert fake.import_kw <= Options().import_limit_kw + 0.1
+
+
+async def test_house_load_leaves_the_marstek_out(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, load=lambda t: 0.6, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=5))
+    assert app.solis.mode == "charge"
+    assert float(fake.s["sensor.solax_house_load"]["state"]) > 1500     # the Solax counts the charge
+    assert app.readings.load_kw == pytest.approx(0.6, abs=0.05)
+
+
+async def test_silent_local_api_reads_the_cloud_and_retries_commands(tmpdata, caplog):
+    caplog.set_level(logging.INFO)
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    assert app.solis.mode == "charge"
+    fake.local_down = True
+    await run_until(app, fake, fake.now + timedelta(minutes=12))
+    assert app.battery_source == "cloud"
+    assert app.readings is not None and app.readings.soc == round(fake.soc)     # the cloud's live value
+    assert "readings from the cloud" in caplog.text
+    assert app.solis.mode == "failed"                # the renewal failed: sent again at each tick
+    n = len(passive(fake))
+    fake.local_down = False
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    assert len(passive(fake)) > n and app.solis.mode == "charge"
+    assert app.battery_source == "local" and "local API answers again" in caplog.text
+
+
+async def test_both_links_silent_stops_the_charge_safely(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    fake.local_down = fake.cloud_down = True
+    await run_until(app, fake, fake.now + timedelta(minutes=12))
+    assert app.battery_source == "none" and app.readings is None
+    assert app.decision.command == "self_use"        # what the blind rule asks (it cannot get through)
+    # the passive command lapses by itself: the battery is back in its own mode
+    await run_until(app, fake, fake.now + timedelta(minutes=M.PASSIVE_S // 60))
+    assert fake.mode() == "self_use"
+    fake.local_down = fake.cloud_down = False
+    fake.s[FILL]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    assert app.solis.mode == "self_use"
+    assert fake.calls[-1][:2] == ("button", "press")
+
+
+async def test_control_off_presses_auto_mode(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    fake.s[CONTROL]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=1))
+    assert app.solis.mode == "self_use" and fake.mode() == "self_use"
+    assert ("button", "press", {"entity_id": "button.marstek_venuse_auto_mode"}) in fake.calls
+
+
+async def test_shadow_mode_never_touches_the_marstek(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake, control=False)
+    await run_until(app, fake, fake.now + timedelta(hours=2))
+    assert not passive(fake) and not [c for c in fake.calls if c[0] == "button"]
+    assert app.readings is not None and abs(app.readings.soc - fake.soc) < 1.5     # the battery feeds the house
+
+
+async def test_winter_night_charge_follows_the_plan(tmpdata):
+    """The same winter night as test_app's Solis test: the plan charges the Marstek at night, under
+    the import limit, through a local outage in the middle, and hands back to Auto mode by day."""
+    from fake_ha import CHEAP_NIGHT, TZ
+
+    def winter(d, kwh):
+        return {datetime(d.year, d.month, d.day, h, tzinfo=TZ).astimezone(timezone.utc): kwh / 7 for h in range(9, 16)}
+
+    fc = {**winter(datetime(2026, 1, 14), 3), **winter(datetime(2026, 1, 15), 3)}
+    fake = FakeHA(utc(2026, 1, 14, 21, 0), soc=30, forecast=fc, marstek=True)
+    app = await start(tmpdata, fake, **CHEAP_NIGHT)
+    target = app.plan.targets[0]
+    assert target["winter"] and target["soc"] >= 60
+    worst = {"import": 0.0}
+
+    def watch(app, fake):
+        worst["import"] = max(worst["import"], fake.import_kw)
+        fake.local_down = utc(2026, 1, 15, 2, 0) <= fake.now < utc(2026, 1, 15, 2, 20)
+
+    await run_until(app, fake, utc(2026, 1, 15, 7, 30), each=watch)
+    assert fake.soc >= target["soc"] - 5, (fake.soc, target)
+    assert worst["import"] <= Options().import_limit_kw + 0.35
+    assert app.solis.mode == "self_use" and fake.mode() == "self_use"

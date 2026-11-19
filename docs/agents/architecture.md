@@ -24,6 +24,7 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 | `simulate.py` | `Battery` and `step`: the energy balance shared by plan replay, night target and tests |
 | `controller.py` | `decide`: one plan step + live readings → one inverter command |
 | `solis.py` | `Solis`: the commands, through the Solis Modbus integration's entities |
+| `marstek.py` | `Marstek`: the same interface as `Solis` for a Marstek Venus (Local API passive mode, Auto button); `choose`: local reading first, cloud when the local one is stale |
 | `discovery.py` | finds the user's entities by name (`ENTITIES`), unless the options name them |
 | `config.py` | `Options` (every setting with its default), validation, `from_dict` |
 | `tariffs.py` | buy and sell price per contract, break-even |
@@ -104,6 +105,22 @@ return to self-use, and `_reconcile` reads that switch back too. `tick()` stops 
 and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
 Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop stalls,
 `App.healthy`); the add-on linter rejects the old `watchdog` key in `config.yaml`.
+
+## A Marstek battery (`marstek.py`, `battery_system: marstek`)
+
+`App.solis` is then a `marstek.Marstek` (same attributes and methods; `force` is always true, so the
+renewal and the reconcile paths of the Solis force action apply; `peak_shave`/`solar_hold` raise, and are
+never asked for since `can_peak_shave`/`can_solar_hold` need Solis switches that are not looked for).
+Charge/discharge = `marstek_local_api.set_passive_mode` (W = amps × volts, `PASSIVE_S`, renewed every
+`RENEW_S`), self-use = the Local API's *Auto mode* button. Discovery uses the entity registry
+(`config/entity_registry/list`, matched by platform + unique-ID suffix in `marstek.REGISTRY`), with the
+local integration's default names as fallback; `discovery.SOLIS_ONLY` keys are not looked for.
+`App._battery` picks SOC and power per tick (`marstek.choose`: the local value while *Last message
+received* ≤ `marstek_stale_s`, else the cloud's while its report time is that fresh, else None → blind).
+With `marstek_load_includes_battery` the battery power (+ discharging) is added to the house load (a
+Solax *House Load* counts an AC-coupled battery), live and in `bootstrap`. Planner, simulator and
+controller are untouched: only charge, discharge and self-use are used. `tests/fake_ha.py` with
+`marstek=True` is a Solax + Marstek house (`local_down`, `cloud_down`); `tests/test_marstek.py`.
 
 ## Solar hold and the peak buffer
 

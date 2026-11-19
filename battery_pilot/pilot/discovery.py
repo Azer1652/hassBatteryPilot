@@ -8,13 +8,18 @@ import re
 from dataclasses import dataclass
 
 from .config import Options
+from .marstek import REGISTRY as MARSTEK_REGISTRY
+from .marstek import registry_match
 
 # key: (domain, search patterns in order, required, is a power sensor)
 ENTITIES = {
-    "grid_import_power": ("sensor", [r"grid_import_power", r"import_power"], True, True),
-    "grid_export_power": ("sensor", [r"grid_export_power", r"(?<!limit_)export_power$"], False, True),
-    "house_load_power": ("sensor", [r"household_load_power", r"house(hold)?_load", r"load_power"], True, True),
-    "pv_power": ("sensor", [r"total_pv_power", r"pv_power$"], False, True),
+    # (the last pattern of each: the names of the Solax Modbus integration)
+    "grid_import_power": ("sensor", [r"grid_import_power", r"import_power", r"solax.*_grid_import$"], True, True),
+    "grid_export_power": ("sensor", [r"grid_export_power", r"(?<!limit_)export_power$", r"solax.*_grid_export$"],
+                          False, True),
+    "house_load_power": ("sensor", [r"household_load_power", r"solax.*_house_load$", r"house(hold)?_load",
+                                      r"load_power"], True, True),
+    "pv_power": ("sensor", [r"total_pv_power", r"pv_power$", r"solax.*_pv_power_total$"], False, True),
     # signed DC battery power (+ discharge); not the unsigned `battery_power`
     "battery_power": ("sensor", [r"battery_power_net$"], False, True),
     "battery_soc": ("sensor", [r"battery_soc$", r"battery_soc"], True, False),
@@ -27,7 +32,7 @@ ENTITIES = {
     "charge_end": ("time", [r"(?<!dis)charge_end.*slot_1$"], True, False),
     "discharge_start": ("time", [r"discharge_start.*slot_1$"], True, False),
     "discharge_end": ("time", [r"discharge_end.*slot_1$"], True, False),
-    "export_limit": ("number", [r"export_power_limit", r"export.*limit"], False, False),
+    "export_limit": ("number", [r"export_power_limit", r"export.*limit", r"export_control_user_limit"], False, False),
     "peak_shaving_switch": ("switch", [r"peak_shaving_mode$", r"peak_shaving"], False, False),
     "peak_shaving_limit": ("number", [r"peak_max_usable_grid_power", r"max_usable_grid_power"], False, False),
     "peak_shaving_soc": ("number", [r"peak_baseline_soc", r"baseline_soc"], False, False),
@@ -40,7 +45,27 @@ ENTITIES = {
                                 r"electricity_price"], False, False),
     # never guessed: only the entity named in the settings
     "car_charger_power": ("sensor", [], False, True),
+    # A Marstek battery (battery_system: marstek): found in the entity registry (marstek.REGISTRY);
+    # the patterns are the local integration's default names, for when the registry cannot be read.
+    "marstek_auto_mode_button": ("button", [r"^marstek_.*auto_mode$"], False, False),
+    "marstek_last_message": ("sensor", [r"^marstek_.*last_message_received$"], False, False),
+    "battery_soc_backup": ("sensor", [], False, False),
+    "battery_charge_power_backup": ("sensor", [], False, True),
+    "battery_discharge_power_backup": ("sensor", [], False, True),
+    "battery_report_time_backup": ("sensor", [], False, False),
 }
+# Default names of the local integration's sensors, for the keys a Solis has too.
+MARSTEK_PATTERNS = {
+    "battery_soc": [r"^marstek_[a-z0-9]+_state_of_charge$"],
+    "battery_power": [r"^marstek_[a-z0-9]+_power$"],
+    "battery_voltage": [r"^marstek_[a-z0-9]+_voltage$"],
+}
+# Solis-only entities: not looked for with a Marstek battery.
+SOLIS_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
+              "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "peak_shaving_limit",
+              "peak_shaving_soc", "feed_in_priority_switch")
+MARSTEK_ONLY = ("marstek_auto_mode_button", "marstek_last_message", "battery_soc_backup",
+                "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup")
 TIME_SLOT_KEYS = ("charge_start", "charge_end", "discharge_start", "discharge_end")
 # Only needed when charging goes through the time-of-use slots (not with the force action).
 SLOT_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current") + TIME_SLOT_KEYS
@@ -62,6 +87,11 @@ NEEDED_FOR = {
     "forecast_today": "the solar forecast when HA's energy forecast is not set up",
     "forecast_tomorrow": "the solar forecast when HA's energy forecast is not set up",
     "price_sensor": "dynamic prices and the contract comparison",
+    "marstek_last_message": "noticing that the Marstek local API went silent (its values freeze)",
+    "battery_soc_backup": "the Marstek cloud as a backup when the local API is silent",
+    "battery_charge_power_backup": "the Marstek cloud as a backup for the battery power",
+    "battery_discharge_power_backup": "the Marstek cloud as a backup for the battery power",
+    "battery_report_time_backup": "noticing that the Marstek cloud's figures are old",
 }
 
 
@@ -90,13 +120,26 @@ def power_scale(entity_id: str, states: dict) -> tuple[float, str]:
     return 0.001, unit or "no unit, assumed W"
 
 
-def resolve(key: str, opts: Options, states: dict) -> Found:
+def resolve(key: str, opts: Options, states: dict, registry: list | None = None) -> Found:
     domain, patterns, _required, is_power = ENTITIES[key]
     chosen = opts.entities.get(key, "")
+    marstek = opts.marstek and key in MARSTEK_REGISTRY
+    if opts.marstek and key in SOLIS_ONLY and not chosen:
+        return Found(None, "not used with a Marstek battery")
+    if not opts.marstek and key in MARSTEK_ONLY and not chosen:
+        return Found(None, "only used with a Marstek battery")
+    if marstek:
+        patterns = MARSTEK_PATTERNS.get(key, patterns)
+    hits = registry_match(key, registry) if marstek and not chosen and registry else []
+    hits = [e["entity_id"] for e in hits if e.get("entity_id") in states]
     if chosen:
         if chosen not in states:
             return Found(None, f"set to {chosen}, but Home Assistant has no entity with that ID")
         found = Found(chosen, "set in the app settings")
+    elif len(hits) == 1:
+        found = Found(hits[0], "found in the Marstek integration")
+    elif len(hits) > 1:
+        found = Found(None, "several Marstek batteries, pick one in the settings: " + ", ".join(sorted(hits)[:6]))
     else:
         found = Found(None, "not found")
         ids = sorted(e for e in states if e.startswith(domain + "."))
@@ -108,9 +151,9 @@ def resolve(key: str, opts: Options, states: dict) -> Found:
                 found = Found(hits[0], "found automatically")
                 break
             if len(hits) > 1:
-                solis = [e for e in hits if "solis" in e]
-                if len(solis) == 1:
-                    found = Found(solis[0], "found automatically")
+                brand = [e for e in hits if "solis" in e] or [e for e in hits if "solax" in e]
+                if len(brand) == 1:
+                    found = Found(brand[0], "found automatically")
                 else:
                     found = Found(None, "several candidates, pick one in the settings: " + ", ".join(hits[:6]))
                 break
@@ -119,10 +162,18 @@ def resolve(key: str, opts: Options, states: dict) -> Found:
     return found
 
 
-def resolve_all(opts: Options, states: dict, force: bool = False) -> tuple[dict[str, Found], list[str]]:
+def resolve_all(opts: Options, states: dict, force: bool = False,
+                registry: list | None = None) -> tuple[dict[str, Found], list[str]]:
     """All entities, plus the keys of required ones that are missing (`force`: charging goes through
-    the force action, so the time-of-use entities are optional)."""
-    out = {k: resolve(k, opts, states) for k in ENTITIES}
+    the force action, so the time-of-use entities are optional; `registry`: Home Assistant's entity
+    registry, where a Marstek battery's entities are found)."""
+    out = {k: resolve(k, opts, states, registry) for k in ENTITIES}
+    if opts.marstek:
+        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
+                   if out[k].entity_id is None]
+        if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:
+            missing.append("battery_soc")
+        return out, missing
     missing = [k for k, f in out.items() if f.entity_id is None and ENTITIES[k][2]
                and not (force and k in SLOT_ONLY)]
     return out, missing

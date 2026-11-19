@@ -1,6 +1,7 @@
 # Battery Pilot
 
-Battery Pilot steers a home battery on a Solis hybrid inverter so it costs you as
+Battery Pilot steers a home battery on a Solis hybrid inverter (or a Marstek Venus beside
+another inverter, such as a Solax: see *A Marstek battery*) so it costs you as
 little as possible, and tells you whether a fixed or a dynamic electricity contract
 would be cheaper for your house. It runs all the time and has its own page in the
 sidebar.
@@ -75,7 +76,8 @@ What it does:
 
 ## Before you start
 
-1. **Solis Modbus** (HACS) with a working local connection to the inverter.
+1. **Solis Modbus** (HACS) with a working local connection to the inverter. With a Marstek
+   battery instead: see *A Marstek battery* below.
 2. A **solar forecast** in the Energy dashboard (Settings → Dashboards → Energy →
    Solar panels → forecast), for example **Forecast.Solar**. Leave its damping off:
    Battery Pilot learns the shade itself.
@@ -445,6 +447,61 @@ entities match, the one with `solis` in its name wins.
 If the page says the battery is charging but it does not, switch to the other one. The log says
 at the start which one is used.
 
+### A Marstek battery
+
+With *Battery* (`battery_system`) set to `marstek`, Battery Pilot plans and steers a
+Marstek Venus (C, D or E) instead of a Solis. The grid, house and solar readings come from
+your inverter's integration as in the table above; with **Solax Modbus** (wills106) they are
+found by themselves: `…_grid_import`, `…_grid_export`, `…_house_load` and
+`…_pv_power_total`, and its `…_export_control_user_limit` for blocking export.
+
+The battery is seen by two integrations, and Battery Pilot uses both:
+
+- **Marstek Local API** (jaapp/ha-marstek-local-api, HACS): required. Its readings are the
+  first choice, and it is the only way to steer the battery: a charge or discharge is its
+  `marstek_local_api.set_passive_mode` action (power = current × *Battery nominal voltage*,
+  for 20 minutes, sent again every 5 minutes while it should go on), and self-use is its
+  *Auto mode* button.
+- **Marstek Cloud** (DoctaShizzle/marstek_cloud, HACS): optional, a backup for the
+  readings only (it cannot steer).
+
+The local link drops out now and then. The local integration then keeps showing its last
+values, so Battery Pilot watches its *Last message received* sensor: with no message for
+*Marstek: reading too old after* (`marstek_stale_s`, 300 s), the cloud's SOC and power are used
+instead, as long as the cloud's report is not that old either. The log says when it switches
+and back, and the *Log* tab shows where the readings come from. With neither fresh, the SOC is
+unknown: after a minute a charge or discharge is stopped (Auto mode). A command that fails
+is sent again every 10 seconds; when none gets through, the passive command ends by itself
+within 20 minutes.
+
+| Setting | Found automatically | Needed |
+| --- | --- | --- |
+| `battery_soc` | the Local API's *State of charge* | required, unless the cloud's is found |
+| `battery_power` | the Local API's *Power* (+ charging) | optional: the house-load correction below, the efficiency figure |
+| `battery_voltage_sensor` | the Local API's *Voltage* | optional |
+| `marstek_auto_mode_button` | the Local API's *Auto mode* button | required |
+| `marstek_last_message` | the Local API's *Last message received* | recommended: without it a silent local link is not noticed |
+| `battery_soc_backup` | the cloud's *State of Charge* | optional: the backup |
+| `battery_charge_power_backup`, `battery_discharge_power_backup` | the cloud's *Charge Power* and *Discharge Power* | optional |
+| `battery_report_time_backup` | the cloud's *Report Time* | optional: without it a cloud figure is never too old |
+| `marstek_device_id` | the device of the Local API's entities | required for the passive action; set it only if the log asks |
+
+They are found in Home Assistant's entity registry by the integration they belong to, so
+renamed entities are found too. One battery is supported; with several on the Local API, set
+the entities of the one to steer.
+
+**House load.** A Solax's *House Load* is what the inverter gives minus what goes to the
+grid, so it counts the Marstek's charging as consumption and its discharging as negative
+consumption. With *Marstek: house load includes the battery* (`marstek_load_includes_battery`,
+on) Battery Pilot adds the battery's power back (so it learns your real consumption); turn it
+off if your house-load sensor already leaves the battery out.
+
+**Settings for a Venus E** (5.12 kWh, 2.5 kW): *Battery capacity* 5.12, *Battery nominal
+voltage* 51.2, *Maximum charge current* and *Maximum discharge current* 48 (2.5 kW; 15 for a
+battery limited to 800 W), and a *Battery minimum SOC* at or above the one set in the
+Marstek app. A Marstek has no peak-shaving or feed-in priority mode, so the plan never uses
+those, and the peak buffer and the winter level stay off.
+
 ### Electric car (read every 10 seconds, only when set)
 
 | Setting | Found automatically | Needed |
@@ -624,6 +681,10 @@ The contract formulas in full (market prices in EUR/MWh):
 
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
+| Battery | `battery_system` | solis | `solis`: a Solis hybrid. `marstek`: a Marstek Venus (see *A Marstek battery*). |
+| Marstek device ID | `marstek_device_id` | (empty) | Only when the log asks for it. |
+| Marstek: reading too old after (s) | `marstek_stale_s` | 300 | A local reading without a message this long, or a cloud report this old, is not used. |
+| Marstek: house load includes the battery | `marstek_load_includes_battery` | on | Takes the Marstek's power out of the house load. |
 | Solis slot entities | `slot_entities` | time_charging | Which set of time-of-use entities to drive; switch to `grid_time_of_use` if charging does nothing. |
 | Solis charge command | `charge_command` | auto | `auto`: the Solis Modbus force action when Home Assistant has it, else the time-of-use slots. `force` or `time_slot` to choose. |
 | Solis Modbus slave ID | `solis_slave` | (empty) | Only with several inverters on the integration: where the force action goes. |

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.19.0
+
+- **A Marstek Venus battery can be steered instead of a Solis.** Set *Battery*
+  (`battery_system`) to `marstek`. The grid, house and solar readings come from your
+  inverter's integration; a Solax on Solax Modbus is found by itself. The battery is steered
+  through the Marstek Local API integration (passive mode for a charge or discharge, its Auto
+  mode for self-use) and read through it, with the Marstek Cloud integration as a backup: when
+  the local link goes silent for 5 minutes (`marstek_stale_s`), the cloud's SOC and power are
+  used until it answers again. A passive command lasts 20 minutes and is renewed every 5, so
+  the battery returns to its own mode when commands stop getting through. See *A Marstek
+  battery* in the documentation. Not yet tried on a real Marstek.
+- A Solax *House Load* counts a Marstek's charging as consumption; Battery Pilot takes the
+  battery's power back out (`marstek_load_includes_battery`, on).
+- A Solis installation is unchanged.
+
 ## 2.18.0
 
 - **The inverter's own use is measured and shown on its own.** A hybrid inverter draws some

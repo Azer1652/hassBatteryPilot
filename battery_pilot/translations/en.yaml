@@ -113,6 +113,18 @@ configuration:
   winter_hold_soc:
     name: "Winter: keep the battery at (%)"
     description: "0 = off. On winter days (solar forecast below the threshold) self-use stops at this level; below it the house runs on the grid (peak shaving) and the battery only covers what is above the import limit. The battery is then part-filled when the car arrives; the car may use it down to the minimum + peak buffer. Nothing charges it back from the grid for this: solar and the plan fill it. Needs the inverter's peak-shaving switch."
+  battery_system:
+    name: "Battery"
+    description: "solis: a Solis hybrid through the Solis Modbus integration. marstek: a Marstek Venus through the Marstek Local API integration (steering and readings), with the Marstek Cloud integration as a backup for readings; grid, house and solar then come from your inverter (a Solax through Solax Modbus, for one)."
+  marstek_device_id:
+    name: "Marstek device ID"
+    description: "Only with a Marstek battery, and only when it is not found by itself: the battery's device ID in Home Assistant (the end of its device page's address)."
+  marstek_stale_s:
+    name: "Marstek: reading too old after (s)"
+    description: "A local reading with no message for this long, or a cloud report this old, is not used; the other source is. With neither, a charge or discharge stops."
+  marstek_load_includes_battery:
+    name: "Marstek: house load includes the battery"
+    description: "On when your house-load sensor (a Solax House Load, for one) counts the Marstek's charging as consumption. Battery Pilot then takes the battery's power out of it."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
@@ -200,3 +212,21 @@ configuration:
   price_sensor:
     name: "Market price entity"
     description: "ENTSO-e, Nord Pool or another sensor with hourly or quarter-hour prices. Leave empty to find it automatically."
+  marstek_auto_mode_button:
+    name: "Marstek Auto mode button"
+    description: "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."
+  marstek_last_message:
+    name: "Marstek last message entity"
+    description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link. Leave empty to find it automatically."
+  battery_soc_backup:
+    name: "Marstek cloud SOC entity"
+    description: "Only with a Marstek battery: the Marstek Cloud State of Charge sensor, used when the local API is silent. Leave empty to find it automatically."
+  battery_charge_power_backup:
+    name: "Marstek cloud charge power entity"
+    description: "Only with a Marstek battery: the Marstek Cloud Charge Power sensor. Leave empty to find it automatically."
+  battery_discharge_power_backup:
+    name: "Marstek cloud discharge power entity"
+    description: "Only with a Marstek battery: the Marstek Cloud Discharge Power sensor. Leave empty to find it automatically."
+  battery_report_time_backup:
+    name: "Marstek cloud report time entity"
+    description: "Only with a Marstek battery: the Marstek Cloud Report Time sensor, to notice old cloud figures. Leave empty to find it automatically."

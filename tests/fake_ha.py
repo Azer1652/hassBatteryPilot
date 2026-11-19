@@ -36,8 +36,16 @@ def st(state, unit=None, **attrs):
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
                  prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
-                 battery_power=False, inverter_draw_kw=0.0):
+                 battery_power=False, inverter_draw_kw=0.0, marstek=False):
         self.now = now
+        # marstek: a Solax (grid, house, solar) and a Marstek Venus seen by the Marstek Local API and the
+        # Marstek Cloud integrations, instead of a Solis. local_down / cloud_down: that link is silent (its
+        # sensors keep their last values; the local actions fail).
+        self.marstek = marstek
+        self.local_down = False
+        self.cloud_down = False
+        self.local_silent_s = 0.0
+        self.cloud_report = now
         self.inverter_draw_kw = inverter_draw_kw   # the inverter's own use, always from the grid
         self.force_action = force_action        # the Solis Modbus force charge/discharge actions exist
         self.forced: tuple[str, float, datetime] | None = None   # (charge|discharge, W, until) while one runs
@@ -72,6 +80,45 @@ class FakeHA:
             "time.solis_time_charging_discharge_end_slot_1": st("00:00:00"),
             "sensor.power_production_now": st(0, "W"),
         }
+        if marstek:
+            s = {
+                "sensor.solax_grid_import": st(0, "W"),
+                "sensor.solax_grid_export": st(0, "W"),
+                "sensor.solax_house_load": st(0, "W"),          # + what the Marstek charges, - what it gives
+                "sensor.solax_house_load_alt": st(0, "W"),
+                "sensor.solax_pv_power_total": st(0, "W"),
+                "number.solax_export_control_user_limit": st(5000, "W"),
+                "sensor.power_production_now": st(0, "W"),
+                "sensor.marstek_venuse_state_of_charge": st(soc, "%"),
+                "sensor.marstek_venuse_power": st(0, "W"),      # + charging
+                "sensor.marstek_venuse_grid_power": st(0, "W"),
+                "sensor.marstek_venuse_voltage": st(V, "V"),
+                "sensor.marstek_venuse_last_message_received": st(0, "s"),
+                "button.marstek_venuse_auto_mode": st("unknown"),
+                "button.marstek_venuse_manual_mode": st("unknown"),
+                "sensor.venus_state_of_charge": st(soc, "%"),
+                "sensor.venus_charge_power": st(0, "W"),
+                "sensor.venus_discharge_power": st(0, "W"),
+                "sensor.venus_total_charge": st(0, "kWh"),
+                "sensor.venus_report_time": st(int(now.timestamp())),
+            }
+            self.registry = [
+                {"entity_id": eid, "platform": plat, "unique_id": uid, "device_id": dev, "disabled_by": None}
+                for eid, plat, uid, dev in (
+                    ("sensor.marstek_venuse_state_of_charge", "marstek_local_api", "aabbcc_battery_soc", "dev1"),
+                    ("sensor.marstek_venuse_power", "marstek_local_api", "aabbcc_battery_power", "dev1"),
+                    ("sensor.marstek_venuse_grid_power", "marstek_local_api", "aabbcc_grid_power", "dev1"),
+                    ("sensor.marstek_venuse_voltage", "marstek_local_api", "aabbcc_battery_voltage", "dev1"),
+                    ("sensor.marstek_venuse_last_message_received", "marstek_local_api",
+                     "aabbcc_last_message_received", "dev1"),
+                    ("button.marstek_venuse_auto_mode", "marstek_local_api", "aabbcc_auto_mode_button", "dev1"),
+                    ("button.marstek_venuse_manual_mode", "marstek_local_api", "aabbcc_manual_mode_button", "dev1"),
+                    ("sensor.venus_state_of_charge", "marstek_cloud", "123_soc", "dev2"),
+                    ("sensor.venus_charge_power", "marstek_cloud", "123_charge", "dev2"),
+                    ("sensor.venus_discharge_power", "marstek_cloud", "123_discharge", "dev2"),
+                    ("sensor.venus_total_charge", "marstek_cloud", "123_total_charge", "dev2"),
+                    ("sensor.venus_report_time", "marstek_cloud", "123_report_time", "dev2"),
+                )]
         if peak_shaving:        # the Solis peak-shaving mode: grid up to the set power, the battery above it
             s["switch.solis_peak_shaving_mode"] = st("off")
             s["number.solis_peak_max_usable_grid_power"] = st(5000, "W")
@@ -129,6 +176,8 @@ class FakeHA:
 
     async def services(self):
         out = [{"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}}]
+        if self.marstek:
+            out.append({"domain": "marstek_local_api", "services": {"set_passive_mode": {}, "request_data_sync": {}}})
         if self.force_action:
             out.append({"domain": "solis_modbus", "services": {
                 "solis_force_battery_charge": {}, "solis_force_battery_discharge": {},
@@ -148,6 +197,17 @@ class FakeHA:
             self.s[eid]["state"] = str(data["value"])
         elif domain == "time" and service == "set_value":
             self.s[eid]["state"] = data["time"]
+        elif domain == "marstek_local_api" or (domain == "button" and "marstek" in str(eid)):
+            if self.local_down:
+                raise RuntimeError("Failed to set passive mode: timeout")
+            if domain == "button":
+                if eid.endswith("auto_mode"):
+                    self.forced = None
+            else:
+                assert data["device_id"] == "dev1", data
+                assert 1 <= data["duration"] <= 86400 and -10000 <= data["power"] <= 10000, data
+                kind = "charge" if data["power"] < 0 else "discharge"
+                self.forced = (kind, float(abs(data["power"])), self.now + timedelta(seconds=data["duration"]))
         elif domain == "solis_modbus":
             if not self.force_action:
                 raise RuntimeError(f"Action solis_modbus.{service} not found")
@@ -184,6 +244,8 @@ class FakeHA:
                 self.s[eid] = st("off")
                 self.helpers_created.append(eid)
                 out.append({"id": eid})
+            elif c["type"] == "config/entity_registry/list":
+                out.append(getattr(self, "registry", []))
             elif c["type"] == "energy/solar_forecast":
                 out.append({"x": {"wh_hours": {h.isoformat(): kwh * 1000 for h, kwh in self.forecast.items()}}})
             else:
@@ -203,6 +265,8 @@ class FakeHA:
             self.forced = None
         if self.forced:
             return "force_" + self.forced[0]
+        if self.marstek:
+            return "self_use"
         if self.s["switch.solis_time_of_use"]["state"] != "on":
             if self.s.get("switch.solis_feed_in_priority", {}).get("state") == "on":
                 return "solar_hold"
@@ -255,6 +319,9 @@ class FakeHA:
         grid += self.inverter_draw_kw
         self.import_kw = max(grid, 0)
         self.now += dt
+        if self.marstek:
+            self._marstek_sensors(grid, batt, dt)
+            return
         self.s["sensor.solis_grid_import_power"]["state"] = str(round(max(grid, 0) * 1000))
         self.s["sensor.solis_grid_export_power"]["state"] = str(round(max(-grid, 0) * 1000))
         self.s["sensor.solis_household_load_power"]["state"] = str(round(self.load_fn(self.now) * 1000))
@@ -262,6 +329,27 @@ class FakeHA:
         self.s["sensor.solis_battery_soc"]["state"] = str(round(self.soc, 1))
         if "sensor.solis_battery_power_net" in self.s:     # DC, + discharging
             self.s["sensor.solis_battery_power_net"]["state"] = str(round(-batt * 1000))
+
+    def _marstek_sensors(self, grid, batt, dt):
+        w = {"sensor.solax_grid_import": max(grid, 0), "sensor.solax_grid_export": max(-grid, 0),
+             # the Solax sees the Marstek on the house side: its charging is house load
+             "sensor.solax_house_load": self.load_fn(self.now) + batt,
+             "sensor.solax_pv_power_total": self.pv_fn(self.now)}
+        for eid, kw in w.items():
+            self.s[eid]["state"] = str(round(kw * 1000))
+        if self.local_down:
+            self.local_silent_s += dt.total_seconds()
+        else:
+            self.local_silent_s = 0.0
+            self.s["sensor.marstek_venuse_state_of_charge"]["state"] = str(round(self.soc))
+            self.s["sensor.marstek_venuse_power"]["state"] = str(round(batt * 1000))
+        self.s["sensor.marstek_venuse_last_message_received"]["state"] = str(int(self.local_silent_s))
+        if not self.cloud_down:
+            self.cloud_report = self.now
+            self.s["sensor.venus_state_of_charge"]["state"] = str(round(self.soc))
+            self.s["sensor.venus_charge_power"]["state"] = str(round(max(batt, 0) * 1000))
+            self.s["sensor.venus_discharge_power"]["state"] = str(round(max(-batt, 0) * 1000))
+        self.s["sensor.venus_report_time"]["state"] = str(int(self.cloud_report.timestamp()))
 
     def solis_calls(self):
         return [c for c in self.calls if c[0] in ("switch", "number", "time", "solis_modbus")]

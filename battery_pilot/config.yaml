@@ -1,7 +1,7 @@
 name: Battery Pilot
-version: "2.18.0"
+version: "2.19.0"
 slug: battery_pilot
-description: Plans and steers a Solis home battery against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
+description: Plans and steers a home battery (Solis hybrid or Marstek Venus) against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
 arch:
   - aarch64
@@ -55,6 +55,9 @@ options:
   winter_solar_threshold_kwh: 12
   winter_mode: full_day
   winter_hold_soc: 0
+  battery_system: solis
+  marstek_stale_s: 300
+  marstek_load_includes_battery: true
   slot_entities: time_charging
   charge_command: auto
 schema:
@@ -96,6 +99,10 @@ schema:
   winter_solar_threshold_kwh: float(0,200)
   winter_mode: list(full_day|peaks_only)
   winter_hold_soc: int(0,100)
+  battery_system: list(solis|marstek)
+  marstek_device_id: str?
+  marstek_stale_s: int(30,3600)
+  marstek_load_includes_battery: bool
   slot_entities: list(time_charging|grid_time_of_use)
   charge_command: list(auto|force|time_slot)
   solis_slave: int(1,247)?
@@ -125,3 +132,9 @@ schema:
   forecast_today: str?
   forecast_tomorrow: str?
   price_sensor: str?
+  marstek_auto_mode_button: str?
+  marstek_last_message: str?
+  battery_soc_backup: str?
+  battery_charge_power_backup: str?
+  battery_discharge_power_backup: str?
+  battery_report_time_backup: str?
