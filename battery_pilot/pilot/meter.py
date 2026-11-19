@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 CHANNELS = ("import", "export", "load", "pv", "battery")    # battery: DC power, + discharging (optional)
 MAX_GAP = timedelta(minutes=3)
+MAX_STEP_BACK = timedelta(minutes=15)   # a clock set back up to this much is waited out
 QUARTER = timedelta(minutes=15)
 
 
@@ -61,6 +62,7 @@ class QuarterMeter:
     last_t: datetime | None = None
     last_kw: dict = field(default_factory=dict)
     soc_at_start: float | None = None
+    last_closed: datetime | None = None   # start of the last quarter given out
 
     def add(self, t: datetime, kw: dict, soc: float | None = None) -> list[QuarterRecord]:
         """Add a sample (kW per channel, None = unavailable). Returns quarters that closed."""
@@ -69,14 +71,13 @@ class QuarterMeter:
             self.current, self.soc_at_start = quarter_start(t), soc
         elif self.last_t is not None and t <= self.last_t:
             # The clock stepped back (NTP): wait until it passes the last sample again rather than
-            # count the overlap twice. A big step back is taken as a gap.
-            if self.last_t - t > MAX_GAP:
-                if quarter_start(t) != self.current:
-                    closed.append(self._close(soc))
-                    self.current = quarter_start(t)
-            else:
+            # count the overlap twice. After a bigger step metering starts again from now, but a
+            # quarter that has closed is never closed a second time (see `_emit`).
+            if self.last_t - t <= MAX_STEP_BACK:
                 self.last_kw = dict(kw)
                 return closed
+            closed.append(self._close(soc))
+            self.current = quarter_start(t)
         elif self.last_t is not None:
             if t - self.last_t > MAX_GAP:
                 # App or HA was down: close what we have, nothing is filled in.
@@ -100,7 +101,14 @@ class QuarterMeter:
         self.last_t, self.last_kw = t, dict(kw)
         if soc is not None and self.soc_at_start is None:
             self.soc_at_start = soc
-        return closed
+        return self._emit(closed)
+
+    def _emit(self, closed: list[QuarterRecord]) -> list[QuarterRecord]:
+        """The closed quarters, without one that already closed before the clock was set back."""
+        out = [r for r in closed if self.last_closed is None or r.start > self.last_closed]
+        if out:
+            self.last_closed = out[-1].start
+        return out
 
     def _close(self, next_soc) -> QuarterRecord:
         rec = QuarterRecord(self.current, dict(self.kwh),

@@ -9,6 +9,9 @@ Step lists for the jobs that come back. Each ends with `python tools/check.py`.
 2. `battery_pilot/config.yaml`: the same key under `options` (same default) and under `schema`,
    with its type and range: `int(0,50)`, `float(0,100)`, `bool`, `str`, `list(a|b)`; a `?` after
    the type (`str?`) makes it optional and it then has no entry under `options`.
+   `battery_pilot/pilot/settings.py`: an `int(...)`/`float(...)` range goes in `RANGES` too
+   (`config.yaml` is not in the image, and the settings import checks against it); a `str?`
+   that is not an entity override goes in `OPTIONAL_TEXT` (left out when empty).
 3. `battery_pilot/translations/en.yaml`: name and description.
 4. `battery_pilot/DOCS.md`: a row in the table of the group it belongs to under "All settings"
    (Contract, Grid and capacity tariff, Battery, Planning, ...).
@@ -16,7 +19,8 @@ Step lists for the jobs that come back. Each ends with `python tools/check.py`.
 6. If it changes what the battery does, it must act in `planner.optimize`, `simulate.step` and
    `controller.decide` alike, with a test for each.
 
-`tests/test_packaging.py` fails when one of steps 1-4 is missing or the defaults differ. The
+`tests/test_packaging.py` fails when one of steps 1-4 is missing or the defaults differ;
+`tests/test_settings.py` when `RANGES` or `OPTIONAL_TEXT` does not match the schema. The
 settings export and import pick a new option up by themselves (`settings.KNOWN` is built from
 `Options`). A release note goes in the CHANGELOG as for any change.
 Choose a default that leaves existing behaviour unchanged: `Options()` is used all over the tests

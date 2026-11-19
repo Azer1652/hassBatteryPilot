@@ -132,7 +132,10 @@ def parse_state(state: dict | None, tz=None) -> list[PriceSlot]:
         if end is None or end <= start:
             end = start + default_len
         slots[start] = PriceSlot(start, end, round(price * factor, 4))
-    return sorted(slots.values(), key=lambda s: s.start)
+    out = sorted(slots.values(), key=lambda s: s.start)
+    # A slot ends where the next one starts at the latest: a local end time without zone ("03:00" of the
+    # first 02:00 at the autumn clock change) would otherwise cover the repeated hour as well.
+    return [PriceSlot(a.start, b.start, a.eur_mwh) if a.end > b.start else a for a, b in zip(out, out[1:])] + out[-1:]
 
 
 def price_at(slots: list[PriceSlot], t: datetime) -> float | None:

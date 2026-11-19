@@ -47,6 +47,7 @@ FILL_MAX_H = 24       # the fill switch turns itself off this long after it was 
 CAR_RESUME_MAX = timedelta(minutes=15)   # a car session saved at a stop goes on after a restart this soon
 FROZEN_S = 1800       # a SOC that does not move this long while (dis)charging at a real current is stale
 CMD_EVENT_S = 300     # the same failing inverter command is logged at most this often
+SHUTDOWN_REPLAY_S = 4  # at a stop, wait this long for a nightly replay that is still running
 TOU_SETTLE_S = 30     # after a command, give the time-of-use switch this long before reading it back
 CMD_PROBLEM = "The inverter does not accept commands"
 HA_BACK_GRACE_S = 120  # after Home Assistant comes back, integrations (forecast, Modbus) get this long to load
@@ -1142,9 +1143,10 @@ class App:
                 soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
                 peak0 = {k: self.comparison.month(y.strftime("%Y-%m"))["replay"][k]["peak_kw"] for k in KINDS}
                 block = self.blocks_negative_export
+                avg = self.market_avg_month(start)   # here: the loop changes daily_market while the thread runs
                 job = asyncio.get_running_loop().run_in_executor(
                     None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive),
-                    soc0, block, peak0)
+                    soc0, block, peak0, avg)
                 self._replay_task = asyncio.ensure_future(self._finish_replay(job, y, block))
                 if wait:
                     await self._replay_task
@@ -1173,10 +1175,11 @@ class App:
             self.event(f"Storing the history of {day} failed: {e}", logging.WARNING)
 
     def _replay(self, recs: list[QuarterRecord], start: datetime, price_slots, forecast_archive, soc0: dict,
-                block_negative: bool = False, peak0: dict | None = None):
+                block_negative: bool = False, peak0: dict | None = None, avg: float | None = None):
+        """Runs in a worker thread: it reads only the copies it is given, and the learned load and shade
+        (changed only by nightly(), which does not run meanwhile)."""
         archive = {datetime.fromisoformat(k): v for k, v in forecast_archive.items()}
         pv_fc = PvForecast(archive, self.shade, self.tz)
-        avg = self.market_avg_month(start)
         results = {}
         for kind in KINDS:
             if kind == "dynamic" and not price_slots:
@@ -1527,17 +1530,18 @@ class App:
         """App stopping: leave the inverter in self-use and save what was learned."""
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
-        if self._replay_task and not self._replay_task.done():     # keep what it replays: a few seconds at most
-            try:
-                await asyncio.wait_for(asyncio.shield(self._replay_task), 30)
-            except Exception as e:  # noqa: BLE001
-                log.warning("The nightly replay did not finish: %s", e)
+        # The inverter first: the Supervisor stops the app 10 s after asking it to.
         if self.solis and self.solis.mode in ACTIVE:
             try:
                 await self.solis.self_use(self.clock().astimezone(self.tz), "Battery Pilot stopped")
             except Exception as e:  # noqa: BLE001
                 log.warning("Could not return the inverter to self-use: %s", e)
             self._save_inverter()
+        if self._replay_task and not self._replay_task.done():     # keep what it replays, if it is nearly done
+            try:
+                await asyncio.wait_for(asyncio.shield(self._replay_task), SHUTDOWN_REPLAY_S)
+            except Exception as e:  # noqa: BLE001
+                log.warning("The nightly replay did not finish: %s", e)
         self.save_state()
 
 

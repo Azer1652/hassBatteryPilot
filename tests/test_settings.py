@@ -157,3 +157,11 @@ def test_the_ranges_checked_are_those_of_the_add_on_schema():
         if m:
             found[key] = (float(m.group(2)), float(m.group(3)))
     assert {k: (float(lo), float(hi)) for k, (lo, hi) in settings.RANGES.items()} == found
+
+
+def test_every_optional_text_of_the_add_on_schema_is_left_out_when_empty():
+    """The Supervisor wants an empty `str?` option left out, not saved as ""."""
+    with open(CONFIG_YAML, encoding="utf-8") as f:
+        schema = yaml.safe_load(f)["schema"]
+    optional = {k for k, rule in schema.items() if str(rule) == "str?"}
+    assert optional <= settings.OPTIONAL_TEXT, f"not in settings.OPTIONAL_TEXT: {sorted(optional - settings.OPTIONAL_TEXT)}"

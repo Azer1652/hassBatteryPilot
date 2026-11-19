@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.18.1
+
+Fixes from a code review, each with a test.
+
+- **A night charge goes on through the last minute before midnight.** The 23:00 charge or
+  discharge slot is now set as 23:00–00:00 instead of 23:00–23:59, which left the inverter in
+  self-use for that minute. (A slot across midnight is assumed to work as a night window such as
+  22:00–06:00 does on a Solis; watch the first night charge that runs up to midnight.)
+- **The export limit put back after a negative-price block is the one the inverter had**, not
+  the lower of that and *Normal export limit*.
+- **A settings import outside the allowed ranges is refused** with a message, instead of the
+  check saying fine and the save then failing. An empty *Notify service* is left out.
+- **A price sensor without a unit is reported once**, with the unit that was assumed (EUR/kWh or
+  EUR/MWh, guessed from the size of the numbers).
+- **A big battery charging slowly is no longer taken for a frozen SOC reading.** The wait is now
+  30 minutes or the time two SOC points take at that current, whichever is longer.
+- **A boost (charging above the import limit at a price spike) now plans peak shaving at the
+  normal import limit**, as the inverter does. The battery no longer falls behind the plan in the
+  evening after a boost.
+- **Peak shaving and the feed-in switch are read back without a readable time-of-use switch**
+  (optional with the force action).
+- **The winter level stays all day** on a dull day with a night window that does not cross
+  midnight (01:00–06:00, for example).
+- **After a failed command or a Home Assistant restart the battery is not grid-charged** to the
+  peak buffer or by the fill switch: an unknown inverter state is no longer taken for a charge.
+- **The control loop keeps running during the nightly replay**, and at a stop the inverter is
+  put back to self-use first.
+- **The autumn clock change:** no 70- or 90-minute first plan slot in the first 02:xx, and price
+  lists with local times keep both 02:00 hours.
+- **The month peak and the comparison count a partly measured quarter at its measured power**,
+  and a clock that is set back does not count energy twice.
+
 ## 2.18.0
 
 - **The inverter's own use is measured and shown on its own.** A hybrid inverter draws some

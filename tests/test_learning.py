@@ -299,3 +299,30 @@ def test_a_clock_that_steps_back_does_not_count_energy_twice():
         closed = m.add(t, kw)
         t += timedelta(seconds=10)
     assert closed[0].kwh["import"] == pytest.approx(0.5, abs=0.01), f"{closed[0].kwh['import']:.3f} kWh for 2 kW x 15 min"
+
+
+def _meter_run(m, t, end, kw, out):
+    while t < end:
+        out += m.add(t, kw)
+        t += timedelta(seconds=10)
+    return t
+
+
+def test_a_clock_set_back_five_minutes_is_waited_out():
+    """The review's case: 5 minutes back at 18:10 at a steady 2 kW gave the quarter 0.661 kWh."""
+    kw = {"import": 2.0, "export": 0.0, "load": 2.0, "pv": 0.0}
+    m, out = QuarterMeter(), []
+    t = _meter_run(m, datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc), datetime(2026, 1, 15, 18, 10, tzinfo=timezone.utc),
+                   kw, out)
+    _meter_run(m, t - timedelta(minutes=5), datetime(2026, 1, 15, 18, 16, tzinfo=timezone.utc), kw, out)
+    assert out[0].start.minute == 0 and out[0].kwh["import"] == pytest.approx(0.5, abs=0.01)
+
+
+def test_a_quarter_never_closes_twice_after_a_big_step_back():
+    kw = {"import": 2.0, "export": 0.0, "load": 2.0, "pv": 0.0}
+    m, out = QuarterMeter(), []
+    t = _meter_run(m, datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc), datetime(2026, 1, 15, 18, 40, tzinfo=timezone.utc),
+                   kw, out)
+    _meter_run(m, t - timedelta(minutes=30), datetime(2026, 1, 15, 19, 0, 10, tzinfo=timezone.utc), kw, out)
+    starts = [r.start for r in out]
+    assert len(starts) == len(set(starts)) == 4 and starts == sorted(starts)

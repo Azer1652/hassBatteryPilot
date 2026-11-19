@@ -276,3 +276,13 @@ def test_naive_local_price_times_keep_both_hours_of_the_autumn_clock_change():
     slots = prices.parse_state(st, BXL)
     gaps = [f"{a.end:%H:%M}-{b.start:%H:%M} UTC" for a, b in zip(slots, slots[1:]) if b.start != a.end]
     assert len(slots) == 25 and not gaps, f"{len(slots)} slots for a 25-hour day, gaps: {gaps}"
+
+
+def test_naive_local_end_times_do_not_cover_the_repeated_hour_of_the_autumn_clock_change():
+    walls = [f"2026-10-25T{h:02d}:00:00" for h in (0, 1, 2, 2, *range(3, 24))]
+    items = [{"start": w, "end": walls[i + 1] if i + 1 < len(walls) else "2026-10-26T00:00:00", "value": 100 + 10 * i}
+             for i, w in enumerate(walls)]
+    slots = prices.parse_state({"state": "0.1", "attributes": {"unit_of_measurement": "EUR/MWh", "raw_today": items}}, BXL)
+    second = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)                    # the second 02:00-03:00 (CET)
+    assert prices.price_at(slots, second) == 130.0
+    assert all(a.end <= b.start for a, b in zip(slots, slots[1:]))
