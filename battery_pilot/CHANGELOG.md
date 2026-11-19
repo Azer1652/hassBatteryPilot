@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.18.1
+## 2.19.1
 
 Fixes from a code review, each with a test.
 
@@ -31,6 +31,34 @@ Fixes from a code review, each with a test.
   lists with local times keep both 02:00 hours.
 - **The month peak and the comparison count a partly measured quarter at its measured power**,
   and a clock that is set back does not count energy twice.
+
+## 2.19.0
+
+- **A Marstek Venus battery can be steered instead of a Solis.** Set *Battery*
+  (`battery_system`) to `marstek`. The grid, house and solar readings come from your
+  inverter's integration; a Solax on Solax Modbus is found by itself. The battery is steered
+  through the Marstek Local API integration (passive mode for a charge or discharge, its Auto
+  mode for self-use) and read through it, with the Marstek Cloud integration as a backup: when
+  the local link goes silent for 5 minutes (`marstek_stale_s`), the cloud's SOC and power are
+  used until it answers again. A passive command lasts 5 minutes and is renewed every 2, so
+  the battery returns to its own mode soon when commands stop getting through; after a failed
+  command (20 s to answer) nothing is sent for a minute. See *A Marstek
+  battery* in the documentation. Not yet tried on a real Marstek.
+- A Solax *House Load* counts a Marstek's charging as consumption; Battery Pilot takes the
+  battery's power back out (`marstek_load_includes_battery`, on).
+- **Peak shaving and solar hold with a Marstek**, done by Battery Pilot: in peak shaving the
+  passive power follows the grid meter every 10 seconds, so the battery gives only what the
+  house takes above the import limit and stores what would be exported. The plan can then keep
+  the battery for the evening peak, and the peak buffer and the winter level work.
+- **A HomeWizard P1 meter** can be the grid reading (`grid_power`, + import), and its own
+  quarter-hour average and month peak (`quarter_average_power`, `month_peak_power`) feed the
+  capacity-peak projection and the month's peak. Found by themselves with a Marstek battery.
+- With a Marstek, a missing house-load sensor is worked out as grid (P1) + solar (the
+  inverter) + the battery's discharge.
+- **Charge and discharge at full power** (`full_power`, off): as fast as the limits allow
+  instead of spread over the hour, for batteries whose converter draws a fixed power while it
+  runs.
+- A Solis installation is unchanged.
 
 ## 2.18.0
 

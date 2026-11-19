@@ -19,6 +19,9 @@ ENTITY_KEYS = (
     "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",
     "peak_shaving_soc", "feed_in_priority_switch", "forecast_power_now",
     "forecast_today", "forecast_tomorrow", "price_sensor", "car_charger_power",
+    "grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button", "marstek_last_message",
+    "battery_soc_backup",
+    "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup",
 )
 # Option name of each override where it differs from the entity key
 # (battery_voltage is already the nominal-voltage option).
@@ -77,6 +80,11 @@ class Options:
     car_battery_kwh: float = 70.5            # the car's battery for the page's coverage estimate (0: none); a Mercedes EQB 250+
     car_charge_kw: float = 5.0               # the car's charging power (0: only the measured power while it charges)
     # inverter
+    battery_system: str = "solis"            # solis: a Solis hybrid | marstek: a Marstek Venus (local API, cloud backup)
+    marstek_device_id: str = ""              # the Marstek battery's HA device (empty: found from its entities)
+    marstek_stale_s: int = 300               # a Marstek reading older than this is not used (the other source is)
+    marstek_load_includes_battery: bool = True   # the house-load sensor counts the Marstek's charging as load
+    full_power: bool = False                 # charge and discharge as fast as the limits allow, not paced
     slot_entities: str = "time_charging"
     charge_command: str = "auto"             # auto: the force action when HA has it | force | time_slot
     solis_slave: int = 0                     # Modbus slave ID for the force action (0: the integration's default)
@@ -99,6 +107,10 @@ class Options:
     @property
     def max_discharge_kw(self) -> float:
         return self.max_discharge_current_a * self.battery_voltage / 1000
+
+    @property
+    def marstek(self) -> bool:
+        return self.battery_system == "marstek"
 
     @property
     def night_start_time(self) -> time:
@@ -131,6 +143,8 @@ class Options:
             raise ConfigError("winter_mode must be full_day or peaks_only.")
         if self.slot_entities not in ("time_charging", "grid_time_of_use"):
             raise ConfigError("slot_entities must be time_charging or grid_time_of_use.")
+        if self.battery_system not in ("solis", "marstek"):
+            raise ConfigError("battery_system must be solis or marstek.")
         if self.charge_command not in ("auto", "force", "time_slot"):
             raise ConfigError("charge_command must be auto, force or time_slot.")
         if self.fixed_contract_end.strip():
@@ -149,7 +163,7 @@ def from_dict(raw: dict) -> Options:
     """Build Options from the add-on's options.json (unknown keys are ignored)."""
     known = {f.name for f in fields(Options)} - {"entities"}
     kwargs = {k: v for k, v in raw.items() if k in known and v is not None}
-    for k in ("fixed_contract_end", "notify_service"):
+    for k in ("fixed_contract_end", "notify_service", "marstek_device_id"):
         if k in kwargs:
             kwargs[k] = str(kwargs[k]).strip()
     opts = Options(**kwargs)

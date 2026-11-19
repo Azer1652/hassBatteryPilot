@@ -5,7 +5,7 @@ Pure function, so every rule can be tested without Home Assistant:
 * charge    - grid-charge towards the step's SOC, spread over the rest of the
               slot, never above the current that keeps grid import at the
               import limit, or at the step's higher limit when the plan pays for
-              a higher peak (house load is followed live); pause when the
+              a higher peak (house load is followed live; `full_power`: as fast as that allows); pause when the
               quarter-hour heads over the limit (the old playbook's rule);
               once the SOC is reached, hold at the minimum current until the
               slot ends (at most HOLD_OVER points above the target);
@@ -153,7 +153,8 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
         follow = follow_amps(r, o, limit)
         # Paced to reach the target at the end of the slot; once there, held at the minimum
         # current so the battery does not drain again before the slot ends.
-        paced = paced_amps(step, r, o, up=True) if r.soc < step.soc_end else MIN_A
+        paced = (paced_amps(step, r, o, up=True) if not o.full_power else o.max_charge_current_a) \
+            if r.soc < step.soc_end else MIN_A
         want = min(follow, paced)
         if mode == "failed" and follow >= MIN_A:
             return Decision("charge", want, "send the charge command again")
@@ -177,7 +178,7 @@ def decide(step: Step | None, r: Readings, o: Options, mode: str, slot_hour: str
 
     floor = max(step.soc_end, step.reserve if step.reserve is not None else o.battery_reserve_soc)
     if step.action == "discharge" and r.soc > floor:
-        want = paced_amps(step, r, o, up=False)
+        want = paced_amps(step, r, o, up=False) if not o.full_power else o.max_discharge_current_a
         if mode != "discharge" or renewal:
             return Decision("discharge", want, f"plan: export down to {floor:.0f} %")
         if abs(want - amps_now) >= 10:

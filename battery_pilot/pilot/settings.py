@@ -14,7 +14,7 @@ APP = "battery_pilot"
 OVERRIDES = frozenset(OVERRIDE_OPTION.values())       # entity names: optional, left out when empty
 DEFAULTS = {f.name: getattr(Options(), f.name) for f in fields(Options) if f.name != "entities"}
 KNOWN = frozenset(DEFAULTS) | OVERRIDES
-OPTIONAL_TEXT = OVERRIDES | {"notify_service"}        # `str?` in config.yaml: left out when empty
+OPTIONAL_TEXT = OVERRIDES | {"notify_service", "marstek_device_id"}        # `str?` in config.yaml: left out when empty
 # The ranges of config.yaml's schema (that file is not in the image). The Supervisor refuses a save
 # outside them, so an import is checked here first. tests/test_settings.py keeps the two the same.
 RANGES = {
@@ -31,6 +31,7 @@ RANGES = {
     "max_charge_current_a": (5, 500), "max_discharge_current_a": (5, 500),
     "round_trip_efficiency_pct": (50, 100), "wear_cost_c_kwh": (0, 50), "safety_margin_pct": (0, 60),
     "winter_solar_threshold_kwh": (0, 200), "winter_hold_soc": (0, 100), "solis_slave": (1, 247),
+    "marstek_stale_s": (30, 3600),
 }
 
 

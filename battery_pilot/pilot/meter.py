@@ -122,8 +122,13 @@ class QuarterMeter:
     def energy_so_far(self, channel: str) -> float:
         return self.kwh.get(channel, 0.0)
 
-    def projection_kw(self, t: datetime, import_kw: float) -> float:
-        """Average import this quarter will end at if the current import continues."""
+    def projection_kw(self, t: datetime, import_kw: float, average_kw: float | None = None) -> float:
+        """Average import this quarter will end at if the current import continues. `average_kw`: the
+        quarter's average so far as the grid meter itself has it (a P1 meter's average demand)."""
+        if average_kw is not None:
+            start = t.replace(minute=t.minute - t.minute % 15, second=0, microsecond=0)
+            done = min(max((t - start).total_seconds() / 900, 0.0), 1.0)
+            return average_kw * done + import_kw * (1 - done)
         if self.current is None:
             return import_kw
         e = self.kwh["import"]
@@ -148,6 +153,15 @@ class PeakTracker:
         self.months[key] = round(max(self.months.get(key, 0.0), kw), 3)
         for k in sorted(self.months)[:-13]:
             del self.months[k]
+
+    def observe(self, t: datetime, tz: ZoneInfo, kw: float) -> None:
+        """The month's peak as the grid meter has it (a P1 meter): it counts when it is higher."""
+        local = t.astimezone(tz)
+        if local.day == 1 and local.hour == 0 and local.minute < 15:
+            return              # the meter may still show last month's peak until the first quarter closes
+        key = local.strftime("%Y-%m")
+        if 0 <= kw < 100 and kw > self.months.get(key, 0.0):
+            self.months[key] = round(kw, 3)
 
     def month_peak(self, t: datetime, tz: ZoneInfo) -> float:
         return self.months.get(t.astimezone(tz).strftime("%Y-%m"), 0.0)
