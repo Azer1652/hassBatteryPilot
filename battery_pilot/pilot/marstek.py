@@ -46,6 +46,35 @@ from .solis import hour_slot
 log = logging.getLogger(__name__)
 
 LOCAL = "marstek_local_api"
+
+
+@dataclass(frozen=True)
+class Integration:
+    """A local Marstek integration: its domain (platform and actions) and how its readings look."""
+    domain: str
+    name: str
+    power_plus_charging: bool      # its battery power sensor is + while charging
+    last_message: bool             # it has a "Last message received" sensor (else: unavailable when silent)
+
+
+JAAPP = Integration(LOCAL, "Marstek Local API (jaapp/ha-marstek-local-api)", True, True)
+# taurgis/has-marstek-local-api: the same `set_passive_mode` (power, negative charges; duration), an
+# operating-mode select (auto, ai, manual, passive), battery power + discharging, and entities that
+# turn unavailable after a few failed polls (they show cached values until then).
+TAURGIS = Integration("marstek", "Marstek (taurgis/has-marstek-local-api)", False, False)
+INTEGRATIONS = (JAAPP, TAURGIS)
+
+
+def pick_integration(services: list, registry: list | None) -> Integration | None:
+    """The local Marstek integration Home Assistant has (with its set_passive_mode action); with both,
+    the one whose entities are in the registry."""
+    have = [i for i in INTEGRATIONS
+            if any(d.get("domain") == i.domain and PASSIVE_SERVICE in (d.get("services") or {})
+                   for d in services or [])]
+    if len(have) > 1:
+        used = [i for i in have if any(e.get("platform") == i.domain for e in registry or [])]
+        have = used or have
+    return have[0] if have else None
 CLOUD = "marstek_cloud"
 PASSIVE_SERVICE = "set_passive_mode"
 PASSIVE_S = 5 * 60           # every passive command lapses by itself after this (a lost link gives the battery back)
@@ -93,9 +122,11 @@ def auto_option(options) -> str:
 NOT = {"charge": ("total_charge",)}
 
 
-def registry_match(key: str, registry: list[dict]) -> list[dict]:
-    """Entity registry entries of the Marstek integrations that are `key`."""
+def registry_match(key: str, registry: list[dict], local: str = LOCAL) -> list[dict]:
+    """Entity registry entries of the Marstek integrations that are `key` (`local`: the domain of the
+    local integration in use)."""
     platform, suffix, *domain = REGISTRY[key]
+    platform = local if platform == LOCAL else platform
     out = []
     for e in registry or []:
         uid = str(e.get("unique_id") or "")
@@ -197,6 +228,7 @@ class Marstek:
     shave_soc: float = 0.0
     retry_at: datetime | None = None    # after a failed command: nothing is sent before this
     auto_option: str = "Auto"           # the operating-mode select's option for Auto mode
+    domain: str = LOCAL                 # the local integration's actions
 
     def waiting(self, t: datetime) -> bool:
         """A command failed less than RETRY_S ago: the local API gets a rest."""
@@ -273,7 +305,7 @@ class Marstek:
 
     async def _passive(self, watts: int):
         watts = max(min(watts, self.max_discharge_w), -self.max_charge_w)
-        await self._call(LOCAL, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts, "duration": PASSIVE_S})
+        await self._call(self.domain, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts, "duration": PASSIVE_S})
         self.forced = True
 
     async def charge(self, t_local: datetime, amps: int):

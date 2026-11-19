@@ -7,8 +7,15 @@
   Pilot now finds that select by itself (`marstek_mode_select`) and picks its Auto option for
   self-use; the button is only needed without it. Before, the app stopped with "Required
   entities are missing: marstek_auto_mode_button".
-- With a Marstek, the app checks at the start that Home Assistant has the
-  `marstek_local_api.set_passive_mode` action, and says which integration to install if not.
+- **Marstek: the taurgis integration works too.** Besides Marstek Local API (jaapp), the
+  *Marstek* integration (taurgis/has-marstek-local-api, actions under `marstek`) is now
+  supported: its *Battery level*, *Battery power* (+ discharging) and *Operating mode* select are
+  found by themselves, and the battery is steered through its `marstek.set_passive_mode`. It has
+  no *Last message received* sensor, so none is asked for; a silent link shows as unavailable
+  entities, and the cloud takes over.
+- With a Marstek, the app checks at the start that Home Assistant has a `set_passive_mode`
+  action of one of the two integrations, and says which to install if not.
+- DOCS: why Passive mode (a power with a countdown) is used and not Manual (the app's schedule).
 
 ## 2.19.1
 

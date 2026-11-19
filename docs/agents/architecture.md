@@ -119,12 +119,18 @@ After a failure `Marstek.failed` sets `retry_at`; `App._marstek_resting` sends n
 (`RETRY_S`), in `_apply` and `_follow`. Passive commands last `PASSIVE_S` (300 s), renewed every
 `RENEW_S` (120 s); `follow` sends at most every `FOLLOW_GAP_S` (60 s), `URGENT_GAP_S` (30 s) when the grid
 is `URGENT_KW` over the limit, and only changes of `FOLLOW_STEP_W`. Watts are clamped to `max_charge_w`/
-`max_discharge_w`. Readings count only with a known age (`choose`); `marstek_last_message` is required.
+`max_discharge_w`. Readings count only with a known age (`choose`); `marstek_last_message` is required with jaapp's integration.
 `PeakTracker.observe` ignores the first quarter of a month (the P1 still shows last month's peak).
 The fake: `local_down` raises `HAUnreachable` from `TimeoutError` (records the timeout), `marstek_lag_s`
 delays a new passive power.
-Charge/discharge = `marstek_local_api.set_passive_mode` (W = amps × volts, `PASSIVE_S`, renewed every
-`RENEW_S`), self-use = the Local API's *Auto mode* button. Discovery uses the entity registry
+Two local integrations (`marstek.INTEGRATIONS`, picked by `pick_integration` from the services that
+have `set_passive_mode`): jaapp's (`marstek_local_api`, power + charging, *Last message received*) and
+taurgis's (`marstek`, power + discharging, no last-message sensor: entities go unavailable, so age 0
+while available). `registry_match(local=...)` swaps the platform. Charge/discharge =
+`<domain>.set_passive_mode` (W = amps × volts, negative = charge, `PASSIVE_S`, renewed every
+`RENEW_S`), self-use = the *Auto mode* button or the operating-mode select's auto option. Passive, not
+Manual: Manual writes schedule slots that stay on the battery; Passive is a setpoint with a countdown
+(Open API Rev 3.1, mirrored in the taurgis repository's docs folder as marstek_device_openapi.MD). Discovery uses the entity registry
 (`config/entity_registry/list`, matched by platform + unique-ID suffix in `marstek.REGISTRY`), with the
 local integration's default names as fallback; `discovery.SOLIS_ONLY` keys are not looked for.
 `App._battery` picks SOC and power per tick (`marstek.choose`: the local value while *Last message

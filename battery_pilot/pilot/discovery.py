@@ -8,8 +8,8 @@ import re
 from dataclasses import dataclass
 
 from .config import Options
+from .marstek import JAAPP, LOCAL, Integration, registry_match
 from .marstek import REGISTRY as MARSTEK_REGISTRY
-from .marstek import registry_match
 
 # key: (domain, search patterns in order, required, is a power sensor)
 ENTITIES = {
@@ -62,8 +62,8 @@ ENTITIES = {
 }
 # Default names of the local integration's sensors, for the keys a Solis has too.
 MARSTEK_PATTERNS = {
-    "battery_soc": [r"^marstek_[a-z0-9]+_state_of_charge$"],
-    "battery_power": [r"^marstek_[a-z0-9]+_power$"],
+    "battery_soc": [r"^marstek_[a-z0-9]+_state_of_charge$", r"^marstek_.*_battery_level$"],
+    "battery_power": [r"^marstek_[a-z0-9]+_power$", r"^marstek_.*_battery_power$"],
     "battery_voltage": [r"^marstek_[a-z0-9]+_voltage$"],
 }
 # Solis-only entities: not looked for with a Marstek battery.
@@ -130,7 +130,7 @@ def power_scale(entity_id: str, states: dict) -> tuple[float, str]:
     return 0.001, unit or "no unit, assumed W"
 
 
-def resolve(key: str, opts: Options, states: dict, registry: list | None = None) -> Found:
+def resolve(key: str, opts: Options, states: dict, registry: list | None = None, local: str = LOCAL) -> Found:
     domain, patterns, _required, is_power = ENTITIES[key]
     chosen = opts.entities.get(key, "")
     marstek = opts.marstek and key in MARSTEK_REGISTRY
@@ -140,7 +140,7 @@ def resolve(key: str, opts: Options, states: dict, registry: list | None = None)
         return Found(None, "only used with a Marstek battery")
     if marstek:
         patterns = MARSTEK_PATTERNS.get(key, patterns)
-    hits = registry_match(key, registry) if marstek and not chosen and registry else []
+    hits = registry_match(key, registry, local) if marstek and not chosen and registry else []
     hits = [e["entity_id"] for e in hits if e.get("entity_id") in states]
     if chosen:
         if chosen not in states:
@@ -172,15 +172,15 @@ def resolve(key: str, opts: Options, states: dict, registry: list | None = None)
     return found
 
 
-def resolve_all(opts: Options, states: dict, force: bool = False,
-                registry: list | None = None) -> tuple[dict[str, Found], list[str]]:
+def resolve_all(opts: Options, states: dict, force: bool = False, registry: list | None = None,
+                integration: Integration = JAAPP) -> tuple[dict[str, Found], list[str]]:
     """All entities, plus the keys of required ones that are missing (`force`: charging goes through
     the force action, so the time-of-use entities are optional; `registry`: Home Assistant's entity
     registry, where a Marstek battery's entities are found)."""
-    out = {k: resolve(k, opts, states, registry) for k in ENTITIES}
+    out = {k: resolve(k, opts, states, registry, integration.domain) for k in ENTITIES}
     if opts.marstek:
-        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button",
-                               "marstek_last_message")
+        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
+                   + (("marstek_last_message",) if integration.last_message else ())
                    if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)
                    and not (k == "house_load_power" and out["pv_power"].entity_id)]
         if "marstek_auto_mode_button" in missing and out["marstek_mode_select"].entity_id:

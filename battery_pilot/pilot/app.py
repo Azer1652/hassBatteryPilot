@@ -114,6 +114,7 @@ class App:
         self.solis: Solis | M.Marstek | None = None     # the battery's driver (a Marstek has the same interface)
         self.battery_source = ""          # Marstek: where the SOC comes from (local | cloud | none)
         self._rest_told = False           # Marstek: the pause after a failed command was logged
+        self.marstek_integration = M.JAAPP  # Marstek: the local integration in use (set in setup)
         self.readings: Readings | None = None
         self.decision = Decision("none", reason="starting")
         self.control_on = False
@@ -292,6 +293,7 @@ class App:
                    f"{self.o.battery_capacity_kwh:g} kWh, import limit {self.o.import_limit_kw:g} kW")
         services = await self.ha.services()
         registry = None
+        integration = M.JAAPP
         if self.o.marstek:
             method, force = "force", True
             try:
@@ -299,15 +301,23 @@ class App:
             except Exception as e:  # noqa: BLE001
                 self.event(f"Could not read the entity registry ({e}): the Marstek entities are looked for by "
                            "their default names.", logging.WARNING)
-            self.event("Battery: a Marstek, steered through the Marstek Local API's passive mode, read locally "
-                       "with the Marstek cloud as a backup.")
+            found = M.pick_integration(services, registry)
+            if found is None:
+                self.problem = (f"Home Assistant has no {M.PASSIVE_SERVICE} action of a local Marstek integration: "
+                                "Battery Pilot steers a Marstek through " + " or ".join(
+                                    i.name for i in M.INTEGRATIONS) + ". Install or update one, then restart the app.")
+                self.event(self.problem, logging.ERROR)
+                return False
+            integration = self.marstek_integration = found
+            self.event(f"Battery: a Marstek, steered through {found.name} ({found.domain}.{M.PASSIVE_SERVICE}), "
+                       "read locally with the Marstek cloud as a backup.")
         else:
             method, why = charge_method(self.o, services)
             force = method == "force"
             self.event(("Charging and export through the Solis Modbus force action" if force
                         else "Charging and export through the Solis time-of-use slots") + f" ({why}).",
                        logging.WARNING if self.o.charge_command == "force" and not force else logging.INFO)
-        self.ents, missing = resolve_all(self.o, states, force, registry)
+        self.ents, missing = resolve_all(self.o, states, force, registry, integration)
         for key, f in self.ents.items():
             if f.entity_id:
                 unit = f" [{f.unit}]" if ENTITIES[key][3] else ""
@@ -349,13 +359,6 @@ class App:
                 self.event(self.problem, logging.ERROR)
                 return False
             log.info("  ok       marstek device: %s", device)
-            if not any(d.get("domain") == M.LOCAL and M.PASSIVE_SERVICE in (d.get("services") or {})
-                       for d in services or []):
-                self.problem = (f"Home Assistant has no {M.LOCAL}.{M.PASSIVE_SERVICE} action: Battery Pilot steers a "
-                                "Marstek through the Marstek Local API integration (jaapp/ha-marstek-local-api). "
-                                "Install or update it, then restart the app.")
-                self.event(self.problem, logging.ERROR)
-                return False
             if self.o.battery_capacity_kwh == 16.0 or max(self.o.max_charge_kw, self.o.max_discharge_kw) > 2.6:
                 self.event(f"The battery settings look like a Solis's ({self.o.battery_capacity_kwh:g} kWh, up to "
                            f"{max(self.o.max_charge_kw, self.o.max_discharge_kw):.1f} kW): for a Venus E set Battery "
@@ -364,7 +367,7 @@ class App:
             self.solis = M.Marstek(self.ha, {k: v for k, v in self.ent_ids.items()
                                              if k in ("marstek_auto_mode_button", "marstek_mode_select",
                                                       "export_limit")},
-                                   device_id=device, volts=self.o.battery_voltage,
+                                   device_id=device, volts=self.o.battery_voltage, domain=integration.domain,
                                    max_charge_w=int(self.o.max_charge_kw * 1000),
                                    max_discharge_w=int(self.o.max_discharge_kw * 1000))
             if "marstek_mode_select" in self.ent_ids:
@@ -475,8 +478,13 @@ class App:
 
         local_kw = kw("battery_power")
         charge, discharge = kw("battery_charge_power_backup"), kw("battery_discharge_power_backup")
-        local = M.Source(self._num(sts.get("battery_soc")), None if local_kw is None else -local_kw,
-                         self._num(sts.get("marstek_last_message")))
+        soc = self._num(sts.get("battery_soc"))
+        it = self.marstek_integration
+        if local_kw is not None and it.power_plus_charging:
+            local_kw = -local_kw
+        # without a last-message sensor the integration turns its entities unavailable when silent
+        age = self._num(sts.get("marstek_last_message")) if it.last_message else (0.0 if soc is not None else None)
+        local = M.Source(soc, local_kw, age)
         cloud = M.Source(self._num(sts.get("battery_soc_backup")),
                          None if charge is None or discharge is None else discharge - charge,
                          M.age_s((sts.get("battery_report_time_backup") or {}).get("state"), now, self.tz))
