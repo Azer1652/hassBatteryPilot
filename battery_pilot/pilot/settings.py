@@ -15,6 +15,7 @@ OVERRIDES = frozenset(OVERRIDE_OPTION.values())       # entity names: optional, 
 DEFAULTS = {f.name: getattr(Options(), f.name) for f in fields(Options) if f.name != "entities"}
 KNOWN = frozenset(DEFAULTS) | OVERRIDES
 OPTIONAL_TEXT = OVERRIDES | {"notify_service", "marstek_device_id"}        # `str?` in config.yaml: left out when empty
+OPTIONAL_NUMBER = frozenset({"solis_slave"})     # `int(...)?`: empty (null or "") in a file leaves it out
 # The ranges of config.yaml's schema (that file is not in the image). The Supervisor refuses a save
 # outside them, so an import is checked here first. tests/test_settings.py keeps the two the same.
 RANGES = {
@@ -83,10 +84,11 @@ def prepare(raw, current: dict) -> tuple[dict, list[dict], list[str]]:
     if not isinstance(raw, dict):
         raise ConfigError("this is not a Battery Pilot settings file.")
     ignored = sorted(str(k) for k in raw if k not in KNOWN)
-    new = {k: _typed(k, v) for k, v in raw.items() if k in KNOWN and v is not None}
-    if not new:
+    cleared = {k for k, v in raw.items() if k in OPTIONAL_NUMBER and v in (None, "")}
+    new = {k: _typed(k, v) for k, v in raw.items() if k in KNOWN and v is not None and k not in cleared}
+    if not new and not cleared:
         raise ConfigError("this file holds no Battery Pilot settings.")
-    merged = {**current, **new}
+    merged = {k: v for k, v in {**current, **new}.items() if k not in cleared}
     merged = {k: v for k, v in merged.items() if not (k in OPTIONAL_TEXT and not str(v or "").strip())}
     try:
         from_dict(merged)
@@ -97,7 +99,7 @@ def prepare(raw, current: dict) -> tuple[dict, list[dict], list[str]]:
 
     def shown(d, k):
         v = d.get(k)
-        return None if k in OPTIONAL_TEXT and not str(v or "").strip() else v
+        return None if k in OPTIONAL_TEXT | OPTIONAL_NUMBER and not str(v or "").strip() else v
 
     changes = [{"key": k, "old": shown(current, k), "new": shown(merged, k)}
                for k in sorted(set(current) | set(merged)) if shown(current, k) != shown(merged, k)]

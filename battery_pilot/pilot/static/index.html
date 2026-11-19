@@ -102,6 +102,19 @@
   table.pick tbody tr:hover, table.pick tbody tr:focus { background: var(--bg); outline: none; }
   table.pick tbody tr.sel { background: var(--bg); font-weight: 600; }
   ul.log time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .fgroup { margin: 0 0 6px; }
+  .fgroup h3 { margin-top: 14px; }
+  .fgrid { display: grid; gap: 12px 18px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+  .fld label { display: block; font-weight: 500; font-size: 14px; }
+  .fld input:not([type=checkbox]), .fld select { width: 100%; margin: 4px 0 2px; padding: 6px 8px; font: inherit;
+             color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .fld input[type=checkbox] { margin: 0 8px 0 0; vertical-align: middle; width: 18px; height: 18px; }
+  .fld input:invalid { border-color: var(--warn); }
+  .fld.changed input, .fld.changed select { border-color: var(--charge); }
+  .fld p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .fld[hidden], .fgroup[hidden] { display: none; }
+  details.fmore { border-top: 1px solid var(--line); margin-top: 14px; }
+  details.fmore > summary { font-size: 14px; margin: 12px 0 4px; }
 </style>
 </head>
 <body>
@@ -218,6 +231,20 @@
   <div class="grid" data-tab="log">
     <div class="card"><h2>Inverter commands</h2><p class="muted" id="battsrc" hidden></p><ul class="log" id="cmds"></ul></div>
     <div class="card"><h2>Events</h2><ul class="log" id="events"></ul></div>
+  </div>
+
+  <div class="card" data-tab="settings" id="formcard">
+    <h2>Settings</h2>
+    <p class="muted">The settings of the app's Configuration tab, showing only what your contract and battery use.
+      Saved settings are used after a restart of the app.</p>
+    <form id="setform" novalidate><p class="muted">Loading the settings…</p></form>
+    <div class="fill">
+      <button id="formsave" type="button" disabled>Save settings</button>
+      <button id="formundo" type="button" disabled>Undo changes</button>
+      <button id="formrestart" type="button" hidden>Restart the app now</button>
+    </div>
+    <p class="muted" id="formnote" role="status"></p>
+    <ul class="log" id="formchanges"></ul>
   </div>
 
   <div class="card" data-tab="settings">
@@ -1225,6 +1252,154 @@ $("hprev").addEventListener("click", () => goDay(-1));
 $("fillbtn").addEventListener("click", toggleFill);
 $("shavebtn").addEventListener("click", toggleShave);
 
+// ---------------------------------------------------------------- settings: the form
+// Groups and fields come from api/settings/form (pilot/form.py). A group or field with `show` is
+// only shown while the named settings have one of the listed values; a contract group that does
+// not match goes under "Other contracts" (the comparison still uses it) instead of disappearing.
+const sf = {form: null, saved: {}};
+const fid = (k) => "f-" + k;
+const formNote = (t) => { $("formnote").textContent = t; };
+
+function fieldHtml(k, f) {
+  const id = fid(k), v = sf.saved[k];
+  const desc = f.description ? `<p>${esc(f.description)}</p>` : "";
+  if (f.kind === "bool") {
+    return `<div class="fld" data-key="${k}"><label><input type="checkbox" id="${id}"${v ? " checked" : ""}>${esc(f.name)}</label>${desc}</div>`;
+  }
+  let input;
+  if (f.kind === "choice") {
+    input = `<select id="${id}">${f.choices.map((c) => `<option${c === v ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  } else {
+    const num = f.kind === "int" || f.kind === "float";
+    const attrs = num ? ` type="number" inputmode="decimal" step="${f.kind === "int" ? 1 : "any"}"` +
+                        (f.min !== undefined ? ` min="${f.min}" max="${f.max}"` : "")
+                      : ` type="text" spellcheck="false"` + (f.pattern ? ` pattern="${esc(f.pattern.replace(/^\^|\$$/g, ""))}"` : "");
+    const ph = f.kind === "entity" ? "found automatically" : f.optional ? "empty" : "";
+    input = `<input id="${id}"${attrs}${f.optional ? "" : " required"} placeholder="${ph}" value="${esc(v === undefined || v === null ? "" : v)}">`;
+  }
+  return `<div class="fld" data-key="${k}"><label for="${id}">${esc(f.name)}</label>${input}${desc}</div>`;
+}
+
+function groupHtml(g) {
+  const body = `<div class="fgrid">${g.fields.map((k) => fieldHtml(k, sf.form.fields[k])).join("")}</div>`;
+  if (g.closed) return `<details class="fmore fgroup" data-group="${g.id}"><summary>${esc(g.title)}</summary>${body}</details>`;
+  return `<section class="fgroup" data-group="${g.id}"><h3>${esc(g.title)}</h3>${body}</section>`;
+}
+
+function renderForm() {
+  const groups = sf.form.groups, other = groups.filter((g) => g.other);
+  let html = "", otherDone = false;
+  for (const g of groups) {
+    if (g.other) {
+      if (otherDone) continue;
+      otherDone = true;
+      html += `<div id="fcontract"></div><details class="fmore" id="fother"><summary>Other contracts: ` +
+              `only for the comparison on the Fixed or dynamic tab</summary></details>`;
+      html += `<div id="fpark" hidden>${other.map(groupHtml).join("")}</div>`;
+    } else html += groupHtml(g);
+  }
+  $("setform").innerHTML = html;
+  applyShow();
+  markChanged();
+}
+
+function readField(k) {
+  const f = sf.form.fields[k], el = $(fid(k));
+  if (f.kind === "bool") return el.checked;
+  const t = el.value.trim();
+  if (f.kind === "int" || f.kind === "float") return t === "" ? null : Number(t);
+  return t;
+}
+const current = (k) => (sf.form && $(fid(k))) ? readField(k) : sf.saved[k];
+const holds = (show) => !show || Object.entries(show).every(([k, vals]) => vals.includes(current(k)));
+
+function applyShow() {
+  const placed = $("fcontract"), other = $("fother");
+  for (const g of sf.form.groups) {
+    const el = document.querySelector(`[data-group="${g.id}"]`);
+    if (g.other) {
+      const target = holds(g.show) ? placed : other;
+      if (el.parentElement !== target) target.appendChild(el);
+    } else el.hidden = !holds(g.show);
+  }
+  for (const [k, f] of Object.entries(sf.form.fields)) {
+    if (f.show) document.querySelector(`.fld[data-key="${k}"]`).hidden = !holds(f.show);
+  }
+}
+
+const same = (a, b) => (a === undefined || a === null || a === "" ? null : a) === (b === undefined || b === null || b === "" ? null : b);
+function edits() {
+  const out = {};
+  for (const k of Object.keys(sf.form.fields)) {
+    const saved = k in sf.saved ? sf.saved[k] : sf.form.fields[k].default, v = readField(k);
+    if (!same(v, saved)) out[k] = v;
+  }
+  return out;
+}
+
+function markChanged() {
+  const e = edits();
+  document.querySelectorAll("#setform .fld").forEach((d) => d.classList.toggle("changed", d.dataset.key in e));
+  const n = Object.keys(e).length;
+  $("formsave").disabled = $("formundo").disabled = !n;
+  if (n) formNote(`${n} setting(s) changed, not saved yet.`);
+}
+
+async function loadForm() {
+  try {
+    const r = await fetch("api/settings/form");
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    sf.form = await r.json();
+    sf.saved = sf.form.values;
+    renderForm();
+  } catch (e) { $("setform").innerHTML = `<p class="muted">The settings cannot be shown: ${esc(e.message || e)}</p>`; }
+}
+
+async function saveForm() {
+  const bad = [...$("setform").querySelectorAll("input")].find((i) => !i.closest("[hidden]") && !i.checkValidity());
+  if (bad) {
+    const name = sf.form.fields[bad.id.slice(2)].name;
+    formNote(`Check "${name}": ${bad.validationMessage}`); bad.focus(); return;
+  }
+  const body = edits();
+  $("formsave").disabled = true;
+  try {
+    const r = await fetch("api/settings", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    const d = await r.json(), name = (k) => (sf.form.fields[k] || {}).name || k;
+    $("formchanges").innerHTML = d.changes.map((c) =>
+      `<li><b>${esc(name(c.key))}</b>: ${esc(showVal(c.old))} → ${esc(showVal(c.new))}</li>`).join("");
+    await loadForm();
+    $("formrestart").hidden = !d.changes.length;
+    formNote(d.changes.length ? `Saved ${d.changes.length} setting(s). Restart the app to use them.`
+                              : "Nothing changed.");
+  } catch (e) { formNote(e.message || String(e)); $("formsave").disabled = false; }
+}
+
+async function restartApp() {
+  $("formrestart").disabled = true;
+  try {
+    const r = await fetch("api/restart", {method: "POST"});
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    formNote("Restarting. The page comes back by itself in about a minute.");
+    const t0 = Date.now();
+    await new Promise((ok) => setTimeout(ok, 8000));
+    while (Date.now() - t0 < 180000) {
+      try { if ((await fetch("api/status", {cache: "no-store"})).ok) { location.reload(); return; } } catch (e) { /* not back yet */ }
+      await new Promise((ok) => setTimeout(ok, 4000));
+    }
+    formNote("The app has not come back after 3 minutes: look at its log under Settings → Apps → Battery Pilot.");
+  } catch (e) { formNote(e.message || String(e)); }
+  $("formrestart").disabled = false;
+}
+
+$("setform").addEventListener("input", () => { applyShow(); markChanged(); });
+$("setform").addEventListener("change", () => { applyShow(); markChanged(); });
+$("setform").addEventListener("submit", (e) => e.preventDefault());
+$("formsave").addEventListener("click", saveForm);
+$("formundo").addEventListener("click", () => { renderForm(); formNote("Changes undone."); });
+$("formrestart").addEventListener("click", restartApp);
+
 // ---------------------------------------------------------------- settings: export and import
 const setNote = (t) => { $("setnote").textContent = t; };
 const showVal = (v) => (v === null || v === undefined || v === "") ? "(empty)" : String(v);
@@ -1410,6 +1585,7 @@ function showTab(name) {
     b.setAttribute("aria-selected", on);
     b.tabIndex = on || (all && b.dataset.show === "plan") ? 0 : -1;
   });
+  if ((all || name === "settings") && !sf.form) loadForm();
   try { if (!all) localStorage.setItem("bp-tab", name); } catch (e) { /* private window: not remembered */ }
   if (last) _render(last);                              // charts take their width from the card now shown
   renderHistory();

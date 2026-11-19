@@ -158,6 +158,8 @@ class App:
         self.ha_back_at: datetime | None = None      # it last came back then
         self._cmd_unreachable_told = False
         self._refresh_task: asyncio.Task | None = None
+        self.just_saved: dict | None = None    # settings saved from the page, used after a restart
+        self._restart_task: asyncio.Task | None = None
         self._replay_task: asyncio.Future | None = None       # the nightly replay, in a thread
         self.alive_at = monotonic()            # last round of the main loop (the Docker health check)
         self._last = {"refresh": None, "save": None, "publish": None}
@@ -170,7 +172,10 @@ class App:
 
     # ---------------------------------------------------------------- settings file
     def saved_options(self) -> dict:
-        """The settings as saved on the Configuration tab (what the next start will use)."""
+        """The settings as saved on the Configuration tab (what the next start will use). After a
+        save from the page, the saved ones: options.json is only rewritten when the app starts."""
+        if self.just_saved is not None:
+            return dict(self.just_saved)
         try:
             with open(self.options_path or "", encoding="utf-8") as f:
                 raw = json.load(f)
@@ -184,7 +189,23 @@ class App:
         """Save imported settings through the Supervisor. The running settings stay as they are
         until the app is restarted."""
         await self.ha.supervisor("POST", "/addons/self/options", {"options": merged})
-        self.event(f"Settings imported ({changed} changed). Restart the app to use them.")
+        self.just_saved = dict(merged)
+        self.event(f"Settings saved ({changed} changed). Restart the app to use them.")
+
+    def restart(self, delay_s: float = 0.5) -> asyncio.Task:
+        """Ask the Supervisor to restart this app (the page's button after saving settings). The
+        Supervisor stops this process before it answers, so the page gets its answer first and the
+        call goes out a moment later; a refusal shows in the log."""
+        async def go():
+            await asyncio.sleep(delay_s)
+            try:
+                await self.ha.supervisor("POST", "/addons/self/restart")
+            except Exception as e:  # noqa: BLE001
+                self.event(f"Home Assistant did not restart the app: {e}. Restart it under Settings → Apps.",
+                           logging.WARNING)
+        self.event("Restart asked from the page, to use the saved settings.")
+        self._restart_task = asyncio.create_task(go())
+        return self._restart_task
 
     # ---------------------------------------------------------------- persistence
     @property

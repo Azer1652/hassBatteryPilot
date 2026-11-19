@@ -1,0 +1,370 @@
+{
+ "contract": {
+  "name": "Your contract now",
+  "description": "The contract you are on. Battery Pilot plans for its prices; the comparison always shows fixed and dynamic, and variable when its formula is filled in."
+ },
+ "fixed_contract_end": {
+  "name": "Fixed price ends on (YYYY-MM-DD)",
+  "description": "For reminders 6 weeks, 2 weeks and 3 days before your fixed price renews. Leave empty if you have none."
+ },
+ "fixed_day_rate": {
+  "name": "Fixed day rate (c/kWh, incl. VAT)",
+  "description": "Energy price only, without grid fees and taxes."
+ },
+ "fixed_night_rate": {
+  "name": "Fixed night rate (c/kWh, incl. VAT)",
+  "description": "Set it equal to the day rate for a single-rate contract."
+ },
+ "fixed_yearly_fee_eur": {
+  "name": "Fixed contract fee (EUR/year)",
+  "description": "Fixed yearly fee of the fixed contract."
+ },
+ "fixed_sell_mult": {
+  "name": "Fixed: sell price x market",
+  "description": "Fixed contract sell price = this x the month's average market price (EUR/MWh) + the next setting. For a flat sell rate, set this to 0."
+ },
+ "fixed_sell_add": {
+  "name": "Fixed: sell price + (c/kWh)",
+  "description": "Added to the fixed sell price (negative for a deduction). For a flat sell rate, put the rate here."
+ },
+ "dynamic_buy_mult": {
+  "name": "Dynamic: buy price x market",
+  "description": "Dynamic buy price = (this x market price in EUR/MWh + the next setting) x (1 + VAT) + grid fees."
+ },
+ "dynamic_buy_add": {
+  "name": "Dynamic: buy price + (c/kWh)",
+  "description": "Supplier margin on the dynamic buy price, before VAT."
+ },
+ "dynamic_vat_pct": {
+  "name": "Dynamic: VAT (%)",
+  "description": "VAT on the dynamic energy price."
+ },
+ "dynamic_sell_mult": {
+  "name": "Dynamic: sell price x market",
+  "description": "Dynamic sell price = this x market price (EUR/MWh) + the next setting."
+ },
+ "dynamic_sell_add": {
+  "name": "Dynamic: sell price + (c/kWh)",
+  "description": "Usually negative: the supplier's deduction on what you sell."
+ },
+ "dynamic_yearly_fee_eur": {
+  "name": "Dynamic contract fee (EUR/year)",
+  "description": "Fixed yearly fee of the dynamic contract."
+ },
+ "variable_day_mult": {
+  "name": "Variable: day price x index",
+  "description": "A variable contract's price changes each month with an index, usually the month's average Belpex price. Day buy price = (this x index in EUR/MWh + the next setting) x (1 + VAT) + grid fees. Copy the factor from your supplier's tariff sheet: 0.1 when it says 0.1 x Belpex for a price in c/kWh. Leave it at 0 to keep the variable contract out of the comparison."
+ },
+ "variable_day_add": {
+  "name": "Variable: day price + (c/kWh)",
+  "description": "The fixed part of the day formula on the tariff sheet, before VAT."
+ },
+ "variable_night_mult": {
+  "name": "Variable: night price x index",
+  "description": "The same for the night rate. Leave this and the next setting at 0 for a single-rate meter: the night is then priced with the day formula."
+ },
+ "variable_night_add": {
+  "name": "Variable: night price + (c/kWh)",
+  "description": "The fixed part of the night formula, before VAT."
+ },
+ "variable_vat_pct": {
+  "name": "Variable: VAT (%)",
+  "description": "VAT on the variable energy price. Set 0 if the formula on your tariff sheet already includes VAT."
+ },
+ "variable_sell_mult": {
+  "name": "Variable: sell price x index",
+  "description": "Variable sell price = this x the index (EUR/MWh) + the next setting."
+ },
+ "variable_sell_add": {
+  "name": "Variable: sell price + (c/kWh)",
+  "description": "Usually negative: the supplier's deduction on what you sell."
+ },
+ "variable_yearly_fee_eur": {
+  "name": "Variable contract fee (EUR/year)",
+  "description": "Fixed yearly fee of the variable contract."
+ },
+ "variable_index_eur_mwh": {
+  "name": "Variable: published index (EUR/MWh)",
+  "description": "Optional. The index your supplier published for one month (Belpex RLP, for example), for the month in the next setting. Without it, each month uses its average market price from your price sensor."
+ },
+ "variable_index_month": {
+  "name": "Variable: month of that index (YYYY-MM)",
+  "description": "The month the published index is for, such as 2026-11. Only that month uses it; Battery Pilot keeps it with that month, so you can enter the next month's index later without changing this one."
+ },
+ "grid_fees_c_kwh": {
+  "name": "Grid fees and taxes (c/kWh, incl. VAT)",
+  "description": "Added to every bought kWh on both contracts. Update each January from your bill."
+ },
+ "injection_fee_c_kwh": {
+  "name": "Injection fee (c/kWh)",
+  "description": "Grid operator fee on every sold kWh, on both contracts."
+ },
+ "night_start": {
+  "name": "Night tariff starts (HH:MM)",
+  "description": "Start of the night tariff, and of the window for winter night charging."
+ },
+ "night_end": {
+  "name": "Night tariff ends (HH:MM)",
+  "description": "End of the night tariff. On winter days the battery reaches its night target by this time."
+ },
+ "weekend_is_night": {
+  "name": "Weekend is night tariff",
+  "description": "On in Flanders: the night rate applies all weekend."
+ },
+ "import_limit_kw": {
+  "name": "Grid import limit (kW)",
+  "description": "Highest quarter-hour average import Battery Pilot aims for (capacity tariff). Grid charging stays under it, unless a price pays more than the higher capacity peak costs."
+ },
+ "export_limit_kw": {
+  "name": "Normal export limit (kW)",
+  "description": "The most your installation may export (Fluvius: 5 kW on a single-phase connection). The plan never counts on more, and it is restored after export was blocked at a negative price."
+ },
+ "capacity_tariff_eur_kw_year": {
+  "name": "Capacity tariff (EUR per kW per year, incl. VAT)",
+  "description": "Fluvius 2026: about 52 EUR. Set 0 if your grid has no capacity tariff."
+ },
+ "capacity_min_kw": {
+  "name": "Capacity tariff minimum (kW)",
+  "description": "The lowest monthly peak that is billed (Fluvius: 2.5 kW)."
+ },
+ "car_min_kw": {
+  "name": "Electric car: smallest charging power (kW, 0 = off)",
+  "description": "Set it to switch car detection on. A jump in house consumption of at least this many kW that lasts 3 minutes is taken as the car charging, and the peak is then shaved with the inverter's peak shaving. For a charger limited to 5 kW, about 3.5 is a good value. Not needed when you set the charger power entity."
+ },
+ "car_battery_kwh": {
+  "name": "Electric car: battery size (kWh, 0 = no estimate)",
+  "description": "Usable capacity of the car's battery (default: a Mercedes EQB 250+). With it, the Plan tab shows how much of the car can be charged while the home battery keeps grid import at the import limit."
+ },
+ "car_charge_kw": {
+  "name": "Electric car: charging power (kW)",
+  "description": "What the charger gives the car, for that estimate. 0: the measured power, only while the car charges."
+ },
+ "battery_capacity_kwh": {
+  "name": "Battery capacity (kWh)",
+  "description": "Usable capacity between 0 and 100 % SOC."
+ },
+ "battery_min_soc": {
+  "name": "Battery minimum SOC (%)",
+  "description": "The inverter's own discharge floor; the battery is never planned below it."
+ },
+ "battery_reserve_soc": {
+  "name": "Battery reserve for export (%)",
+  "description": "Battery Pilot does not export battery energy below this SOC, except at a price so high that buying it back later still pays; the house can still use the battery down to the minimum."
+ },
+ "peak_buffer_pct": {
+  "name": "Peak buffer (% above the minimum)",
+  "description": "Kept in the battery for short peaks. At or below minimum + buffer the battery no longer feeds the house; it only gives what the house asks above the import limit (peak shaving), and it is charged back to that level under the import limit after a peak. Needs the inverter's peak-shaving switch. 0: off."
+ },
+ "battery_voltage": {
+  "name": "Battery nominal voltage (V)",
+  "description": "Used to turn amps into kW when there is no voltage sensor."
+ },
+ "max_charge_current_a": {
+  "name": "Maximum charge current (A)",
+  "description": "Highest charge current Battery Pilot sets."
+ },
+ "max_discharge_current_a": {
+  "name": "Maximum discharge current (A)",
+  "description": "Highest discharge current when exporting."
+ },
+ "round_trip_efficiency_pct": {
+  "name": "Battery round-trip efficiency (%)",
+  "description": "Energy you get back for every 100 kWh put in (inverter and battery losses)."
+ },
+ "wear_cost_c_kwh": {
+  "name": "Battery wear cost (c/kWh)",
+  "description": "Replacement cost / (rated cycles x capacity). Charging and exporting only happen when they beat this."
+ },
+ "safety_margin_pct": {
+  "name": "Night target safety margin (%)",
+  "description": "Extra SOC on top of what the day needs on winter days. Raise it if the battery runs empty before night on cloudy days."
+ },
+ "winter_solar_threshold_kwh": {
+  "name": "Winter day when solar is below (kWh)",
+  "description": "When tomorrow's shade-corrected solar forecast is below this, the battery is grid-charged at night to carry the day (when that pays after losses and wear) and no battery energy is exported (except at a price so high that buying it back later costs less)."
+ },
+ "winter_mode": {
+  "name": "Winter strategy",
+  "description": "full_day: on winter days fill the battery at night to carry the whole day (+ safety margin) when the night price is low enough to pay for the losses and wear, no export. peaks_only: never a night target, keep only enough for your usual quarter-hour peaks."
+ },
+ "winter_hold_soc": {
+  "name": "Winter: keep the battery at (%)",
+  "description": "0 = off. On winter days (solar forecast below the threshold) self-use stops at this level; below it the house runs on the grid (peak shaving) and the battery only covers what is above the import limit. The battery is then part-filled when the car arrives; the car may use it down to the minimum + peak buffer. Nothing charges it back from the grid for this: solar and the plan fill it. Needs the inverter's peak-shaving switch."
+ },
+ "battery_system": {
+  "name": "Battery",
+  "description": "solis: a Solis hybrid through the Solis Modbus integration. marstek: a Marstek Venus through a local Marstek integration (Marstek Local API by jaapp, or Marstek by taurgis: steering and readings), with the Marstek Cloud integration as a backup for readings; grid, house and solar then come from your inverter (a Solax through Solax Modbus, for one)."
+ },
+ "marstek_device_id": {
+  "name": "Marstek device ID",
+  "description": "Only with a Marstek battery, and only when it is not found by itself: the battery's device ID in Home Assistant (the end of its device page's address)."
+ },
+ "marstek_stale_s": {
+  "name": "Marstek: reading too old after (s)",
+  "description": "A local reading with no message for this long, or a cloud report this old, is not used; the other source is. With neither, a charge or discharge stops."
+ },
+ "marstek_load_includes_battery": {
+  "name": "Marstek: house load includes the battery",
+  "description": "On when your house-load sensor (a Solax House Load, for one) counts the Marstek's charging as consumption. Battery Pilot then takes the battery's power out of it."
+ },
+ "full_power": {
+  "name": "Charge and discharge at full power",
+  "description": "Off: a charge or discharge is spread over its hour so it ends at the plan's level. On: as fast as the import limit and the maximum currents allow, then it holds at the minimum current, at most 2 % above the target; better when the battery's converter draws a fixed power whenever it runs (a Marstek, for one)."
+ },
+ "slot_entities": {
+  "name": "Solis slot entities",
+  "description": "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
+ },
+ "charge_command": {
+  "name": "Solis charge command",
+  "description": "How grid charging and export are sent. auto: the Solis Modbus action Force battery charge/discharge when Home Assistant has it, else the time-of-use slots. force: always that action. time_slot: always the time-of-use slots."
+ },
+ "solis_slave": {
+  "name": "Solis Modbus slave ID",
+  "description": "Only with several inverters on the Solis Modbus integration: the slave ID the force action is sent to. Leave empty for one inverter."
+ },
+ "notify_service": {
+  "name": "Phone notification action",
+  "description": "For example notify.mobile_app_pixel_8. Leave empty to use the only Companion app phone found."
+ },
+ "grid_import_power": {
+  "name": "Grid import power entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "grid_export_power": {
+  "name": "Grid export power entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "house_load_power": {
+  "name": "House load power entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "pv_power": {
+  "name": "Solar power entity",
+  "description": "Leave empty to find it automatically. Needed to learn tree shade."
+ },
+ "battery_power": {
+  "name": "Battery power entity",
+  "description": "Leave empty to find it automatically (Battery Power Net: + discharging, - charging). Used to measure the inverter's own use."
+ },
+ "battery_soc": {
+  "name": "Battery SOC entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "battery_voltage_sensor": {
+  "name": "Battery voltage entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "tou_switch": {
+  "name": "Time-of-use switch entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "grid_charge_switch": {
+  "name": "Allow grid charging switch entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "charge_current": {
+  "name": "Charge current entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "discharge_current": {
+  "name": "Discharge current entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "charge_start": {
+  "name": "Charge slot 1 start entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "charge_end": {
+  "name": "Charge slot 1 end entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "discharge_start": {
+  "name": "Discharge slot 1 start entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "discharge_end": {
+  "name": "Discharge slot 1 end entity",
+  "description": "Leave empty to find it automatically."
+ },
+ "export_limit": {
+  "name": "Export power limit entity",
+  "description": "Leave empty to find it automatically. Needed to block export at negative prices."
+ },
+ "peak_shaving_switch": {
+  "name": "Peak-shaving switch entity",
+  "description": "Leave empty to find it automatically (switch …peak_shaving_mode). With it, Battery Pilot can let the grid feed the house up to the import limit and keep the battery for a dearer hour or for your peaks."
+ },
+ "peak_shaving_limit": {
+  "name": "Peak-shaving grid power entity",
+  "description": "Leave empty to find it automatically (number …peak_max_usable_grid_power). Battery Pilot sets it to the import limit when it switches peak shaving on."
+ },
+ "feed_in_priority_switch": {
+  "name": "Feed-in priority switch entity",
+  "description": "Leave empty to find it automatically (switch …feed_in_priority). With it, Battery Pilot can send solar surplus to the grid first and keep room in the battery for hours in which the surplus cannot be sold (negative price, export limit)."
+ },
+ "car_charger_power": {
+  "name": "Car charger power entity",
+  "description": "Optional, never found automatically. A power sensor of the charger (kW or W). When set, the car counts as charging above 1 kW and the jump detection is not used."
+ },
+ "peak_shaving_soc": {
+  "name": "Peak-shaving baseline SOC entity",
+  "description": "Leave empty to find it automatically (number …peak_baseline_soc). Battery Pilot sets it to the battery minimum, so the inverter does not refill the battery from the grid by itself."
+ },
+ "forecast_power_now": {
+  "name": "Forecast power now entity",
+  "description": "Forecast.Solar's 'power production now'. Leave empty to find it automatically. Used to learn shade from history."
+ },
+ "forecast_today": {
+  "name": "Forecast today entity",
+  "description": "Only used when HA's energy dashboard has no solar forecast."
+ },
+ "forecast_tomorrow": {
+  "name": "Forecast tomorrow entity",
+  "description": "Only used when HA's energy dashboard has no solar forecast."
+ },
+ "price_sensor": {
+  "name": "Market price entity",
+  "description": "ENTSO-e, Nord Pool or another sensor with hourly or quarter-hour prices. Leave empty to find it automatically."
+ },
+ "grid_power": {
+  "name": "Grid power entity (one meter, + import)",
+  "description": "One signed grid power sensor, positive when you import, used before the import and export entities: a HomeWizard P1 meter's Power, for one (found by itself with a Marstek battery)."
+ },
+ "quarter_average_power": {
+  "name": "Quarter-hour average entity",
+  "description": "The grid meter's own average of this quarter-hour (a HomeWizard P1 meter's Average demand), for the capacity peak. Found by itself with a Marstek battery."
+ },
+ "month_peak_power": {
+  "name": "Month peak entity",
+  "description": "The grid meter's own peak of this month (a HomeWizard P1 meter's Peak demand current month). Found by itself with a Marstek battery."
+ },
+ "marstek_auto_mode_button": {
+  "name": "Marstek Auto mode button",
+  "description": "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."
+ },
+ "marstek_mode_select": {
+  "name": "Marstek operating mode select",
+  "description": "Only with a Marstek battery: a select entity with the battery's operating modes, used for Auto mode (self-use) instead of the Auto mode button. Leave empty to find it automatically."
+ },
+ "marstek_last_message": {
+  "name": "Marstek last message entity",
+  "description": "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link (required with the jaapp integration, not used with taurgis's). Leave empty to find it automatically."
+ },
+ "battery_soc_backup": {
+  "name": "Marstek cloud SOC entity",
+  "description": "Only with a Marstek battery: the Marstek Cloud State of Charge sensor, used when the local API is silent. Leave empty to find it automatically."
+ },
+ "battery_charge_power_backup": {
+  "name": "Marstek cloud charge power entity",
+  "description": "Only with a Marstek battery: the Marstek Cloud Charge Power sensor. Leave empty to find it automatically."
+ },
+ "battery_discharge_power_backup": {
+  "name": "Marstek cloud discharge power entity",
+  "description": "Only with a Marstek battery: the Marstek Cloud Discharge Power sensor. Leave empty to find it automatically."
+ },
+ "battery_report_time_backup": {
+  "name": "Marstek cloud report time entity",
+  "description": "Only with a Marstek battery: the Marstek Cloud Report Time sensor, to notice old cloud figures. Leave empty to find it automatically."
+ }
+}

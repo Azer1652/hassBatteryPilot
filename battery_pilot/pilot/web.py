@@ -7,7 +7,7 @@ from datetime import date
 
 from aiohttp import web
 
-from . import settings
+from . import form, settings
 from .config import ConfigError
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -91,6 +91,21 @@ async def settings_export(request: web.Request):
     return web.json_response(doc, dumps=_dumps)
 
 
+async def settings_form(request: web.Request):
+    """The settings form of the Settings tab: groups, fields and the saved values."""
+    try:
+        values = request.app[APP_KEY].saved_options()
+    except ConfigError as e:
+        raise web.HTTPBadGateway(text=str(e)) from e
+    return web.json_response(form.describe(values), dumps=_dumps)
+
+
+async def restart(request: web.Request):
+    """Restart the app through the Supervisor, so saved settings are used."""
+    request.app[APP_KEY].restart()
+    return web.json_response({"restarting": True})
+
+
 async def _prepared(request: web.Request):
     app = request.app[APP_KEY]
     try:
@@ -143,6 +158,8 @@ def make_web(app, allowed_ips: set[str] | None = None) -> web.Application:
     w.router.add_get("/api/settings", settings_export)
     w.router.add_post("/api/settings/check", settings_check)
     w.router.add_post("/api/settings", settings_import)
+    w.router.add_get("/api/settings/form", settings_form)
+    w.router.add_post("/api/restart", restart)
     w.router.add_static("/static/", STATIC)
     return w
 
