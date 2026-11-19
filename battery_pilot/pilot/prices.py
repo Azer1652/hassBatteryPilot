@@ -37,8 +37,9 @@ class PriceSlot:
         return int((self.end - self.start).total_seconds() // 60)
 
 
-def parse_time(value, tz=None) -> datetime | None:
-    """A time from a price list; one without a time zone is in `tz` (HA's), else UTC."""
+def parse_time(value, tz=None, fold: int = 0) -> datetime | None:
+    """A time from a price list; one without a time zone is in `tz` (HA's), else UTC. `fold=1`
+    takes the second of a repeated local time (the autumn clock change)."""
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str) and value:
@@ -49,7 +50,7 @@ def parse_time(value, tz=None) -> datetime | None:
     else:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=tz or timezone.utc)
+        dt = dt.replace(tzinfo=tz or timezone.utc, fold=fold)
     return dt.astimezone(timezone.utc)
 
 
@@ -66,6 +67,21 @@ def unit_factor(unit: str | None, sample: list[float]) -> float:
     if sample and statistics.median(abs(x) for x in sample) < 2:
         return 1000.0
     return 1.0
+
+
+def guessed_unit(state: dict | None) -> str | None:
+    """The unit `parse_state` assumes for a sensor without one ("EUR/kWh" or "EUR/MWh"); None when it has one."""
+    attrs = (state or {}).get("attributes") or {}
+    if attrs.get("unit_of_measurement"):
+        return None
+    vals = []
+    for item in _items(attrs):
+        if isinstance(item, dict):
+            try:
+                vals.append(float(next((item[k] for k in PRICE_KEYS if k in item), None)))
+            except (TypeError, ValueError):
+                continue
+    return "EUR/kWh" if unit_factor(None, vals) == 1000.0 else "EUR/MWh"
 
 
 def _items(attrs: dict) -> list:
@@ -87,10 +103,16 @@ def parse_state(state: dict | None, tz=None) -> list[PriceSlot]:
         return []
     attrs = state.get("attributes") or {}
     raw = []
+    seen: set[datetime] = set()
     for item in _items(attrs):
         if not isinstance(item, dict):
             continue
-        start = next((parse_time(item[k], tz) for k in TIME_KEYS if k in item), None)
+        key = next((k for k in TIME_KEYS if k in item), None)
+        start = parse_time(item[key], tz) if key else None
+        if start in seen:              # a local time without zone that repeats: the second one of the autumn change
+            start = parse_time(item[key], tz, fold=1)
+        if start is not None:
+            seen.add(start)
         price = next((item[k] for k in PRICE_KEYS if k in item), None)
         end = next((parse_time(item[k], tz) for k in END_KEYS if k in item), None)
         if start is None or price is None:

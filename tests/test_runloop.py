@@ -1,12 +1,15 @@
 """The main loop, the web endpoints and the entry point."""
 import asyncio
 import os
+import threading
 from datetime import timedelta
 
 import pytest
 from fake_ha import FakeHA, utc
+from test_car import day_of_quarters
 
 from pilot import __main__ as entry
+from pilot import app as app_module
 from pilot.app import App
 from pilot.config import Options
 from pilot.web import INGRESS_IP, default_allowed, make_web
@@ -127,3 +130,44 @@ async def test_the_health_check_reports_a_stalled_main_loop(tmpdata, aiohttp_cli
     assert (await client.get("/health")).status == 200            # also while still waiting for HA
     monkeypatch.setattr(app_module, "monotonic", lambda: app.alive_at + app_module.HEALTH_S + 1)
     assert (await client.get("/health")).status == 503
+
+
+async def test_the_control_loop_keeps_running_during_the_nightly_replay(tmp_path, monkeypatch):
+    """App.step awaits nightly(), which awaits the replay in an executor: no tick runs until it is done
+    (1-3 s on a PC, longer on a Raspberry Pi), at 00:20, in the night-charge window."""
+    fake = FakeHA(utc(2026, 1, 15, 0, 19, 30), soc=40)
+    fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
+    app = App(Options(), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    app.records = day_of_quarters()                                      # yesterday, 14 Jan: something to replay
+    started, release = threading.Event(), threading.Event()
+
+    def busy_replay(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return None
+    app._replay = busy_replay
+    during = []
+    real_tick = app.tick
+
+    async def tick():
+        during.append(started.is_set() and not release.is_set())
+        await real_tick()
+    app.tick = tick
+
+    async def sleep(event, seconds):                                     # fake time passes, the loop goes round quickly
+        fake.advance(timedelta(seconds=seconds))
+        await asyncio.sleep(0.01)
+    monkeypatch.setattr(app_module, "_sleep", sleep)
+    stop = asyncio.Event()
+    task = asyncio.create_task(app.run(stop))
+    for _ in range(500):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set(), "precondition: the nightly replay started"
+    await asyncio.sleep(1.0)                                             # about 100 rounds of the loop if it were free
+    release.set()
+    stop.set()
+    await asyncio.wait_for(task, 10)
+    assert sum(during) >= 3, f"{sum(during)} ticks ran while the nightly replay was busy for 1 s"

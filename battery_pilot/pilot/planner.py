@@ -237,8 +237,11 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
              allow_export: bool = True, curtail_negative: bool = False,
              terminal_c_kwh: float = 0.0, extreme: frozenset[int] = frozenset(),
              first_action: str | None = None, peak_shave: bool = False,
-             solar_hold: bool = False) -> list[Step]:
+             solar_hold: bool = False, charge_limit_kw: float | None = None) -> list[Step]:
     """Cheapest sequence of actions. `targets[i]` = minimum SOC at the end of slot i.
+
+    `charge_limit_kw`: a boost, charging (and its import) up to this level instead of the import
+    limit. Peak shaving and self-use stay at the import limit, as the inverter and the replay do.
 
     In the `extreme` slots the battery may be exported even when `allow_export` is False,
     and down to its minimum instead of the reserve. `first_action`: what is being done now;
@@ -255,6 +258,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
     sres = int(math.ceil(b.reserve_soc))
     s0 = int(min(max(round(soc0), 0), 100))
     T = len(slots)
+    bc = b if charge_limit_kw is None else replace(b, import_limit_kw=charge_limit_kw)   # for charging
 
     # Self-use moves the battery by a fraction of a SOC point per slot. Rounded slot by slot,
     # the error always goes the same way (0.30 kW for a quarter-hour is 0.49 of a point: never
@@ -306,7 +310,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
                 low = [v + TARGET_PENALTY_C * max(r - s, 0) for s, v in zip(levels, low)]
         maxc = int(b.max_charge_kw * sl.hours / e + 1e-9)
         maxd = int(b.max_discharge_kw * sl.hours / e + 1e-9)
-        table = _slot_costs(b, sl, e, -maxd, maxc, curtail_negative)
+        table = _slot_costs(bc, sl, e, -maxd, maxc, curtail_negative)
         costs[t] = table
         self_cost: dict[float, float] = {}
         shave_cost: dict[float, float] = {}
@@ -329,7 +333,7 @@ def optimize(b: Battery, slots: list[Slot], soc0: float, targets: dict[int, floa
         sw_self, sw_charge, sw_dis, sw_shave = (switch(a) for a in ("self_use", "charge", "discharge", SHAVE))
         can_hold = solar_hold and not (curtail_negative and sl.sell < 0)   # export blocked: nothing to gain
         act = ACTION_COST_C_PER_H * sl.hours
-        cap_kwh = (b.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
+        cap_kwh = (bc.import_limit_kw - CHARGE_HEADROOM_KW) * sl.hours
         # (the winter level holds for planned discharges too, except at an extreme price)
         floor = smin if t in extreme else max(sres, sbufs[t] if sl.hold else sres)
         for s in levels:
@@ -417,7 +421,7 @@ def slot_grid(now: datetime, end: datetime, tz: ZoneInfo, minutes: int) -> list[
     floor = local.replace(minute=(local.minute // minutes) * minutes, second=0, microsecond=0)
     out = []
     t = now
-    nxt = (floor + timedelta(minutes=minutes)).astimezone(timezone.utc)
+    nxt = floor.astimezone(timezone.utc) + timedelta(minutes=minutes)   # in UTC: no 70-minute slot at a clock change
     if (nxt - now).total_seconds() < 60 and nxt + timedelta(minutes=minutes) <= end:
         nxt += timedelta(minutes=minutes)
     while t < end:
@@ -562,6 +566,7 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
                 days[d] = known
             return days[d]
 
+        wraps = o.night_start_time > o.night_end_time
         for i, sl in enumerate(slots):
             local = (sl.start + timedelta(hours=sl.hours / 2)).astimezone(tz)
             d = local.date()
@@ -569,7 +574,8 @@ def make_plan(now: datetime, tz: ZoneInfo, o: Options, tariff: Tariff, price_slo
                 continue
             # From the night start of a dull day before a day with enough sun, the level is let go:
             # tomorrow's sun refills the battery, so what is kept would only push solar to the grid.
-            if local.time() >= o.night_start_time and winter(d + timedelta(days=1)) is False:
+            # (A window inside one day, 01:00-06:00, starts on the sunny day itself: nothing to let go.)
+            if wraps and local.time() >= o.night_start_time and winter(d + timedelta(days=1)) is False:
                 continue
             slots[i] = replace(sl, hold=hold)
 
@@ -747,8 +753,8 @@ def _boost(b: Battery, o: Options, slots: list[Slot], soc: float, targets: dict,
                 break
         if bound - max(level - free_now, 0.0) * rate < BOOST_MIN_GAIN_C:
             continue
-        steps = optimize(replace(b, import_limit_kw=level), slots, soc, targets, allow_export, curtail_negative,
-                         terminal, extreme, current_action, peak_shave, solar_hold)
+        steps = optimize(b, slots, soc, targets, allow_export, curtail_negative,
+                         terminal, extreme, current_action, peak_shave, solar_hold, charge_limit_kw=level)
         cap = limit - CHARGE_HEADROOM_KW
         for st in steps:                # only the steps that charge above the normal limit follow the higher one
             if st.action == "charge" and st.import_kwh / st.hours > cap + 0.05:

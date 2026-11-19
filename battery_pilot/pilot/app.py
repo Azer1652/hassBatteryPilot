@@ -96,6 +96,7 @@ class App:
         self.load = LoadProfile()
         self.comparison = Comparison()
         self._no_prices_told = False
+        self._unit_told = False
         self.price_slots: list[P.PriceSlot] = []
         self.forecast_archive: dict[str, float] = {}
         self.records: list[QuarterRecord] = []
@@ -152,6 +153,7 @@ class App:
         self.ha_back_at: datetime | None = None      # it last came back then
         self._cmd_unreachable_told = False
         self._refresh_task: asyncio.Task | None = None
+        self._replay_task: asyncio.Future | None = None       # the nightly replay, in a thread
         self.alive_at = monotonic()            # last round of the main loop (the Docker health check)
         self._last = {"refresh": None, "save": None, "publish": None}
 
@@ -666,7 +668,9 @@ class App:
         if not moving or self._soc_since is None or soc != self._soc_since[0]:
             self._soc_since = (soc, now)
             return False
-        if (now - self._soc_since[1]).total_seconds() >= FROZEN_S:
+        # A big battery at a low current takes a while to move one whole point: allow two of them.
+        point_s = self.o.battery_capacity_kwh * 10 / max(s.amps * self.o.battery_voltage, 1.0) * 3600
+        if (now - self._soc_since[1]).total_seconds() >= max(FROZEN_S, 2 * point_s):
             self._stuck_soc, self._soc_since = soc, None
             return True
         return False
@@ -689,10 +693,12 @@ class App:
         next command corrects it."""
         s = self.solis
         settling = self._cmd_at is not None and (now - self._cmd_at).total_seconds() < TOU_SETTLE_S
-        if not self.control_on or tou not in ("on", "off") or settling:
+        if not self.control_on or settling:
             self._tou_mismatch = self._shave_mismatch = self._hold_mismatch = 0
             return
-        if s.force:                       # time of use stays off: the force action does the work
+        if tou not in ("on", "off"):      # no readable time-of-use switch (optional in force mode): the others still count
+            wrong = False
+        elif s.force:                     # time of use stays off: the force action does the work
             wrong = tou == "on" and s.mode != "failed"
         else:
             wrong = (tou == "on" and s.mode in ("self_use", "peak_shave", "solar_hold")) \
@@ -794,7 +800,7 @@ class App:
             self.export_limit_before, watts = before, 0
         else:
             before = self.export_limit_before
-            watts = int(min(before, normal)) if before is not None else int(normal)
+            watts = int(before) if before is not None else int(normal)   # the limit it had, not the setting
         try:
             await self.solis.set_export_limit(local, watts)
             self.curtailed_by_us = want
@@ -858,11 +864,15 @@ class App:
         if "price_sensor" in self.ent_ids:
             try:
                 eid = self.ent_ids["price_sensor"]
-                new = P.parse_state(await self.ha.state(eid), self.tz)
+                st = await self.ha.state(eid)
+                new = P.parse_state(st, self.tz)
                 if not new and P.ENTSOE_CURRENT in eid:      # ENTSO-e: the list is on its average sensor
-                    new = P.parse_state(await self.ha.state(eid.replace(P.ENTSOE_CURRENT, P.ENTSOE_LIST)), self.tz)
+                    eid = eid.replace(P.ENTSOE_CURRENT, P.ENTSOE_LIST)
+                    st = await self.ha.state(eid)
+                    new = P.parse_state(st, self.tz)
                 if new:
                     self._no_prices_told = False
+                    self._tell_guessed_unit(eid, st)
                 elif not self._no_prices_told:
                     self._no_prices_told = True
                     self.event(f"{eid} has no price list in its attributes (prices, prices_today/prices_tomorrow "
@@ -877,6 +887,18 @@ class App:
             self._update_daily_market(now)
         await self._refresh_forecast(now)
         self.replan(now)
+
+    def _tell_guessed_unit(self, eid: str, st: dict | None):
+        """A price sensor without a unit: the unit is guessed from the size of the numbers (25 c/kWh and
+        25 EUR/MWh look alike), so say once what was assumed."""
+        assumed = P.guessed_unit(st)
+        if assumed is None or self._unit_told:
+            self._unit_told = assumed is not None
+            return
+        self._unit_told = True
+        self.event(f"{eid} has no unit (unit_of_measurement): its prices are taken as {assumed}, guessed from the size "
+                   "of the numbers. If that is wrong (c/kWh, for example), the plan and the comparison are off: give "
+                   "the sensor a unit or choose another price_sensor.", logging.WARNING)
 
     def _update_daily_market(self, now: datetime):
         """The average market price of each day, from days whose prices are complete. A day that is
@@ -1096,7 +1118,9 @@ class App:
         return out
 
     # ---------------------------------------------------------------- nightly learning and replay
-    async def nightly(self):
+    async def nightly(self, wait: bool = True):
+        """Learn from yesterday and replay it on both contracts. The replay is CPU work in a thread:
+        `wait=False` (the main loop) leaves it running in the background, so ticks go on meanwhile."""
         now = self.clock()
         local = now.astimezone(self.tz)
         today = local.date().isoformat()
@@ -1118,13 +1142,24 @@ class App:
                 soc0 = {k: self.comparison.sim_soc.get(k) for k in KINDS}
                 peak0 = {k: self.comparison.month(y.strftime("%Y-%m"))["replay"][k]["peak_kw"] for k in KINDS}
                 block = self.blocks_negative_export
-                results = await asyncio.get_running_loop().run_in_executor(
+                job = asyncio.get_running_loop().run_in_executor(
                     None, self._replay, list(recs), start, list(self.price_slots), dict(self.forecast_archive),
                     soc0, block, peak0)
-                self._apply_replay(y, results, block)
-            self.comparison.prune()
+                self._replay_task = asyncio.ensure_future(self._finish_replay(job, y, block))
+                if wait:
+                    await self._replay_task
+            else:
+                self.comparison.prune()
         # Plan again with what was just learned; this plan is also the day-ahead prediction.
         self.replan(now)
+        self.save_state()
+
+    async def _finish_replay(self, job, day: date, block: bool):
+        try:
+            self._apply_replay(day, await job, block)
+        except Exception as e:  # noqa: BLE001
+            self.event(f"Replay of {day} failed: {e}", logging.WARNING)
+        self.comparison.prune()
         self.save_state()
 
     def _close_day(self, day: date):
@@ -1416,7 +1451,8 @@ class App:
             # in the background, so the 10-second control loop keeps running meanwhile.
             self._refresh_task = asyncio.create_task(self._background_refresh())
             await asyncio.sleep(0)
-        await self.nightly()
+        if self._replay_task is None or self._replay_task.done():
+            await self.nightly(wait=False)
         await self.daily_alerts()
         if self._due("publish", now, PUBLISH_S):
             await self.publish()
@@ -1491,6 +1527,11 @@ class App:
         """App stopping: leave the inverter in self-use and save what was learned."""
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
+        if self._replay_task and not self._replay_task.done():     # keep what it replays: a few seconds at most
+            try:
+                await asyncio.wait_for(asyncio.shield(self._replay_task), 30)
+            except Exception as e:  # noqa: BLE001
+                log.warning("The nightly replay did not finish: %s", e)
         if self.solis and self.solis.mode in ACTIVE:
             try:
                 await self.solis.self_use(self.clock().astimezone(self.tz), "Battery Pilot stopped")

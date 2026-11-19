@@ -11,6 +11,9 @@ from pilot.controller import Readings, decide
 from pilot.planner import Step
 from pilot.solis import FORCE_MINUTES, FORCE_RENEW_S, Solis
 
+SHAVE = "switch.solis_peak_shaving_mode"
+TOU = "switch.solis_time_of_use"
+
 CONTROL = "input_boolean.battery_pilot_control"
 FILL = "input_boolean.battery_pilot_fill_battery_for_car"
 FORCE = {"domain": "solis_modbus", "services": {s: {} for s in discovery.FORCE_SERVICES}}
@@ -143,3 +146,24 @@ async def test_stopping_the_app_stops_the_force_command(tmp_path):
     assert fake.mode() == "force_charge"
     await app.shutdown()
     assert fake.forced is None and ("solis_modbus", "solis_stop_force_charge_discharge", {}) in fake.calls[-3:]
+
+
+@pytest.mark.parametrize("tou", ["unavailable", "not found"])
+async def test_the_peak_shaving_switch_is_read_back_without_a_time_of_use_switch(tmp_path, tou):
+    """App._reconcile returns early when the time-of-use switch has no state, so the peak-shaving (and feed-in)
+    switches are not read back either; in force mode the time-of-use switch is optional."""
+    fake = FakeHA(utc(2026, 6, 14, 14, 0), soc=60, peak_shaving=True, force_action=True, pv=lambda t: 3.0)
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup() and app.solis.method == "force"
+    if tou == "unavailable":
+        fake.override[TOU] = "unavailable"
+    else:                                   # force mode without the entity: discovery leaves it out
+        app.ent_ids.pop("tou_switch")
+        app.solis.entities.pop("tou_switch")
+    await run(app, fake, fake.now + timedelta(minutes=2), step_s=10)
+    wanted = fake.s[SHAVE]["state"]
+    fake.s[SHAVE]["state"] = "off" if wanted == "on" else "on"      # changed by hand or by the Solis app
+    await run(app, fake, fake.now + timedelta(minutes=15), step_s=10)
+    assert fake.s[SHAVE]["state"] == wanted, (f"time-of-use switch {tou}: the peak-shaving switch that Battery Pilot "
+                                              f"set {wanted!r} stayed {fake.s[SHAVE]['state']!r} for 15 minutes")

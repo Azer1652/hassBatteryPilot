@@ -20,12 +20,14 @@ def tmpdata(tmp_path):
     return str(tmp_path / "data")
 
 
-async def run_until(app, fake, end, step_s=10):
+async def run_until(app, fake, end, step_s=10, each=None):
     while fake.now < end:
         try:
             await app.step()
         except Exception as e:  # noqa: BLE001 - what App.run does with an error out of a round
             app._error(e)
+        if each:
+            each(app, fake)
         fake.advance(timedelta(seconds=step_s))
 
 
@@ -148,3 +150,21 @@ async def test_a_forecast_still_missing_after_the_restart_is_reported_once(tmpda
     assert not texts(app, "solar forecast is unavailable")
     await run_until(app, fake, fake.now + timedelta(minutes=6))
     assert len(texts(app, "solar forecast is unavailable")) == 1
+
+
+async def test_a_home_assistant_restart_in_the_peak_buffer_band_buys_nothing(tmp_path):
+    fake = FakeHA(utc(2026, 1, 14, 19, 0), soc=28.6, peak_shaving=True, load=lambda t: 0.6)
+    fake.s[CONTROL]["state"] = "on"
+    app = App(Options(battery_min_soc=10, peak_buffer_pct=20), fake, data_dir=str(tmp_path / "d"), clock=lambda: fake.now)
+    assert await app.setup()
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    assert fake.mode() == "peak_shave", "precondition: the buffer is kept by peak shaving"
+    soc0 = fake.soc
+    fake.away = True                                                     # Home Assistant restarts for 2 minutes
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    fake.away = False
+    charging = []
+    await run_until(app, fake, fake.now + timedelta(minutes=30),
+                    each=lambda a, f: charging.append(f.now) if f.mode() == "charge" else None)
+    assert not charging and fake.soc <= soc0 + 0.2, (f"after the restart the battery was grid-charged for "
+                                                     f"{len(charging) * 10} s, SOC {soc0:.1f} -> {fake.soc:.1f}")

@@ -67,7 +67,17 @@ class QuarterMeter:
         closed: list[QuarterRecord] = []
         if self.current is None:
             self.current, self.soc_at_start = quarter_start(t), soc
-        elif self.last_t is not None and t > self.last_t:
+        elif self.last_t is not None and t <= self.last_t:
+            # The clock stepped back (NTP): wait until it passes the last sample again rather than
+            # count the overlap twice. A big step back is taken as a gap.
+            if self.last_t - t > MAX_GAP:
+                if quarter_start(t) != self.current:
+                    closed.append(self._close(soc))
+                    self.current = quarter_start(t)
+            else:
+                self.last_kw = dict(kw)
+                return closed
+        elif self.last_t is not None:
             if t - self.last_t > MAX_GAP:
                 # App or HA was down: close what we have, nothing is filled in.
                 if quarter_start(t) != self.current:
@@ -124,7 +134,7 @@ class PeakTracker:
     def add(self, rec: QuarterRecord, tz: ZoneInfo) -> None:
         if rec.covered.get("import", 0) < 0.5:
             return
-        kw = rec.kwh["import"] * 4
+        kw = rec.kwh["import"] * 4 / min(rec.covered["import"], 1.0)   # the power of the part measured
         self.last_quarter_kw = kw
         key = rec.start.astimezone(tz).strftime("%Y-%m")
         self.months[key] = round(max(self.months.get(key, 0.0), kw), 3)
