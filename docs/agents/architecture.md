@@ -124,7 +124,9 @@ is `URGENT_KW` over the limit, and only changes of `FOLLOW_STEP_W`. Watts are cl
 The fake: `local_down` raises `HAUnreachable` from `TimeoutError` (records the timeout), `marstek_lag_s`
 delays a new passive power.
 Two local integrations (`marstek.INTEGRATIONS`, picked by `pick_integration` from the services that
-have `set_passive_mode`): jaapp's (`marstek_local_api`, power + charging, *Last message received*) and
+have `set_passive_mode`): jaapp's (`marstek_local_api` 1.2.0+, power + charging, *Last message received*;
+its 1.1.0 release has an operating-mode select that sets passive only at 0 W and no action, and
+`diagnose` tells the user to update) and
 taurgis's (`marstek`, power + discharging, no last-message sensor: entities go unavailable, so age 0
 while available). `registry_match(local=...)` swaps the platform. Charge/discharge =
 `<domain>.set_passive_mode` (W = amps × volts, negative = charge, `PASSIVE_S`, renewed every

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.20.1
+
+- **Marstek: a clearer message when the battery cannot be steered.** When Home Assistant has no
+  `set_passive_mode` action, the message now names the integration your Marstek entities belong
+  to, its actions, and every action about passive mode. With Marstek Local API 1.1.0 (what HACS
+  installs by default) it says to update to 1.2.0: 1.1.0 has an *Operating mode* select that can
+  only set passive mode at 0 W, so it cannot charge or discharge at a chosen power.
+
 ## 2.20.0
 
 A third contract type: **variable**, a Belgian monthly-indexed contract whose price changes

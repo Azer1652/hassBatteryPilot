@@ -467,6 +467,10 @@ async def test_without_the_passive_action_it_says_which_integration(tmpdata):
     app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert not await app.setup()
     assert "set_passive_mode" in app.problem
+    # it says what Home Assistant has instead
+    assert "the integration 'marstek_local_api', whose actions are: none" in app.problem
+    assert "actions about passive mode: none" in app.problem
+    assert "update it to 1.2.0" in app.problem
 
 
 # ---------------------------------------------------------------- taurgis/has-marstek-local-api

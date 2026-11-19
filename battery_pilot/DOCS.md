@@ -464,8 +464,12 @@ found by themselves: `…_grid_import`, `…_grid_export`, `…_house_load` and
 The battery is seen by two integrations, and Battery Pilot uses both:
 
 - **A local integration**, required: either **Marstek Local API** (jaapp/ha-marstek-local-api,
-  HACS, actions under `marstek_local_api`) or **Marstek** (taurgis/has-marstek-local-api, HACS,
-  actions under `marstek`). Battery Pilot finds which one is installed. Its readings are the
+  HACS, actions under `marstek_local_api`, version **1.2.0 or newer**) or **Marstek** (taurgis/has-marstek-local-api, HACS,
+  actions under `marstek`). Battery Pilot finds which one is installed. Marstek Local API
+  1.1.0, which HACS installs by default because 1.2.0 is still a pre-release, has only an
+  *Operating mode* select and no `set_passive_mode` action, so it cannot set a charge or
+  discharge power: in HACS open the integration, choose *Redownload*, pick 1.2.0 (the newest
+  rc), and restart Home Assistant. Its readings are the
   first choice, and it is the only way to steer the battery: a charge or discharge is its
   `set_passive_mode` action (power = current × *Battery nominal voltage*, negative to charge,
   for 5 minutes, sent again every 2 minutes while it should go on), and self-use is its

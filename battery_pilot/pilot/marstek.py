@@ -116,6 +116,28 @@ def pick_integration(services: list, registry: list | None) -> Integration | Non
     return have[0] if have else None
 
 
+def diagnose(services: list, registry: list | None) -> str:
+    """What Home Assistant has instead, for the message when no known integration is found: the
+    integrations that own Marstek entities (with their actions) and every action about passive mode."""
+    acts = {d.get("domain"): sorted(d.get("services") or {}) for d in services or []}
+    owners = sorted({e.get("platform") for e in registry or []
+                     if "marstek" in str(e.get("entity_id")) and e.get("platform") not in (CLOUD, None)})
+    parts = []
+    if registry is None:
+        parts.append("the entity registry could not be read")
+    for p in owners:
+        parts.append(f"your Marstek entities belong to the integration '{p}', whose actions are: "
+                     + (", ".join(acts.get(p) or []) or "none"))
+    passive = sorted(f"{dom}.{s}" for dom, ss in acts.items() for s in ss if "passive" in s)
+    parts.append("actions about passive mode: " + (", ".join(passive) or "none"))
+    if LOCAL in owners and PASSIVE_SERVICE not in (acts.get(LOCAL) or []):
+        # its 1.1.0 (the last release that is not a pre-release) has an operating-mode select that sets
+        # passive mode only at 0 W; set_passive_mode came with 1.2.0
+        parts.append("Marstek Local API 1.1.0 cannot set a passive power: update it to 1.2.0 or newer (in HACS, "
+                     "Redownload and pick the version; 1.2.0 is a pre-release)")
+    return "; ".join(parts)
+
+
 def auto_option(options, default: str = "Auto") -> str:
     """The option of an operating-mode select that is Auto mode (its spelling varies); `default`
     when the options cannot be read."""

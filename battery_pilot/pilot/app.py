@@ -305,7 +305,8 @@ class App:
             if found is None:
                 self.problem = (f"Home Assistant has no {M.PASSIVE_SERVICE} action of a local Marstek integration: "
                                 "Battery Pilot steers a Marstek through " + " or ".join(
-                                    i.name for i in M.INTEGRATIONS) + ". Install or update one, then restart the app.")
+                                    i.name for i in M.INTEGRATIONS) + ". Install or update one, then restart the app. "
+                                "Found instead: " + M.diagnose(services, registry) + ".")
                 self.event(self.problem, logging.ERROR)
                 return False
             integration = self.marstek_integration = found
