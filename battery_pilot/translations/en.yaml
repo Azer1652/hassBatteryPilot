@@ -127,7 +127,7 @@ configuration:
     description: "On when your house-load sensor (a Solax House Load, for one) counts the Marstek's charging as consumption. Battery Pilot then takes the battery's power out of it."
   full_power:
     name: "Charge and discharge at full power"
-    description: "Off: a charge or discharge is spread over its hour so it ends at the plan's level. On: as fast as the import limit and the maximum currents allow, then the battery waits; better when the battery's converter draws a fixed power whenever it runs (a Marstek, for one)."
+    description: "Off: a charge or discharge is spread over its hour so it ends at the plan's level. On: as fast as the import limit and the maximum currents allow, then it holds at the minimum current, at most 2 % above the target; better when the battery's converter draws a fixed power whenever it runs (a Marstek, for one)."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
@@ -229,7 +229,7 @@ configuration:
     description: "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."
   marstek_last_message:
     name: "Marstek last message entity"
-    description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link. Leave empty to find it automatically."
+    description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link (required). Leave empty to find it automatically."
   battery_soc_backup:
     name: "Marstek cloud SOC entity"
     description: "Only with a Marstek battery: the Marstek Cloud State of Charge sensor, used when the local API is silent. Leave empty to find it automatically."

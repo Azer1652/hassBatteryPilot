@@ -16,9 +16,11 @@ is under `marstek_stale_s`; otherwise the cloud's reading is used, when its repo
 With neither fresh, the SOC is unknown and the app's blind rule returns the battery to self-use.
 
 Commands have no second path (the cloud integration cannot steer), so they are made to fail
-safe: a passive charge or discharge runs for PASSIVE_S and is sent again every RENEW_S while it
-should go on, so when commands stop arriving the battery leaves passive mode by itself. A
-command that fails leaves the mode `failed` and the next tick sends it again (as with a Solis).
+safe: every passive command runs for PASSIVE_S (5 minutes) and is sent again every RENEW_S while
+it should go on, so when commands stop arriving the battery leaves passive mode within minutes. A
+command that fails or times out (`MarstekTimeout`, CALL_TIMEOUT_S) leaves the mode `failed`, and
+the app sends nothing for RETRY_S before trying again: the integration itself retries for up to
+45 s, and its README warns that a busier local API can make the battery unresponsive.
 
 The class has the same interface as `solis.Solis`, so the app, the controller and the planner
 are unchanged: amps stay the controller's unit and become watts here (amps x battery voltage).
@@ -36,8 +38,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
+from .ha import HAUnreachable
 from .solis import hour_slot
 
 log = logging.getLogger(__name__)
@@ -45,10 +48,19 @@ log = logging.getLogger(__name__)
 LOCAL = "marstek_local_api"
 CLOUD = "marstek_cloud"
 PASSIVE_SERVICE = "set_passive_mode"
-PASSIVE_S = 20 * 60          # a passive charge or discharge lapses by itself after this
-RENEW_S = 5 * 60             # and is sent again this often while it should go on
-FOLLOW_STEP_W = 150          # peak shaving: a new power is sent when it differs this much
-FOLLOW_GAP_S = 20            # and not sooner than this after the last one (the local API is slow)
+PASSIVE_S = 5 * 60           # every passive command lapses by itself after this (a lost link gives the battery back)
+RENEW_S = 2 * 60             # and is sent again this often while it should go on
+FOLLOW_STEP_W = 200          # peak shaving: a new power is sent when it differs this much
+FOLLOW_GAP_S = 60            # and not sooner than this after the last one (the local API is slow)
+URGENT_KW = 0.5              # except when the grid is this far over the import limit (the capacity peak)
+URGENT_GAP_S = 30            # then after this
+RETRY_S = 60                 # after a failed command, nothing is sent for this long
+CALL_TIMEOUT_S = 20          # a Marstek action that takes longer than this has failed
+
+
+class MarstekTimeout(Exception):
+    """The Marstek did not answer in time (the local link is down): a command failure, not Home
+    Assistant going away."""
 
 # Entity key -> (integration, end of the entity's unique ID). Found in the entity registry, so
 # entity names chosen by the user (or by Marstek's cloud) do not matter.
@@ -88,9 +100,9 @@ def device_of(entity_id: str | None, registry: list[dict]) -> str | None:
     return None
 
 
-def age_s(state: str | None, now: datetime) -> float | None:
+def age_s(state: str | None, now: datetime, tz: tzinfo = timezone.utc) -> float | None:
     """How old the cloud's report is, from its report-time sensor: an epoch time (s or ms) or an ISO
-    date. None: not known (the reading is then taken as it is)."""
+    date (without a zone: in Home Assistant's, `tz`). None: not known (the reading is then not used)."""
     if state in (None, "", "unknown", "unavailable"):
         return None
     try:
@@ -101,7 +113,7 @@ def age_s(state: str | None, now: datetime) -> float | None:
         except ValueError:
             return None
         if t.tzinfo is None:
-            t = t.replace(tzinfo=timezone.utc)
+            t = t.replace(tzinfo=tz)
         return max((now - t).total_seconds(), 0.0)
     if v > 1e12:
         v /= 1000
@@ -127,17 +139,20 @@ class Reading:
 
 
 def choose(local: Source, cloud: Source, stale_s: float) -> Reading:
-    """The fresh reading, the local one first."""
+    """The fresh reading, the local one first. A reading counts only with a known age: both
+    integrations keep showing their last values when their link is down."""
     def fresh(s: Source) -> bool:
-        return s.soc is not None and (s.age_s is None or s.age_s <= stale_s)
+        return s.soc is not None and s.age_s is not None and s.age_s <= stale_s
+
+    def why(s: Source, old: str) -> str:
+        return "no reading" if s.soc is None else "its age is unknown" if s.age_s is None else old.format(s.age_s)
 
     if fresh(local):
         return Reading(local.soc, local.kw, "local")
-    lwhy = ("no reading" if local.soc is None
-            else f"no message for {local.age_s:.0f} s")
+    lwhy = why(local, "no message for {:.0f} s")
     if fresh(cloud):
         return Reading(cloud.soc, cloud.kw, "cloud", f"local API: {lwhy}")
-    cwhy = "no reading" if cloud.soc is None else f"last report {cloud.age_s:.0f} s ago"
+    cwhy = why(cloud, "last report {:.0f} s ago")
     return Reading(None, None, "none", f"local API: {lwhy}; cloud: {cwhy}")
 
 
@@ -164,6 +179,14 @@ class Marstek:
     power_w: int = 0                # peak shaving / solar hold: the passive power now (+ discharge)
     shave_limit_kw: float = 0.0
     shave_soc: float = 0.0
+    retry_at: datetime | None = None    # after a failed command: nothing is sent before this
+
+    def waiting(self, t: datetime) -> bool:
+        """A command failed less than RETRY_S ago: the local API gets a rest."""
+        return self.retry_at is not None and t < self.retry_at
+
+    def failed(self, t: datetime):
+        self.retry_at = t + timedelta(seconds=RETRY_S)
 
     @property
     def force(self) -> bool:
@@ -205,8 +228,10 @@ class Marstek:
         else:
             w = self.shave_power(grid_kw, soc)
         age = (t_local - self.sent_at).total_seconds() if self.sent_at else 1e9
-        if age >= RENEW_S or (abs(w - self.power_w) >= FOLLOW_STEP_W and age >= FOLLOW_GAP_S) \
-                or (w == 0 and self.power_w != 0 and age >= FOLLOW_GAP_S):
+        urgent = grid_kw is not None and grid_kw > self.shave_limit_kw + URGENT_KW and w > self.power_w
+        gap = URGENT_GAP_S if urgent else FOLLOW_GAP_S
+        if age >= RENEW_S or (abs(w - self.power_w) >= FOLLOW_STEP_W and age >= gap) \
+                or (w == 0 and self.power_w != 0 and age >= gap):
             await self._passive(w)
             changed = w != self.power_w
             self.power_w, self.sent_at = w, t_local
@@ -219,27 +244,39 @@ class Marstek:
         del self.log[:-50]
         log.info("Marstek: %s", text)
 
+    async def _call(self, domain: str, service: str, data: dict):
+        """A Marstek action; one that times out is the Marstek's failure, not Home Assistant's."""
+        try:
+            await self.ha.call(domain, service, data, timeout=CALL_TIMEOUT_S)
+        except HAUnreachable as e:
+            if isinstance(e.__cause__, TimeoutError):
+                raise MarstekTimeout(f"the Marstek did not answer within {CALL_TIMEOUT_S} s ({domain}.{service})") from e
+            raise
+        self.retry_at = None
+
     async def _passive(self, watts: int):
-        await self.ha.call(LOCAL, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts,
-                                                    "duration": PASSIVE_S})
+        watts = max(min(watts, self.max_discharge_w), -self.max_charge_w)
+        await self._call(LOCAL, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts, "duration": PASSIVE_S})
         self.forced = True
 
     async def charge(self, t_local: datetime, amps: int):
-        await self._passive(-self.watts(amps))
+        w = min(self.watts(amps), self.max_charge_w)
+        await self._passive(-w)
         self.mode, self.slot_hour, self.amps, self.sent_at = "charge", hour_slot(t_local)[0], amps, t_local
-        self.power_w, self.shave, self.hold = -self.watts(amps), False, False
-        self._note(t_local, f"passive charge {self.watts(amps)} W ({amps} A) for {PASSIVE_S // 60} min")
+        self.power_w, self.shave, self.hold = -w, False, False
+        self._note(t_local, f"passive charge {w} W ({amps} A) for {PASSIVE_S // 60} min")
 
     async def discharge(self, t_local: datetime, amps: int):
-        await self._passive(self.watts(amps))
+        w = min(self.watts(amps), self.max_discharge_w)
+        await self._passive(w)
         self.mode, self.slot_hour, self.amps, self.sent_at = "discharge", hour_slot(t_local)[0], amps, t_local
-        self.power_w, self.shave, self.hold = self.watts(amps), False, False
-        self._note(t_local, f"passive discharge {self.watts(amps)} W ({amps} A) for {PASSIVE_S // 60} min")
+        self.power_w, self.shave, self.hold = w, False, False
+        self._note(t_local, f"passive discharge {w} W ({amps} A) for {PASSIVE_S // 60} min")
 
     async def set_current(self, t_local: datetime, amps: int):
-        w = self.watts(amps)
+        w = min(self.watts(amps), self.max_charge_w if self.mode == "charge" else self.max_discharge_w)
         await self._passive(-w if self.mode == "charge" else w)
-        self.amps, self.sent_at = amps, t_local
+        self.amps, self.sent_at, self.power_w = amps, t_local, -w if self.mode == "charge" else w
         self._note(t_local, f"passive {self.mode} {w} W ({amps} A)")
 
     async def peak_shave(self, t_local: datetime, limit_kw: float, soc: float):
@@ -257,7 +294,7 @@ class Marstek:
         self._note(t_local, "solar hold: passive 0 W, surplus to the grid")
 
     async def self_use(self, t_local: datetime, why: str = ""):
-        await self.ha.call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
+        await self._call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
         self.mode, self.slot_hour, self.amps, self.forced, self.power_w = "self_use", "", 0, False, 0
         self.shave, self.hold = False, False
         self._note(t_local, "auto mode (self-use)" + (f" ({why})" if why else ""))

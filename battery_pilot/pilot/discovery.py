@@ -96,7 +96,6 @@ NEEDED_FOR = {
     "grid_power": "a fast and exact grid reading (a P1 meter) for the meter and the Marstek's peak shaving",
     "quarter_average_power": "the capacity peak: the meter's own quarter-hour average",
     "month_peak_power": "the capacity peak: the meter's own month peak",
-    "marstek_last_message": "noticing that the Marstek local API went silent (its values freeze)",
     "battery_soc_backup": "the Marstek cloud as a backup when the local API is silent",
     "battery_charge_power_backup": "the Marstek cloud as a backup for the battery power",
     "battery_discharge_power_backup": "the Marstek cloud as a backup for the battery power",
@@ -178,7 +177,8 @@ def resolve_all(opts: Options, states: dict, force: bool = False,
     registry, where a Marstek battery's entities are found)."""
     out = {k: resolve(k, opts, states, registry) for k in ENTITIES}
     if opts.marstek:
-        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
+        missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button",
+                               "marstek_last_message")
                    if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)
                    and not (k == "house_load_power" and out["pv_power"].entity_id)]
         if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:

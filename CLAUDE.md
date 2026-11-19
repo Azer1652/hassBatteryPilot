@@ -8,8 +8,9 @@ Keep this file short; the detail is in `docs/agents/`.
 A Home Assistant app (add-on) repository (`repository.yaml`) with one app, `battery_pilot/`
 (Battery Pilot, formerly Battery Playbook). It is an always-running Python service: it reads
 Home Assistant every 10 s, plans a home battery against contract prices, solar forecast and the
-capacity tariff, steers a Solis hybrid through the Solis Modbus integration, compares fixed and
-dynamic contracts, and serves a page through ingress (port 8099). It is Solis-only by design.
+capacity tariff, steers a Solis hybrid through the Solis Modbus integration (or a Marstek Venus
+beside another inverter, `battery_system: marstek`, `marstek.py`), compares fixed and dynamic
+contracts, and serves a page through ingress (port 8099).
 
 Runtime is Python 3 + `aiohttp` from Alpine packages (`battery_pilot/Dockerfile`, base images in
 `battery_pilot/build.yaml`).
@@ -24,7 +25,8 @@ Runtime is Python 3 + `aiohttp` from Alpine packages (`battery_pilot/Dockerfile`
   that conversation. No pull request unless asked. See `docs/agents/workflow.md`.
 - **A release is a version bump plus a CHANGELOG entry** (`python tools/release.py X.Y.Z`).
 - **Planner, simulator and controller must agree.** A mechanism added to one of
-  `planner.optimize`, `simulate.step`, `controller.decide` belongs in all three.
+  `planner.optimize`, `simulate.step`, `controller.decide` belongs in all three. (Pacing inside a
+  slot, such as `full_power`, is the controller's alone: the energy per slot stays the same.)
 - **Say what is unverified.** Most inverter behaviour is tested in a simulator only:
   `docs/agents/unverified.md`.
 

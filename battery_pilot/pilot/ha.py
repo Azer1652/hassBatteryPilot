@@ -99,8 +99,8 @@ class HA:
     async def services(self) -> list:
         return await self._request("GET", "/services")
 
-    async def call(self, domain: str, service: str, data: dict | None = None) -> None:
-        await self._request("POST", f"/services/{domain}/{service}", data or {})
+    async def call(self, domain: str, service: str, data: dict | None = None, timeout: float = 30) -> None:
+        await self._request("POST", f"/services/{domain}/{service}", data or {}, timeout=timeout)
 
     async def set_state(self, entity_id: str, state, attributes: dict | None = None) -> None:
         await self._request("POST", f"/states/{entity_id}", {"state": str(state), "attributes": attributes or {}})

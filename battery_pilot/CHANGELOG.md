@@ -8,8 +8,9 @@
   through the Marstek Local API integration (passive mode for a charge or discharge, its Auto
   mode for self-use) and read through it, with the Marstek Cloud integration as a backup: when
   the local link goes silent for 5 minutes (`marstek_stale_s`), the cloud's SOC and power are
-  used until it answers again. A passive command lasts 20 minutes and is renewed every 5, so
-  the battery returns to its own mode when commands stop getting through. See *A Marstek
+  used until it answers again. A passive command lasts 5 minutes and is renewed every 2, so
+  the battery returns to its own mode soon when commands stop getting through; after a failed
+  command (20 s to answer) nothing is sent for a minute. See *A Marstek
   battery* in the documentation. Not yet tried on a real Marstek.
 - A Solax *House Load* counts a Marstek's charging as consumption; Battery Pilot takes the
   battery's power back out (`marstek_load_includes_battery`, on).

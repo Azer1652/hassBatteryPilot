@@ -463,7 +463,7 @@ The battery is seen by two integrations, and Battery Pilot uses both:
 - **Marstek Local API** (jaapp/ha-marstek-local-api, HACS): required. Its readings are the
   first choice, and it is the only way to steer the battery: a charge or discharge is its
   `marstek_local_api.set_passive_mode` action (power = current × *Battery nominal voltage*,
-  for 20 minutes, sent again every 5 minutes while it should go on), and self-use is its
+  for 5 minutes, sent again every 2 minutes while it should go on), and self-use is its
   *Auto mode* button.
 - **Marstek Cloud** (DoctaShizzle/marstek_cloud, HACS): optional, a backup for the
   readings only (it cannot steer).
@@ -473,9 +473,11 @@ values, so Battery Pilot watches its *Last message received* sensor: with no mes
 *Marstek: reading too old after* (`marstek_stale_s`, 300 s), the cloud's SOC and power are used
 instead, as long as the cloud's report is not that old either. The log says when it switches
 and back, and the *Log* tab shows where the readings come from. With neither fresh, the SOC is
-unknown: after a minute a charge or discharge is stopped (Auto mode). A command that fails
-is sent again every 10 seconds; when none gets through, the passive command ends by itself
-within 20 minutes.
+unknown: after a minute a charge or discharge is stopped (Auto mode). Every Marstek action has
+20 seconds to answer; one that fails or times out counts as a failed command (the log says the
+Marstek did not answer, and after three a problem shows on the page), and nothing is sent for a
+minute before the next try, so a struggling local API is not flooded. When no command gets
+through, the last passive command ends by itself within 5 minutes.
 
 | Setting | Found automatically | Needed |
 | --- | --- | --- |
@@ -483,10 +485,10 @@ within 20 minutes.
 | `battery_power` | the Local API's *Power* (+ charging) | optional: the house-load correction below, the efficiency figure |
 | `battery_voltage_sensor` | the Local API's *Voltage* | optional |
 | `marstek_auto_mode_button` | the Local API's *Auto mode* button | required |
-| `marstek_last_message` | the Local API's *Last message received* | recommended: without it a silent local link is not noticed |
+| `marstek_last_message` | the Local API's *Last message received* | required: without it a silent local link (whose values freeze) cannot be noticed |
 | `battery_soc_backup` | the cloud's *State of Charge* | optional: the backup |
 | `battery_charge_power_backup`, `battery_discharge_power_backup` | the cloud's *Charge Power* and *Discharge Power* | optional |
-| `battery_report_time_backup` | the cloud's *Report Time* | optional: without it a cloud figure is never too old |
+| `battery_report_time_backup` | the cloud's *Report Time* | needed for the backup: a cloud figure is used only with a report time that is recent (an epoch time or a date; without a time zone, Home Assistant's) |
 | `marstek_device_id` | the device of the Local API's entities | required for the passive action; set it only if the log asks |
 
 They are found in Home Assistant's entity registry by the integration they belong to, so
@@ -514,8 +516,9 @@ Marstek app (it is usually 10 %, the default here).
 in peak shaving it sets the passive power from the grid meter (a P1 meter is best) every 10
 seconds, so the battery gives only what the house takes above *Grid import limit* (never below
 the shaving level, the battery minimum), and charges with what would be exported. A new power is
-sent when it differs 150 W or more, at most every 20 seconds, and the command is renewed every
-5 minutes. Solar hold is passive at 0 W. So the plan can keep the battery for the evening
+sent when it differs 200 W or more, at most once a minute (every 30 seconds while the grid is
+more than 0.5 kW over the limit, to protect the capacity peak), and the command is renewed every
+2 minutes; it lapses after 5. Solar hold is passive at 0 W. So the plan can keep the battery for the evening
 cooking peak, the peak buffer and the winter level work, and the battery covers the car's peaks.
 How much to keep, and whether to charge for it at night, follows from the solar forecast and the
 peaks it has learned (see *How it decides*).
@@ -530,7 +533,11 @@ quarter-hour average. Set the limit a little under the peak you want to stay bel
 fast and then waiting loses less than charging slowly. With *Charge and discharge at full
 power* (`full_power`) on, a planned charge runs as fast as the import limit and *Maximum charge
 current* allow (instead of being spread over the hour), and an export at *Maximum discharge
-current*.
+current*. Once the target is reached within the hour, the charge holds at the minimum current
+(10 A), at most 2 % above the target, as without the option.
+
+Battery Pilot warns at the start when the battery settings still look like a Solis's (16 kWh,
+or more than 2.5 kW).
 
 ### Electric car (read every 10 seconds, only when set)
 

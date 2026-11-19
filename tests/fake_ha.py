@@ -47,6 +47,9 @@ class FakeHA:
         self.cloud_down = False
         self.local_silent_s = 0.0
         self.cloud_report = now
+        self.marstek_lag_s = 0                  # a new passive power takes effect this much later
+        self.pending = None
+        self.call_timeouts: list = []
         self._q = (None, 0.0)                   # P1 meter: (quarter start, kWh imported so far)
         self.inverter_draw_kw = inverter_draw_kw   # the inverter's own use, always from the grid
         self.force_action = force_action        # the Solis Modbus force charge/discharge actions exist
@@ -189,7 +192,7 @@ class FakeHA:
                 "solis_stop_force_charge_discharge": {}, "solis_write_holding_register": {}}})
         return out
 
-    async def call(self, domain, service, data=None):
+    async def call(self, domain, service, data=None, timeout=30):
         self._check_away(f"POST /services/{domain}/{service}")
         data = data or {}
         if self.fail and self.fail(domain, service, data):
@@ -204,15 +207,21 @@ class FakeHA:
             self.s[eid]["state"] = data["time"]
         elif domain == "marstek_local_api" or (domain == "button" and "marstek" in str(eid)):
             if self.local_down:
-                raise RuntimeError("Failed to set passive mode: timeout")
+                # the integration retries for 45 s; the app's client gives up at its timeout
+                self.call_timeouts.append(timeout)
+                raise HAUnreachable(f"POST /services/{domain}/{service}: TimeoutError") from TimeoutError()
             if domain == "button":
                 if eid.endswith("auto_mode"):
-                    self.forced = None
+                    self.forced = self.pending = None
             else:
                 assert data["device_id"] == "dev1", data
                 assert 1 <= data["duration"] <= 86400 and -10000 <= data["power"] <= 10000, data
                 kind = "charge" if data["power"] < 0 else "discharge"
-                self.forced = (kind, float(abs(data["power"])), self.now + timedelta(seconds=data["duration"]))
+                forced = (kind, float(abs(data["power"])), self.now + timedelta(seconds=data["duration"]))
+                if self.marstek_lag_s:
+                    self.pending = (forced, self.now + timedelta(seconds=self.marstek_lag_s))
+                else:
+                    self.forced = forced
         elif domain == "solis_modbus":
             if not self.force_action:
                 raise RuntimeError(f"Action solis_modbus.{service} not found")
@@ -266,6 +275,8 @@ class FakeHA:
 
     def mode(self):
         local = self.now.astimezone(TZ)
+        if getattr(self, "pending", None) and self.now >= self.pending[1]:
+            self.forced, self.pending = self.pending[0], None
         if self.forced and self.now >= self.forced[2]:      # the timeout: back to the inverter's own mode
             self.forced = None
         if self.forced:

@@ -50,7 +50,10 @@ def test_choose_falls_back_to_the_cloud_when_the_local_api_is_silent():
     r = M.choose(M.Source(50, 1.0, 400), M.Source(48, 0.9, 60), 300)
     assert (r.soc, r.source) == (48, "cloud")
     assert "400 s" in r.why
+    # a reading whose age is unknown is not used: both integrations keep their last values
     r = M.choose(M.Source(None, None, None), M.Source(48, 0.9, None), 300)
+    assert r.source == "none" and "unknown" in r.why
+    r = M.choose(M.Source(50, 1.0, None), M.Source(48, 0.9, 60), 300)
     assert r.source == "cloud"
 
 
@@ -66,6 +69,10 @@ def test_report_time_in_epoch_seconds_milliseconds_or_iso():
     assert M.age_s(str(int(t.timestamp() * 1000)), now) == pytest.approx(90)
     assert M.age_s(t.isoformat(), now) == pytest.approx(90)
     assert M.age_s("unavailable", now) is None and M.age_s("12", now) is None
+    # without a zone: Home Assistant's
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Brussels")
+    assert M.age_s(t.astimezone(tz).replace(tzinfo=None).isoformat(), now, tz) == pytest.approx(90)
 
 
 def test_battery_system_is_checked():
@@ -125,7 +132,8 @@ async def test_fill_switch_charges_through_passive_mode_and_renews_it(tmpdata):
     assert calls, fake.calls
     assert all(c[2]["power"] < 0 and c[2]["device_id"] == "dev1" for c in calls)
     assert all(c[2]["duration"] == M.PASSIVE_S for c in calls)
-    assert len(calls) >= 4                           # sent again every RENEW_S (5 min)
+    assert M.PASSIVE_S == 300
+    assert len(calls) >= 8                           # sent again every RENEW_S (2 min)
     assert app.solis.mode == "charge" and fake.soc > 41
     assert app.battery_source == "local"
     assert app.status()["inverter"]["source"] == "local"
@@ -151,11 +159,17 @@ async def test_silent_local_api_reads_the_cloud_and_retries_commands(tmpdata, ca
     await run_until(app, fake, fake.now + timedelta(minutes=3))
     assert app.solis.mode == "charge"
     fake.local_down = True
-    await run_until(app, fake, fake.now + timedelta(minutes=12))
+    sent = []
+    await run_until(app, fake, fake.now + timedelta(minutes=12),
+                    each=lambda app, fake: sent.append(fake.now) if len(fake.call_timeouts) > len(sent) else None)
     assert app.battery_source == "cloud"
     assert app.readings is not None and app.readings.soc == round(fake.soc)     # the cloud's live value
     assert "readings from the cloud" in caplog.text
-    assert app.solis.mode == "failed"                # the renewal failed: sent again at each tick
+    assert app.solis.mode == "failed"                # the renewal failed
+    assert set(fake.call_timeouts) == {M.CALL_TIMEOUT_S}
+    assert all((b - a).total_seconds() >= M.RETRY_S for a, b in zip(sent, sent[1:])), sent    # a rest between tries
+    assert "did not answer" in caplog.text and "Home Assistant does not answer" not in caplog.text
+    assert app.problem and "does not accept commands" in app.problem       # counted as command failures
     n = len(passive(fake))
     fake.local_down = False
     await run_until(app, fake, fake.now + timedelta(minutes=2))
@@ -304,3 +318,107 @@ async def test_without_a_house_load_sensor_the_load_is_the_balance(tmpdata):
     assert app.solis.mode == "charge"
     assert app.readings.load_kw == pytest.approx(1.2, abs=0.1)
     assert app.readings.pv_kw == pytest.approx(0.4, abs=0.01)
+
+
+def test_follow_waits_a_minute_but_not_over_the_limit():
+    import asyncio
+
+    calls = []
+
+    class HA:
+        async def call(self, domain, service, data, timeout=30):
+            calls.append(data["power"])
+
+    m = M.Marstek(HA(), {}, device_id="d")
+    t = utc(2026, 11, 19, 18)
+
+    async def go():
+        await m.peak_shave(t, 2.3, 10)
+        calls.clear()
+        await m.follow(t + timedelta(seconds=10), 3.0, 60)     # 0.7 kW over: not urgent, too soon
+        assert calls == []
+        await m.follow(t + timedelta(seconds=60), 3.0, 60)
+        assert calls == [700]
+        await m.follow(t + timedelta(seconds=80), 3.5, 60)     # 1.2 kW over: urgent, but 30 s apart
+        assert calls == [700]
+        await m.follow(t + timedelta(seconds=90), 3.5, 60)
+        assert calls == [700, 1900]
+        await m.follow(t + timedelta(seconds=120), 2.4, 60)    # under 200 W of change: not sent
+        assert len(calls) == 2
+        await m.follow(t + timedelta(seconds=90 + M.RENEW_S), 2.3, 60)   # renewed before it lapses
+        assert len(calls) == 3
+
+    asyncio.run(go())
+
+
+def test_commands_are_clamped_to_the_battery_maximum():
+    import asyncio
+
+    calls = []
+
+    class HA:
+        async def call(self, domain, service, data, timeout=30):
+            calls.append(data["power"])
+
+    m = M.Marstek(HA(), {}, device_id="d", max_charge_w=2500, max_discharge_w=800)
+    asyncio.run(m.charge(utc(2026, 11, 19, 2), 90))
+    asyncio.run(m.discharge(utc(2026, 11, 19, 2), 90))
+    assert calls == [-2500, 800]
+
+
+async def test_peak_shaving_with_a_lagging_battery_stays_near_the_limit(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 18), soc=60, load=lambda t: 4.0, marstek=True)
+    fake.marstek_lag_s = 10
+    app = await start(tmpdata, fake)
+    fake.s[SHAVE]["state"] = "on"
+    sends = []
+    await run_until(app, fake, fake.now + timedelta(minutes=10), step_s=10,
+                    each=lambda app, fake: sends.append(len(passive(fake))))
+    assert fake.import_kw == pytest.approx(Options().import_limit_kw, abs=0.25)
+    # steady state: no more than one command a minute (renewals included)
+    assert sends[-1] - sends[-31] <= 5
+
+
+def test_p1_month_peak_is_ignored_in_the_first_quarter_of_the_month():
+    from zoneinfo import ZoneInfo
+
+    from pilot.meter import PeakTracker
+
+    tz = ZoneInfo("Europe/Brussels")
+    p = PeakTracker()
+    p.observe(datetime(2026, 12, 1, 0, 0, 10, tzinfo=tz), tz, 4.2)       # still November's
+    assert p.month_peak(datetime(2026, 12, 1, 1, tzinfo=tz), tz) == 0.0
+    p.observe(datetime(2026, 12, 1, 0, 20, tzinfo=tz), tz, 1.1)
+    assert p.month_peak(datetime(2026, 12, 1, 1, tzinfo=tz), tz) == pytest.approx(1.1)
+
+
+async def test_unparsable_cloud_report_time_means_no_cloud_reading(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    app = await start(tmpdata, fake)
+    await run_until(app, fake, fake.now + timedelta(minutes=1))
+    fake.local_down = True
+    real = fake._marstek_sensors
+
+    def sensors(grid, batt, dt):
+        real(grid, batt, dt)
+        fake.s["sensor.venus_report_time"]["state"] = "yesterday-ish"
+
+    fake._marstek_sensors = sensors
+    await run_until(app, fake, fake.now + timedelta(minutes=7))
+    assert app.battery_source == "none" and app.readings is None
+
+
+async def test_marstek_settings_left_at_the_solis_defaults_are_warned_about(tmpdata, caplog):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    await start(tmpdata, fake)
+    assert "look like a Solis" in caplog.text
+    caplog.clear()
+    await start(tmpdata + "2", fake, battery_capacity_kwh=5.12, max_charge_current_a=48, max_discharge_current_a=48)
+    assert "look like a Solis" not in caplog.text
+
+
+async def test_the_last_message_sensor_is_required(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek=True)
+    found, missing = resolve_all(Options(**MARSTEK), {k: v for k, v in (await fake.states()).items()
+                                                      if "last_message" not in k}, True, fake.registry)
+    assert "marstek_last_message" in missing

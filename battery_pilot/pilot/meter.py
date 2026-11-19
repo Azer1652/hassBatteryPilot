@@ -138,7 +138,10 @@ class PeakTracker:
 
     def observe(self, t: datetime, tz: ZoneInfo, kw: float) -> None:
         """The month's peak as the grid meter has it (a P1 meter): it counts when it is higher."""
-        key = t.astimezone(tz).strftime("%Y-%m")
+        local = t.astimezone(tz)
+        if local.day == 1 and local.hour == 0 and local.minute < 15:
+            return              # the meter may still show last month's peak until the first quarter closes
+        key = local.strftime("%Y-%m")
         if 0 <= kw < 100 and kw > self.months.get(key, 0.0):
             self.months[key] = round(kw, 3)
 

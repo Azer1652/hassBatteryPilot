@@ -109,8 +109,17 @@ Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop sta
 ## A Marstek battery (`marstek.py`, `battery_system: marstek`)
 
 `App.solis` is then a `marstek.Marstek` (same attributes and methods; `force` is always true, so the
-renewal and the reconcile paths of the Solis force action apply; `peak_shave`/`solar_hold` raise, and are
-never asked for since `can_peak_shave`/`can_solar_hold` need Solis switches that are not looked for).
+renewal and the reconcile paths of the Solis force action apply; peak shaving and solar hold are
+emulated, see below). Every action goes through `Marstek._call` with `CALL_TIMEOUT_S` (`HA.call(timeout=)`):
+a timeout is `MarstekTimeout`, a command failure (`_cmd_failures`, the problem banner), not `HAUnreachable`.
+After a failure `Marstek.failed` sets `retry_at`; `App._marstek_resting` sends nothing before it
+(`RETRY_S`), in `_apply` and `_follow`. Passive commands last `PASSIVE_S` (300 s), renewed every
+`RENEW_S` (120 s); `follow` sends at most every `FOLLOW_GAP_S` (60 s), `URGENT_GAP_S` (30 s) when the grid
+is `URGENT_KW` over the limit, and only changes of `FOLLOW_STEP_W`. Watts are clamped to `max_charge_w`/
+`max_discharge_w`. Readings count only with a known age (`choose`); `marstek_last_message` is required.
+`PeakTracker.observe` ignores the first quarter of a month (the P1 still shows last month's peak).
+The fake: `local_down` raises `HAUnreachable` from `TimeoutError` (records the timeout), `marstek_lag_s`
+delays a new passive power.
 Charge/discharge = `marstek_local_api.set_passive_mode` (W = amps × volts, `PASSIVE_S`, renewed every
 `RENEW_S`), self-use = the Local API's *Auto mode* button. Discovery uses the entity registry
 (`config/entity_registry/list`, matched by platform + unique-ID suffix in `marstek.REGISTRY`), with the
@@ -127,7 +136,8 @@ charged, nothing below the shaving level), so planner and simulator semantics ar
 `month_peak_power` (`PeakTracker.observe`) are auto-found only with a Marstek. Without `house_load_power` (Marstek only; `pv_power` then required) `App.tick` uses
 import − export + pv + battery. `full_power` (any battery):
 `controller.decide` charges at the follow current and discharges at the maximum instead of pacing; the
-energy per slot, and so planner and simulator, are unchanged. `tests/fake_ha.py` with
+energy per slot, and so planner and simulator, are unchanged (`simulate.step` still paces: only the
+timing inside a slot differs). `tests/fake_ha.py` with
 `marstek=True` is a Solax + Marstek house (`local_down`, `cloud_down`); `tests/test_marstek.py`.
 
 ## Solar hold and the peak buffer

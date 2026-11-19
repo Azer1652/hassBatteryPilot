@@ -111,6 +111,7 @@ class App:
         self.plan: Plan | None = None
         self.solis: Solis | M.Marstek | None = None     # the battery's driver (a Marstek has the same interface)
         self.battery_source = ""          # Marstek: where the SOC comes from (local | cloud | none)
+        self._rest_told = False           # Marstek: the pause after a failed command was logged
         self.readings: Readings | None = None
         self.decision = Decision("none", reason="starting")
         self.control_on = False
@@ -344,6 +345,10 @@ class App:
                 self.event(self.problem, logging.ERROR)
                 return False
             log.info("  ok       marstek device: %s", device)
+            if self.o.battery_capacity_kwh == 16.0 or max(self.o.max_charge_kw, self.o.max_discharge_kw) > 2.6:
+                self.event(f"The battery settings look like a Solis's ({self.o.battery_capacity_kwh:g} kWh, up to "
+                           f"{max(self.o.max_charge_kw, self.o.max_discharge_kw):.1f} kW): for a Venus E set Battery "
+                           "capacity 5.12 and the maximum charge and discharge currents 48 A.", logging.WARNING)
             self.problem = None
             self.solis = M.Marstek(self.ha, {k: v for k, v in self.ent_ids.items()
                                              if k in ("marstek_auto_mode_button", "export_limit")},
@@ -457,7 +462,7 @@ class App:
                          self._num(sts.get("marstek_last_message")))
         cloud = M.Source(self._num(sts.get("battery_soc_backup")),
                          None if charge is None or discharge is None else discharge - charge,
-                         M.age_s((sts.get("battery_report_time_backup") or {}).get("state"), now))
+                         M.age_s((sts.get("battery_report_time_backup") or {}).get("state"), now, self.tz))
         r = M.choose(local, cloud, self.o.marstek_stale_s)
         if r.source != self.battery_source:
             if r.source == "local" and self.battery_source:
@@ -817,11 +822,17 @@ class App:
 
     async def _follow(self, local: datetime, grid_kw: float, soc: float):
         """A Marstek in peak shaving or solar hold: the passive power follows the grid meter."""
+        if self._marstek_resting():
+            return
         try:
             await self.solis.follow(local, grid_kw, soc)
         except Exception as e:  # noqa: BLE001
             self.solis.mode = "failed"        # the next tick starts peak shaving again
             self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
+            self._command_failed()
+            self._cmd_failures += 1
+            if self._cmd_failures >= 3:
+                self.problem = f"{CMD_PROBLEM}: {e}"
             now, key = self.clock(), "cmdfail:follow"
             last = self._last.get(key)
             if last is None or (now - last).total_seconds() >= CMD_EVENT_S:
@@ -829,8 +840,25 @@ class App:
                 self.event(f"Marstek passive power not sent: {e}", logging.ERROR)
         self._save_inverter()
 
+    def _marstek_resting(self) -> bool:
+        """A Marstek command failed less than marstek.RETRY_S ago: nothing is sent yet (said once)."""
+        if not isinstance(self.solis, M.Marstek) or not self.solis.waiting(self.clock()):
+            return False
+        if not self._rest_told:
+            self._rest_told = True
+            self.event(f"The Marstek did not take the last command: the next one is sent in "
+                       f"{M.RETRY_S} s.", logging.WARNING)
+        return True
+
+    def _command_failed(self):
+        if isinstance(self.solis, M.Marstek):
+            self.solis.failed(self.clock())
+            self._rest_told = False
+
     async def _apply(self, d: Decision, local: datetime):
         if d.command not in ("charge", "discharge", "current", "self_use", "peak_shave", "solar_hold"):
+            return
+        if self._marstek_resting():
             return
         self._cmd_at = self.clock()
         try:
@@ -852,6 +880,7 @@ class App:
         except Exception as e:  # noqa: BLE001
             self.solis.mode = "failed"        # its state is not known: the next tick sends the command again
             self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
+            self._command_failed()
             if isinstance(e, HAUnreachable):  # Home Assistant went away mid-command: not the inverter's fault
                 if not self._cmd_unreachable_told:
                     self._cmd_unreachable_told = True
