@@ -115,7 +115,7 @@ configuration:
     description: "0 = off. On winter days (solar forecast below the threshold) self-use stops at this level; below it the house runs on the grid (peak shaving) and the battery only covers what is above the import limit. The battery is then part-filled when the car arrives; the car may use it down to the minimum + peak buffer. Nothing charges it back from the grid for this: solar and the plan fill it. Needs the inverter's peak-shaving switch."
   battery_system:
     name: "Battery"
-    description: "solis: a Solis hybrid through the Solis Modbus integration. marstek: a Marstek Venus through the Marstek Local API integration (steering and readings), with the Marstek Cloud integration as a backup for readings; grid, house and solar then come from your inverter (a Solax through Solax Modbus, for one)."
+    description: "solis: a Solis hybrid through the Solis Modbus integration. marstek: a Marstek Venus through a local Marstek integration (Marstek Local API by jaapp, or Marstek by taurgis: steering and readings), with the Marstek Cloud integration as a backup for readings; grid, house and solar then come from your inverter (a Solax through Solax Modbus, for one)."
   marstek_device_id:
     name: "Marstek device ID"
     description: "Only with a Marstek battery, and only when it is not found by itself: the battery's device ID in Home Assistant (the end of its device page's address)."
@@ -227,9 +227,12 @@ configuration:
   marstek_auto_mode_button:
     name: "Marstek Auto mode button"
     description: "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."
+  marstek_mode_select:
+    name: "Marstek operating mode select"
+    description: "Only with a Marstek battery: a select entity with the battery's operating modes, used for Auto mode (self-use) instead of the Auto mode button. Leave empty to find it automatically."
   marstek_last_message:
     name: "Marstek last message entity"
-    description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link (required). Leave empty to find it automatically."
+    description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link (required with the jaapp integration, not used with taurgis's). Leave empty to find it automatically."
   battery_soc_backup:
     name: "Marstek cloud SOC entity"
     description: "Only with a Marstek battery: the Marstek Cloud State of Charge sensor, used when the local API is silent. Leave empty to find it automatically."

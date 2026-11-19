@@ -36,7 +36,7 @@ async def start(tmpdata, fake, control=True, **opts):
 
 
 def passive(fake):
-    return [c for c in fake.calls if c[0] == "marstek_local_api"]
+    return [c for c in fake.calls if c[0] == fake.local_domain]
 
 
 # ---------------------------------------------------------------- pure parts
@@ -422,3 +422,85 @@ async def test_the_last_message_sensor_is_required(tmpdata):
     found, missing = resolve_all(Options(**MARSTEK), {k: v for k, v in (await fake.states()).items()
                                                       if "last_message" not in k}, True, fake.registry)
     assert "marstek_last_message" in missing
+
+
+async def test_taurgis_auto_option_without_a_list_of_options(tmpdata):
+    """When the select's options cannot be read at startup, taurgis's own spelling (auto) is sent."""
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek="taurgis")
+    del fake.s["select.marstek_venuse_operating_mode"]["attributes"]["options"]
+    app = await start(tmpdata, fake)
+    assert app.solis.auto_option == "auto"
+    fake.s["select.marstek_venuse_operating_mode"]["attributes"]["options"] = ["auto", "ai", "manual", "passive"]
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    fake.s[CONTROL]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=1))
+    assert ("select", "select_option", {"entity_id": "select.marstek_venuse_operating_mode", "option": "auto"}) \
+        in fake.calls
+
+
+async def test_taurgis_without_the_select_names_the_select(tmpdata):
+    """A taurgis install has no Auto mode button, so the message asks for the select."""
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek="taurgis")
+    del fake.s["select.marstek_venuse_operating_mode"]
+    fake.registry = [e for e in fake.registry if not e["entity_id"].startswith("select.")]
+    app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert not await app.setup()
+    assert "marstek_mode_select" in app.problem and "marstek_auto_mode_button" not in app.problem
+
+
+def test_auto_option_spellings():
+    assert M.auto_option(["AI", "Auto", "Manual"]) == "Auto"
+    assert M.auto_option(["ai", "auto_mode", "manual"]) == "auto_mode"
+    assert M.auto_option(None) == "Auto"
+    assert M.auto_option(None, "auto") == "auto"
+
+
+async def test_without_the_passive_action_it_says_which_integration(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek=True)
+    real = fake.services
+
+    async def services():
+        return [d for d in await real() if d["domain"] not in ("marstek_local_api", "marstek")]
+
+    fake.services = services
+    app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert not await app.setup()
+    assert "set_passive_mode" in app.problem
+
+
+# ---------------------------------------------------------------- taurgis/has-marstek-local-api
+
+async def test_taurgis_integration_is_found_and_steered(tmpdata):
+    """The Marstek integration of taurgis: domain marstek, power + discharging, Auto through the select."""
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek="taurgis")
+    app = await start(tmpdata, fake)
+    assert app.marstek_integration is M.TAURGIS
+    assert app.ent_ids["battery_soc"] == "sensor.marstek_venuse_battery_level"
+    assert app.ent_ids["battery_power"] == "sensor.marstek_venuse_battery_power"
+    assert app.ent_ids["marstek_mode_select"] == "select.marstek_venuse_operating_mode"
+    assert "marstek_last_message" not in app.ent_ids
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    calls = passive(fake)
+    assert calls and calls[-1][1] == "set_passive_mode" and calls[-1][2]["power"] < 0
+    assert app.solis.mode == "charge" and fake.mode() == "force_charge"
+    # charging shows as a negative power on this integration, a positive one to the app
+    assert float(fake.s["sensor.marstek_venuse_battery_power"]["state"]) < 0
+    # with the wrong sign the house load (0.5 kW) would be off by twice the charging power
+    assert app.battery_source == "local" and app.readings.load_kw == pytest.approx(0.5, abs=0.1)
+    fake.s[CONTROL]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=1))
+    assert ("select", "select_option", {"entity_id": "select.marstek_venuse_operating_mode", "option": "auto"}) \
+        in fake.calls
+    assert fake.mode() == "self_use"
+
+
+async def test_taurgis_silent_local_falls_back_to_the_cloud(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek="taurgis")
+    app = await start(tmpdata, fake)
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    assert app.battery_source == "local"
+    fake.local_down = True
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    assert app.battery_source == "cloud" and app.readings.soc is not None

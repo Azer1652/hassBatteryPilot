@@ -42,7 +42,10 @@ class FakeHA:
         # marstek: a Solax (grid, house, solar) and a Marstek Venus seen by the Marstek Local API and the
         # Marstek Cloud integrations, instead of a Solis. local_down / cloud_down: that link is silent (its
         # sensors keep their last values; the local actions fail).
+        # marstek="taurgis": the local integration is taurgis/has-marstek-local-api (domain marstek, an
+        # operating-mode select, power + discharging, entities unavailable when silent) instead of jaapp's.
         self.marstek = marstek
+        self.local_domain = "marstek" if marstek == "taurgis" else "marstek_local_api"
         self.local_down = False
         self.cloud_down = False
         self.local_silent_s = 0.0
@@ -127,6 +130,18 @@ class FakeHA:
                     ("sensor.venus_total_charge", "marstek_cloud", "123_total_charge", "dev2"),
                     ("sensor.venus_report_time", "marstek_cloud", "123_report_time", "dev2"),
                 )]
+            if marstek == "taurgis":
+                for eid in [e for e in s if e.startswith(("sensor.marstek_venuse", "button.marstek_venuse"))]:
+                    del s[eid]
+                s["sensor.marstek_venuse_battery_level"] = st(soc, "%")
+                s["sensor.marstek_venuse_battery_power"] = st(0, "W")      # + discharging
+                s["select.marstek_venuse_operating_mode"] = st("auto", options=["auto", "ai", "manual", "passive"])
+                self.registry = [e for e in self.registry if e["platform"] != "marstek_local_api"] + [
+                    {"entity_id": eid, "platform": "marstek", "unique_id": uid, "device_id": "dev1",
+                     "disabled_by": None}
+                    for eid, uid in (("sensor.marstek_venuse_battery_level", "aabbcc_battery_soc"),
+                                     ("sensor.marstek_venuse_battery_power", "aabbcc_battery_power"),
+                                     ("select.marstek_venuse_operating_mode", "aabbcc_operating_mode"))]
         if peak_shaving:        # the Solis peak-shaving mode: grid up to the set power, the battery above it
             s["switch.solis_peak_shaving_mode"] = st("off")
             s["number.solis_peak_max_usable_grid_power"] = st(5000, "W")
@@ -185,7 +200,7 @@ class FakeHA:
     async def services(self):
         out = [{"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}}]
         if self.marstek:
-            out.append({"domain": "marstek_local_api", "services": {"set_passive_mode": {}, "request_data_sync": {}}})
+            out.append({"domain": self.local_domain, "services": {"set_passive_mode": {}, "request_data_sync": {}}})
         if self.force_action:
             out.append({"domain": "solis_modbus", "services": {
                 "solis_force_battery_charge": {}, "solis_force_battery_discharge": {},
@@ -205,17 +220,25 @@ class FakeHA:
             self.s[eid]["state"] = str(data["value"])
         elif domain == "time" and service == "set_value":
             self.s[eid]["state"] = data["time"]
-        elif domain == "marstek_local_api" or (domain == "button" and "marstek" in str(eid)):
+        elif domain == self.local_domain or (domain in ("button", "select") and "marstek" in str(eid)):
             if self.local_down:
                 # the integration retries for 45 s; the app's client gives up at its timeout
                 self.call_timeouts.append(timeout)
                 raise HAUnreachable(f"POST /services/{domain}/{service}: TimeoutError") from TimeoutError()
-            if domain == "button":
+            if domain == "select":
+                assert data["option"] in self.s[eid]["attributes"]["options"], data
+                self.s[eid]["state"] = data["option"]
+                if data["option"].lower() == "auto":
+                    self.forced = self.pending = None
+            elif domain == "button":
                 if eid.endswith("auto_mode"):
                     self.forced = self.pending = None
             else:
                 assert data["device_id"] == "dev1", data
                 assert 1 <= data["duration"] <= 86400 and -10000 <= data["power"] <= 10000, data
+                if self.marstek == "taurgis":
+                    assert -5000 <= data["power"] <= 5000, data
+                    self.s["select.marstek_venuse_operating_mode"]["state"] = "passive"
                 kind = "charge" if data["power"] < 0 else "discharge"
                 forced = (kind, float(abs(data["power"])), self.now + timedelta(seconds=data["duration"]))
                 if self.marstek_lag_s:
@@ -362,13 +385,23 @@ class FakeHA:
         done = (self.now - start).total_seconds() / 3600
         self.s["sensor.p1_meter_power"]["state"] = str(round(grid * 1000))
         self.s["sensor.p1_meter_average_demand"]["state"] = str(round(kwh / done * 1000) if done > 0 else 0)
-        if self.local_down:
+        if self.marstek == "taurgis":
+            lvl, pw = "sensor.marstek_venuse_battery_level", "sensor.marstek_venuse_battery_power"
+            if self.local_down:     # after three failed polls the entities turn unavailable
+                self.s[lvl]["state"] = self.s[pw]["state"] = "unavailable"
+            else:
+                self.s[lvl]["state"] = str(round(self.soc))
+                self.s[pw]["state"] = str(round(-batt * 1000))
+                if self.forced is None and self.s["select.marstek_venuse_operating_mode"]["state"] == "passive":
+                    self.s["select.marstek_venuse_operating_mode"]["state"] = "auto"
+        elif self.local_down:
             self.local_silent_s += dt.total_seconds()
         else:
             self.local_silent_s = 0.0
             self.s["sensor.marstek_venuse_state_of_charge"]["state"] = str(round(self.soc))
             self.s["sensor.marstek_venuse_power"]["state"] = str(round(batt * 1000))
-        self.s["sensor.marstek_venuse_last_message_received"]["state"] = str(int(self.local_silent_s))
+        if "sensor.marstek_venuse_last_message_received" in self.s:
+            self.s["sensor.marstek_venuse_last_message_received"]["state"] = str(int(self.local_silent_s))
         if not self.cloud_down:
             self.cloud_report = self.now
             self.s["sensor.venus_state_of_charge"]["state"] = str(round(self.soc))

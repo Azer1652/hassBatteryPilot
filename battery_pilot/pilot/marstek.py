@@ -2,17 +2,20 @@
 
 Two Home Assistant integrations can see the same battery, and Battery Pilot uses both:
 
-* **Marstek Local API** (`marstek_local_api`, jaapp/ha-marstek-local-api): the battery's own
-  UDP API on the LAN. Readings (SOC, power, voltage) and the only way to steer it:
-  `marstek_local_api.set_passive_mode` (power in W, negative = charge, positive = discharge,
-  for a duration in seconds) and the *Auto mode* button (the battery's own self-consumption on
-  its CT or P1 meter, which is self-use here).
+* **a local integration**, on the battery's own UDP API on the LAN: Marstek Local API
+  (`marstek_local_api`, jaapp/ha-marstek-local-api) or Marstek (`marstek`,
+  taurgis/has-marstek-local-api), see `INTEGRATIONS`. Readings (SOC, power, voltage) and the only
+  way to steer it: `<domain>.set_passive_mode` (power in W, negative = charge, positive =
+  discharge, for a duration in seconds) and Auto mode (the battery's own self-consumption on its
+  CT or P1 meter, which is self-use here): jaapp's *Auto mode* button, taurgis's operating-mode
+  select.
 * **Marstek Cloud** (`marstek_cloud`, DoctaShizzle/marstek_cloud): the same battery through
   Marstek's cloud. Readings only (SOC, charge and discharge power, report time).
 
-The local link drops out now and then. The local integration then keeps showing its last values
+The local link drops out now and then. jaapp's integration then keeps showing its last values
 and only its *Last message received* sensor grows, so a reading counts as fresh only while that
-is under `marstek_stale_s`; otherwise the cloud's reading is used, when its report is fresh.
+is under `marstek_stale_s` (taurgis's has no such sensor: its entities turn unavailable instead);
+otherwise the cloud's reading is used, when its report is fresh.
 With neither fresh, the SOC is unknown and the app's blind rule returns the battery to self-use.
 
 Commands have no second path (the cloud integration cannot steer), so they are made to fail
@@ -66,26 +69,80 @@ class MarstekTimeout(Exception):
 # entity names chosen by the user (or by Marstek's cloud) do not matter.
 REGISTRY = {
     "battery_soc": (LOCAL, "battery_soc"),
-    "battery_power": (LOCAL, "battery_power"),            # W, + charging
+    "battery_power": (LOCAL, "battery_power"),            # W, + charging (jaapp), + discharging (taurgis)
     "battery_voltage": (LOCAL, "battery_voltage"),
     "marstek_last_message": (LOCAL, "last_message_received"),
     "marstek_auto_mode_button": (LOCAL, "auto_mode_button"),
+    "marstek_mode_select": (LOCAL, "operating_mode", "select"),   # (the sensor of the same name is not it)
     "battery_soc_backup": (CLOUD, "soc"),
     "battery_charge_power_backup": (CLOUD, "charge"),
     "battery_discharge_power_backup": (CLOUD, "discharge"),
     "battery_report_time_backup": (CLOUD, "report_time"),
 }
+
+
+@dataclass(frozen=True)
+class Integration:
+    """A local Marstek integration: its domain (platform and actions) and how its readings look."""
+    domain: str
+    name: str
+    power_plus_charging: bool      # its battery power sensor is + while charging
+    last_message: bool             # it has a "Last message received" sensor (else: unavailable when silent)
+    auto_entity: str               # the entity key that switches to Auto mode
+    auto: str                      # the select's Auto option when its list of options cannot be read
+
+
+JAAPP = Integration(LOCAL, "Marstek Local API (jaapp/ha-marstek-local-api)", True, True,
+                    "marstek_auto_mode_button", "Auto")
+# taurgis/has-marstek-local-api: the same `set_passive_mode` (power, negative charges; duration), an
+# operating-mode select (auto, ai, manual, passive), battery power + discharging, and entities that
+# turn unavailable after a few failed polls (they show cached values until then: 3 polls of 30 s by
+# default, longer when its failure threshold or poll interval is raised). Its Venus E mini on
+# firmware 301 refuses passive mode.
+TAURGIS = Integration("marstek", "Marstek (taurgis/has-marstek-local-api)", False, False,
+                      "marstek_mode_select", "auto")
+INTEGRATIONS = (JAAPP, TAURGIS)
+
+
+def pick_integration(services: list, registry: list | None) -> Integration | None:
+    """The local Marstek integration Home Assistant has (with its set_passive_mode action); with both,
+    the one whose entities are in the registry."""
+    have = [i for i in INTEGRATIONS
+            if any(d.get("domain") == i.domain and PASSIVE_SERVICE in (d.get("services") or {})
+                   for d in services or [])]
+    if len(have) > 1:
+        used = [i for i in have if any(e.get("platform") == i.domain for e in registry or [])]
+        have = used or have
+    return have[0] if have else None
+
+
+def auto_option(options, default: str = "Auto") -> str:
+    """The option of an operating-mode select that is Auto mode (its spelling varies); `default`
+    when the options cannot be read."""
+    for o in options or []:
+        if str(o).strip().lower() in ("auto", "auto mode", "automatic"):
+            return str(o)
+    for o in options or []:
+        if "auto" in str(o).lower():
+            return str(o)
+    return default
+
+
 # Unique IDs that end like one above but are something else.
 NOT = {"charge": ("total_charge",)}
 
 
-def registry_match(key: str, registry: list[dict]) -> list[dict]:
-    """Entity registry entries of the Marstek integrations that are `key`."""
-    platform, suffix = REGISTRY[key]
+def registry_match(key: str, registry: list[dict], local: str = LOCAL) -> list[dict]:
+    """Entity registry entries of the Marstek integrations that are `key` (`local`: the domain of the
+    local integration in use)."""
+    platform, suffix, *domain = REGISTRY[key]
+    platform = local if platform == LOCAL else platform
     out = []
     for e in registry or []:
         uid = str(e.get("unique_id") or "")
         if e.get("platform") != platform or e.get("disabled_by") or not uid.endswith("_" + suffix):
+            continue
+        if domain and not str(e.get("entity_id") or "").startswith(domain[0] + "."):
             continue
         if any(uid.endswith("_" + other) for other in NOT.get(suffix, ())):
             continue
@@ -180,6 +237,8 @@ class Marstek:
     shave_limit_kw: float = 0.0
     shave_soc: float = 0.0
     retry_at: datetime | None = None    # after a failed command: nothing is sent before this
+    auto_option: str = "Auto"           # the operating-mode select's option for Auto mode
+    domain: str = LOCAL                 # the local integration's actions
 
     def waiting(self, t: datetime) -> bool:
         """A command failed less than RETRY_S ago: the local API gets a rest."""
@@ -256,7 +315,7 @@ class Marstek:
 
     async def _passive(self, watts: int):
         watts = max(min(watts, self.max_discharge_w), -self.max_charge_w)
-        await self._call(LOCAL, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts, "duration": PASSIVE_S})
+        await self._call(self.domain, PASSIVE_SERVICE, {"device_id": self.device_id, "power": watts, "duration": PASSIVE_S})
         self.forced = True
 
     async def charge(self, t_local: datetime, amps: int):
@@ -294,7 +353,12 @@ class Marstek:
         self._note(t_local, "solar hold: passive 0 W, surplus to the grid")
 
     async def self_use(self, t_local: datetime, why: str = ""):
-        await self._call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
+        """Auto mode: through the operating-mode select when there is one, else the Auto mode button."""
+        if "marstek_mode_select" in self.entities:
+            await self._call("select", "select_option", {"entity_id": self.entities["marstek_mode_select"],
+                                                          "option": self.auto_option})
+        else:
+            await self._call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
         self.mode, self.slot_hour, self.amps, self.forced, self.power_w = "self_use", "", 0, False, 0
         self.shave, self.hold = False, False
         self._note(t_local, "auto mode (self-use)" + (f" ({why})" if why else ""))
