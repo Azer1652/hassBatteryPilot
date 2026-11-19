@@ -399,6 +399,9 @@ log says which setting to fill in.
 | `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
 | `battery_power` | `battery_power_net` (the Solis *Battery Power Net*: + discharging, − charging; not the unsigned *Battery Power*) | optional | Measuring the inverter's own use, so it can be shown on its own and left out of the measured round-trip efficiency (see *Measured efficiency*). | The measured efficiency includes the inverter's own use. |
 | `battery_voltage_sensor` | `battery_voltage` | optional | Turning amps into kW for the charge current and the plan. | The *Battery nominal voltage* setting is used. |
+| `grid_power` | with a Marstek battery: a HomeWizard P1 meter's *Power* (`p1_meter_power`); otherwise only when set | optional | One signed grid meter (+ import, − export), used instead of `grid_import_power` and `grid_export_power` while it has a value (they are the fallback). A P1 meter is fast and measures what you are billed on. | The two entities above. |
+| `quarter_average_power` | with a Marstek battery: the P1 meter's *Average demand*; otherwise only when set | optional | The meter's own average of the running quarter-hour, for the projection that pauses charging before the capacity peak is passed. | Battery Pilot's own quarter-hour meter. |
+| `month_peak_power` | with a Marstek battery: the P1 meter's *Peak demand current month*; otherwise only when set | optional | The month's capacity peak as the meter has it: it counts when it is higher than Battery Pilot measured. | Battery Pilot's own measurement. |
 
 Power sensors can be in W or kW: the unit is read from the entity.
 
@@ -499,8 +502,29 @@ off if your house-load sensor already leaves the battery out.
 **Settings for a Venus E** (5.12 kWh, 2.5 kW): *Battery capacity* 5.12, *Battery nominal
 voltage* 51.2, *Maximum charge current* and *Maximum discharge current* 48 (2.5 kW; 15 for a
 battery limited to 800 W), and a *Battery minimum SOC* at or above the one set in the
-Marstek app. A Marstek has no peak-shaving or feed-in priority mode, so the plan never uses
-those, and the peak buffer and the winter level stay off.
+Marstek app (it is usually 10 %, the default here).
+
+**Peak shaving and solar hold** are done by Battery Pilot, since a Marstek has no such modes:
+in peak shaving it sets the passive power from the grid meter (a P1 meter is best) every 10
+seconds, so the battery gives only what the house takes above *Grid import limit* (never below
+the shaving level, the battery minimum), and charges with what would be exported. A new power is
+sent when it differs 150 W or more, at most every 20 seconds, and the command is renewed every
+5 minutes. Solar hold is passive at 0 W. So the plan can keep the battery for the evening
+cooking peak, the peak buffer and the winter level work, and the battery covers the car's peaks.
+How much to keep, and whether to charge for it at night, follows from the solar forecast and the
+peaks it has learned (see *How it decides*).
+
+**The capacity tariff.** Charging from the grid never takes the quarter-hour over *Grid import
+limit* (`import_limit_kw`): the charge power follows the house load, and pauses when the
+quarter-hour heads over it. With a P1 meter that projection starts from the meter's own
+quarter-hour average. Set the limit a little under the peak you want to stay below (2.3 kW for
+2.5 kW).
+
+**Full power.** A Marstek's converter draws a roughly fixed power whenever it runs, so charging
+fast and then waiting loses less than charging slowly. With *Charge and discharge at full
+power* (`full_power`) on, a planned charge runs as fast as the import limit and *Maximum charge
+current* allow (instead of being spread over the hour), and an export at *Maximum discharge
+current*.
 
 ### Electric car (read every 10 seconds, only when set)
 
@@ -684,6 +708,7 @@ The contract formulas in full (market prices in EUR/MWh):
 | Battery | `battery_system` | solis | `solis`: a Solis hybrid. `marstek`: a Marstek Venus (see *A Marstek battery*). |
 | Marstek device ID | `marstek_device_id` | (empty) | Only when the log asks for it. |
 | Marstek: reading too old after (s) | `marstek_stale_s` | 300 | A local reading without a message this long, or a cloud report this old, is not used. |
+| Charge and discharge at full power | `full_power` | off | A charge or discharge as fast as the limits allow instead of spread over its hour (see *A Marstek battery*). |
 | Marstek: house load includes the battery | `marstek_load_includes_battery` | on | Takes the Marstek's power out of the house load. |
 | Solis slot entities | `slot_entities` | time_charging | Which set of time-of-use entities to drive; switch to `grid_time_of_use` if charging does nothing. |
 | Solis charge command | `charge_command` | auto | `auto`: the Solis Modbus force action when Home Assistant has it, else the time-of-use slots. `force` or `time_slot` to choose. |

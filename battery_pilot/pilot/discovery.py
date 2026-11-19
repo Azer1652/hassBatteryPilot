@@ -47,6 +47,11 @@ ENTITIES = {
     "car_charger_power": ("sensor", [], False, True),
     # A Marstek battery (battery_system: marstek): found in the entity registry (marstek.REGISTRY);
     # the patterns are the local integration's default names, for when the registry cannot be read.
+    # one signed grid meter, + import (a HomeWizard P1 meter's Power): used before the two above
+    "grid_power": ("sensor", [r"^p1_meter(_active)?_power$"], False, True),
+    # the grid meter's own quarter-hour average and month peak (HomeWizard P1: Average demand, Peak demand)
+    "quarter_average_power": ("sensor", [r"^p1_meter_average_demand$"], False, True),
+    "month_peak_power": ("sensor", [r"^p1_meter_peak_demand_current_month$"], False, True),
     "marstek_auto_mode_button": ("button", [r"^marstek_.*auto_mode$"], False, False),
     "marstek_last_message": ("sensor", [r"^marstek_.*last_message_received$"], False, False),
     "battery_soc_backup": ("sensor", [], False, False),
@@ -64,7 +69,8 @@ MARSTEK_PATTERNS = {
 SOLIS_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
               "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "peak_shaving_limit",
               "peak_shaving_soc", "feed_in_priority_switch")
-MARSTEK_ONLY = ("marstek_auto_mode_button", "marstek_last_message", "battery_soc_backup",
+MARSTEK_ONLY = ("grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button",
+                "marstek_last_message", "battery_soc_backup",
                 "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup")
 TIME_SLOT_KEYS = ("charge_start", "charge_end", "discharge_start", "discharge_end")
 # Only needed when charging goes through the time-of-use slots (not with the force action).
@@ -87,6 +93,9 @@ NEEDED_FOR = {
     "forecast_today": "the solar forecast when HA's energy forecast is not set up",
     "forecast_tomorrow": "the solar forecast when HA's energy forecast is not set up",
     "price_sensor": "dynamic prices and the contract comparison",
+    "grid_power": "a fast and exact grid reading (a P1 meter) for the meter and the Marstek's peak shaving",
+    "quarter_average_power": "the capacity peak: the meter's own quarter-hour average",
+    "month_peak_power": "the capacity peak: the meter's own month peak",
     "marstek_last_message": "noticing that the Marstek local API went silent (its values freeze)",
     "battery_soc_backup": "the Marstek cloud as a backup when the local API is silent",
     "battery_charge_power_backup": "the Marstek cloud as a backup for the battery power",
@@ -170,7 +179,7 @@ def resolve_all(opts: Options, states: dict, force: bool = False,
     out = {k: resolve(k, opts, states, registry) for k in ENTITIES}
     if opts.marstek:
         missing = [k for k in ("grid_import_power", "house_load_power", "marstek_auto_mode_button")
-                   if out[k].entity_id is None]
+                   if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)]
         if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:
             missing.append("battery_soc")
         return out, missing

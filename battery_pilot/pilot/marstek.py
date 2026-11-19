@@ -22,7 +22,15 @@ command that fails leaves the mode `failed` and the next tick sends it again (as
 
 The class has the same interface as `solis.Solis`, so the app, the controller and the planner
 are unchanged: amps stay the controller's unit and become watts here (amps x battery voltage).
-A Marstek has no peak-shaving or feed-in priority switch, so the plan never uses those modes.
+
+A Marstek has no peak-shaving or feed-in priority mode of its own, so Battery Pilot does them
+itself with passive mode, from the grid meter (a HomeWizard P1 meter, for one) at every tick
+(`follow`):
+
+* peak shaving - the battery gives only what the house takes above the import limit, never
+  below the shaving level, and solar surplus still charges it (what a Solis does, and what the
+  planner and the simulator assume);
+* solar hold - passive at 0 W: surplus goes to the grid, the battery waits.
 """
 from __future__ import annotations
 
@@ -39,6 +47,8 @@ CLOUD = "marstek_cloud"
 PASSIVE_SERVICE = "set_passive_mode"
 PASSIVE_S = 20 * 60          # a passive charge or discharge lapses by itself after this
 RENEW_S = 5 * 60             # and is sent again this often while it should go on
+FOLLOW_STEP_W = 150          # peak shaving: a new power is sent when it differs this much
+FOLLOW_GAP_S = 20            # and not sooner than this after the last one (the local API is slow)
 
 # Entity key -> (integration, end of the entity's unique ID). Found in the entity registry, so
 # entity names chosen by the user (or by Marstek's cloud) do not matter.
@@ -149,6 +159,11 @@ class Marstek:
     slave: int = 0
     forced: bool | None = None      # a passive command of ours may be running (None: not known)
     sent_at: datetime | None = None
+    max_charge_w: int = 2500
+    max_discharge_w: int = 2500
+    power_w: int = 0                # peak shaving / solar hold: the passive power now (+ discharge)
+    shave_limit_kw: float = 0.0
+    shave_soc: float = 0.0
 
     @property
     def force(self) -> bool:
@@ -158,8 +173,46 @@ class Marstek:
         return int(round(amps * self.volts / 100) * 100)
 
     def renew_due(self, t: datetime) -> bool:
+        """A charge or discharge must be sent again (peak shaving and solar hold renew in `follow`)."""
         return (self.mode in ("charge", "discharge")
                 and (self.sent_at is None or (t - self.sent_at).total_seconds() >= RENEW_S))
+
+    def shave_power(self, grid_kw: float, soc: float) -> int:
+        """Peak shaving: the passive power (W, + discharge) that brings the grid (+ import, kW) to the
+        import limit when the house asks more, and charges what would be exported. Built on the power
+        sent last, since the grid meter sees the battery's effect."""
+        p, limit = self.power_w / 1000, self.shave_limit_kw
+        if grid_kw > limit or p > 0:
+            p = max(p + grid_kw - limit, 0.0)
+        elif grid_kw < 0 or p < 0:
+            p = min(p + grid_kw, 0.0)
+        else:
+            p = 0.0
+        w = int(round(p * 1000 / 50) * 50)
+        if w > 0 and soc <= self.shave_soc:
+            w = 0
+        if w < 0 and soc >= 100:
+            w = 0
+        return max(min(w, self.max_discharge_w), -self.max_charge_w)
+
+    async def follow(self, t_local: datetime, grid_kw: float | None, soc: float | None):
+        """At every tick, in peak shaving or solar hold: send the passive power again when it should
+        change, or before it lapses."""
+        if self.mode not in ("peak_shave", "solar_hold"):
+            return
+        if self.mode == "solar_hold" or grid_kw is None or soc is None:
+            w = 0 if self.mode == "solar_hold" else self.power_w
+        else:
+            w = self.shave_power(grid_kw, soc)
+        age = (t_local - self.sent_at).total_seconds() if self.sent_at else 1e9
+        if age >= RENEW_S or (abs(w - self.power_w) >= FOLLOW_STEP_W and age >= FOLLOW_GAP_S) \
+                or (w == 0 and self.power_w != 0 and age >= FOLLOW_GAP_S):
+            await self._passive(w)
+            changed = w != self.power_w
+            self.power_w, self.sent_at = w, t_local
+            if changed:
+                self._note(t_local, f"{self.mode.replace('_', ' ')}: passive "
+                                    + (f"discharge {w} W" if w > 0 else f"charge {-w} W" if w < 0 else "0 W (idle)"))
 
     def _note(self, t: datetime, text: str):
         self.log.append({"t": t.isoformat(), "command": text})
@@ -174,11 +227,13 @@ class Marstek:
     async def charge(self, t_local: datetime, amps: int):
         await self._passive(-self.watts(amps))
         self.mode, self.slot_hour, self.amps, self.sent_at = "charge", hour_slot(t_local)[0], amps, t_local
+        self.power_w, self.shave, self.hold = -self.watts(amps), False, False
         self._note(t_local, f"passive charge {self.watts(amps)} W ({amps} A) for {PASSIVE_S // 60} min")
 
     async def discharge(self, t_local: datetime, amps: int):
         await self._passive(self.watts(amps))
         self.mode, self.slot_hour, self.amps, self.sent_at = "discharge", hour_slot(t_local)[0], amps, t_local
+        self.power_w, self.shave, self.hold = self.watts(amps), False, False
         self._note(t_local, f"passive discharge {self.watts(amps)} W ({amps} A) for {PASSIVE_S // 60} min")
 
     async def set_current(self, t_local: datetime, amps: int):
@@ -187,16 +242,25 @@ class Marstek:
         self.amps, self.sent_at = amps, t_local
         self._note(t_local, f"passive {self.mode} {w} W ({amps} A)")
 
-    async def self_use(self, t_local: datetime, why: str = ""):
-        await self.ha.call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
-        self.mode, self.slot_hour, self.amps, self.forced = "self_use", "", 0, False
-        self._note(t_local, "auto mode (self-use)" + (f" ({why})" if why else ""))
-
     async def peak_shave(self, t_local: datetime, limit_kw: float, soc: float):
-        raise RuntimeError("a Marstek battery has no peak-shaving mode")
+        """Battery Pilot's own peak shaving (see the module text): starts idle, `follow` sets the power."""
+        await self._passive(0)
+        self.mode, self.slot_hour, self.amps, self.sent_at, self.power_w = "peak_shave", "", 0, t_local, 0
+        self.shave_limit_kw, self.shave_soc, self.shave_set, self.shave = limit_kw, soc, (limit_kw, soc), True
+        self._note(t_local, f"peak shaving at {limit_kw:g} kW (by Battery Pilot, down to {soc:.0f} %)")
 
     async def solar_hold(self, t_local: datetime):
-        raise RuntimeError("a Marstek battery has no feed-in priority mode")
+        """Solar surplus to the grid: passive at 0 W, the battery neither charges nor discharges."""
+        await self._passive(0)
+        self.mode, self.slot_hour, self.amps, self.sent_at, self.power_w = "solar_hold", "", 0, t_local, 0
+        self.shave, self.hold = False, True
+        self._note(t_local, "solar hold: passive 0 W, surplus to the grid")
+
+    async def self_use(self, t_local: datetime, why: str = ""):
+        await self.ha.call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
+        self.mode, self.slot_hour, self.amps, self.forced, self.power_w = "self_use", "", 0, False, 0
+        self.shave, self.hold = False, False
+        self._note(t_local, "auto mode (self-use)" + (f" ({why})" if why else ""))
 
     async def set_export_limit(self, t_local: datetime, watts: int):
         """The export limit is the solar inverter's (a Solax `export_control_user_limit`, for one)."""

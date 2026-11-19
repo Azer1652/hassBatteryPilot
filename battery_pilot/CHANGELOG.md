@@ -13,6 +13,16 @@
   battery* in the documentation. Not yet tried on a real Marstek.
 - A Solax *House Load* counts a Marstek's charging as consumption; Battery Pilot takes the
   battery's power back out (`marstek_load_includes_battery`, on).
+- **Peak shaving and solar hold with a Marstek**, done by Battery Pilot: in peak shaving the
+  passive power follows the grid meter every 10 seconds, so the battery gives only what the
+  house takes above the import limit and stores what would be exported. The plan can then keep
+  the battery for the evening peak, and the peak buffer and the winter level work.
+- **A HomeWizard P1 meter** can be the grid reading (`grid_power`, + import), and its own
+  quarter-hour average and month peak (`quarter_average_power`, `month_peak_power`) feed the
+  capacity-peak projection and the month's peak. Found by themselves with a Marstek battery.
+- **Charge and discharge at full power** (`full_power`, off): as fast as the limits allow
+  instead of spread over the hour, for batteries whose converter draws a fixed power while it
+  runs.
 - A Solis installation is unchanged.
 
 ## 2.18.0

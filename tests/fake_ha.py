@@ -36,7 +36,8 @@ def st(state, unit=None, **attrs):
 class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
                  prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
-                 battery_power=False, inverter_draw_kw=0.0, marstek=False):
+                 battery_power=False, inverter_draw_kw=0.0, marstek=False,
+                 p1_peak=0):
         self.now = now
         # marstek: a Solax (grid, house, solar) and a Marstek Venus seen by the Marstek Local API and the
         # Marstek Cloud integrations, instead of a Solis. local_down / cloud_down: that link is silent (its
@@ -46,6 +47,7 @@ class FakeHA:
         self.cloud_down = False
         self.local_silent_s = 0.0
         self.cloud_report = now
+        self._q = (None, 0.0)                   # P1 meter: (quarter start, kWh imported so far)
         self.inverter_draw_kw = inverter_draw_kw   # the inverter's own use, always from the grid
         self.force_action = force_action        # the Solis Modbus force charge/discharge actions exist
         self.forced: tuple[str, float, datetime] | None = None   # (charge|discharge, W, until) while one runs
@@ -82,6 +84,9 @@ class FakeHA:
         }
         if marstek:
             s = {
+                "sensor.p1_meter_power": st(0, "W"),          # HomeWizard P1: + import
+                "sensor.p1_meter_average_demand": st(0, "W"),
+                "sensor.p1_meter_peak_demand_current_month": st(p1_peak, "W"),
                 "sensor.solax_grid_import": st(0, "W"),
                 "sensor.solax_grid_export": st(0, "W"),
                 "sensor.solax_house_load": st(0, "W"),          # + what the Marstek charges, - what it gives
@@ -337,6 +342,13 @@ class FakeHA:
              "sensor.solax_pv_power_total": self.pv_fn(self.now)}
         for eid, kw in w.items():
             self.s[eid]["state"] = str(round(kw * 1000))
+        start = self.now.replace(minute=self.now.minute - self.now.minute % 15, second=0, microsecond=0)
+        q, kwh = self._q
+        kwh = (kwh if q == start else 0.0) + max(grid, 0) * dt.total_seconds() / 3600
+        self._q = (start, kwh)
+        done = (self.now - start).total_seconds() / 3600
+        self.s["sensor.p1_meter_power"]["state"] = str(round(grid * 1000))
+        self.s["sensor.p1_meter_average_demand"]["state"] = str(round(kwh / done * 1000) if done > 0 else 0)
         if self.local_down:
             self.local_silent_s += dt.total_seconds()
         else:

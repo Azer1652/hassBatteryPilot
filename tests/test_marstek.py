@@ -224,3 +224,62 @@ async def test_winter_night_charge_follows_the_plan(tmpdata):
     assert fake.soc >= target["soc"] - 5, (fake.soc, target)
     assert worst["import"] <= Options().import_limit_kw + 0.35
     assert app.solis.mode == "self_use" and fake.mode() == "self_use"
+
+
+SHAVE = "input_boolean.battery_pilot_force_peak_shaving"
+
+
+async def test_p1_meter_is_the_grid_reading_and_its_month_peak_counts(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True, p1_peak=3100)
+    app = await start(tmpdata, fake)
+    assert app.ent_ids["grid_power"] == "sensor.p1_meter_power"
+    await run_until(app, fake, fake.now + timedelta(minutes=2))
+    assert app.peaks.month_peak(fake.now, app.tz) == pytest.approx(3.1)
+
+
+async def test_peak_shaving_done_by_battery_pilot_keeps_the_grid_at_the_limit(tmpdata):
+    load = {"kw": 4.0}
+    fake = FakeHA(utc(2026, 11, 19, 18), soc=60, load=lambda t: load["kw"], marstek=True)
+    app = await start(tmpdata, fake)
+    assert app.can_peak_shave and app.can_solar_hold
+    fake.s[SHAVE]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=5), step_s=10)
+    assert app.solis.mode == "peak_shave"
+    assert fake.import_kw == pytest.approx(Options().import_limit_kw, abs=0.2)     # the battery gives the rest
+    assert 1400 <= app.solis.power_w <= 1900
+    load["kw"] = 1.0                                # under the limit: the battery stops giving
+    await run_until(app, fake, fake.now + timedelta(minutes=3), step_s=10)
+    assert app.solis.power_w == 0 and fake.import_kw == pytest.approx(1.0, abs=0.05)
+    n = len(passive(fake))
+    await run_until(app, fake, fake.now + timedelta(minutes=6), step_s=10)
+    assert len(passive(fake)) > n                   # renewed before it lapses
+    fake.s[SHAVE]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=1), step_s=10)
+    assert app.solis.mode != "peak_shave"
+
+
+async def test_peak_shaving_stores_solar_surplus_and_keeps_the_level(tmpdata):
+    fake = FakeHA(utc(2026, 6, 19, 12), soc=50, load=lambda t: 0.5, pv=lambda t: 2.0, marstek=True)
+    app = await start(tmpdata, fake)
+    fake.s[SHAVE]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=5), step_s=10)
+    assert app.solis.power_w < -1200 and float(fake.s["sensor.solax_grid_export"]["state"]) < 200
+    # at the shaving level the battery gives nothing
+    fake2 = FakeHA(utc(2026, 11, 19, 18), soc=10, load=lambda t: 4.0, marstek=True)
+    app2 = await start(tmpdata + "2", fake2)
+    fake2.s[SHAVE]["state"] = "on"
+    await run_until(app2, fake2, fake2.now + timedelta(minutes=3), step_s=10)
+    assert app2.solis.mode == "peak_shave" and app2.solis.power_w == 0
+
+
+async def test_full_power_charges_at_the_limit_not_paced(tmpdata):
+    from pilot.controller import Readings, decide
+    from pilot.planner import Step
+
+    now = utc(2026, 11, 19, 2)
+    step = Step(now, 1.0, "charge", 40.0, 45.0, 0, 0, 0, 0, 0, 0, 0)
+    r = Readings(now, now, 40.0, 0.3, 0.0, 0.3, 0.3, 51.2)
+    paced = decide(step, r, Options(**MARSTEK), "self_use", "", 0, True)
+    fast = decide(step, r, Options(**MARSTEK, full_power=True), "self_use", "", 0, True)
+    assert paced.command == fast.command == "charge"
+    assert paced.amps < fast.amps == 35           # the import limit, not the hour

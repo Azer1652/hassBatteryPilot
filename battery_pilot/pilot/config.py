@@ -19,7 +19,8 @@ ENTITY_KEYS = (
     "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",
     "peak_shaving_soc", "feed_in_priority_switch", "forecast_power_now",
     "forecast_today", "forecast_tomorrow", "price_sensor", "car_charger_power",
-    "marstek_auto_mode_button", "marstek_last_message", "battery_soc_backup",
+    "grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button", "marstek_last_message",
+    "battery_soc_backup",
     "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup",
 )
 # Option name of each override where it differs from the entity key
@@ -83,6 +84,7 @@ class Options:
     marstek_device_id: str = ""              # the Marstek battery's HA device (empty: found from its entities)
     marstek_stale_s: int = 300               # a Marstek reading older than this is not used (the other source is)
     marstek_load_includes_battery: bool = True   # the house-load sensor counts the Marstek's charging as load
+    full_power: bool = False                 # charge and discharge as fast as the limits allow, not paced
     slot_entities: str = "time_charging"
     charge_command: str = "auto"             # auto: the force action when HA has it | force | time_slot
     solis_slave: int = 0                     # Modbus slave ID for the force action (0: the integration's default)

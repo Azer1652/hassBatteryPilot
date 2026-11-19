@@ -118,8 +118,15 @@ local integration's default names as fallback; `discovery.SOLIS_ONLY` keys are n
 `App._battery` picks SOC and power per tick (`marstek.choose`: the local value while *Last message
 received* ≤ `marstek_stale_s`, else the cloud's while its report time is that fresh, else None → blind).
 With `marstek_load_includes_battery` the battery power (+ discharging) is added to the house load (a
-Solax *House Load* counts an AC-coupled battery), live and in `bootstrap`. Planner, simulator and
-controller are untouched: only charge, discharge and self-use are used. `tests/fake_ha.py` with
+Solax *House Load* counts an AC-coupled battery), live and in `bootstrap`. Peak shaving and solar hold are emulated
+(`can_peak_shave`/`can_solar_hold` are true with a Marstek): `Marstek.peak_shave`/`solar_hold` start
+passive at 0 W and `App._follow` calls `Marstek.follow` every tick with the grid (+ import) to set the
+passive power (`shave_power`: integral on the power last sent, battery only above the limit, surplus
+charged, nothing below the shaving level), so planner and simulator semantics are what a Solis does.
+`grid_power` (one signed meter, a P1), `quarter_average_power` (`QuarterMeter.projection_kw`) and
+`month_peak_power` (`PeakTracker.observe`) are auto-found only with a Marstek. `full_power` (any battery):
+`controller.decide` charges at the follow current and discharges at the maximum instead of pacing; the
+energy per slot, and so planner and simulator, are unchanged. `tests/fake_ha.py` with
 `marstek=True` is a Solax + Marstek house (`local_down`, `cloud_down`); `tests/test_marstek.py`.
 
 ## Solar hold and the peak buffer

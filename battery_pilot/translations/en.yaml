@@ -125,6 +125,9 @@ configuration:
   marstek_load_includes_battery:
     name: "Marstek: house load includes the battery"
     description: "On when your house-load sensor (a Solax House Load, for one) counts the Marstek's charging as consumption. Battery Pilot then takes the battery's power out of it."
+  full_power:
+    name: "Charge and discharge at full power"
+    description: "Off: a charge or discharge is spread over its hour so it ends at the plan's level. On: as fast as the import limit and the maximum currents allow, then the battery waits; better when the battery's converter draws a fixed power whenever it runs (a Marstek, for one)."
   slot_entities:
     name: "Solis slot entities"
     description: "Which set of Solis time-of-use entities your inverter uses. Try time_charging first; switch if charging does nothing."
@@ -212,6 +215,15 @@ configuration:
   price_sensor:
     name: "Market price entity"
     description: "ENTSO-e, Nord Pool or another sensor with hourly or quarter-hour prices. Leave empty to find it automatically."
+  grid_power:
+    name: "Grid power entity (one meter, + import)"
+    description: "One signed grid power sensor, positive when you import, used before the import and export entities: a HomeWizard P1 meter's Power, for one (found by itself with a Marstek battery)."
+  quarter_average_power:
+    name: "Quarter-hour average entity"
+    description: "The grid meter's own average of this quarter-hour (a HomeWizard P1 meter's Average demand), for the capacity peak. Found by itself with a Marstek battery."
+  month_peak_power:
+    name: "Month peak entity"
+    description: "The grid meter's own peak of this month (a HomeWizard P1 meter's Peak demand current month). Found by itself with a Marstek battery."
   marstek_auto_mode_button:
     name: "Marstek Auto mode button"
     description: "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."

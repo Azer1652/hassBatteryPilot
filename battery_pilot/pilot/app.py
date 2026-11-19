@@ -347,7 +347,9 @@ class App:
             self.problem = None
             self.solis = M.Marstek(self.ha, {k: v for k, v in self.ent_ids.items()
                                              if k in ("marstek_auto_mode_button", "export_limit")},
-                                   device_id=device, volts=self.o.battery_voltage)
+                                   device_id=device, volts=self.o.battery_voltage,
+                                   max_charge_w=int(self.o.max_charge_kw * 1000),
+                                   max_discharge_w=int(self.o.max_discharge_kw * 1000))
         else:
             self.problem = None
             self.solis = Solis(self.ha, {k: v for k, v in self.ent_ids.items() if k in SOLIS_NEEDED + SOLIS_OPTIONAL},
@@ -531,7 +533,8 @@ class App:
         now = self.clock()
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_power",
                 "battery_soc", "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
-                "car_charger_power") + (tuple(M.REGISTRY) if self.o.marstek else ())
+                "car_charger_power", "grid_power", "quarter_average_power", "month_peak_power") \
+            + (tuple(M.REGISTRY) if self.o.marstek else ())
         sts, away = await self._states_raw(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
                                        self.ha.state(FORCE_SHAVE), return_exceptions=True)
@@ -547,6 +550,9 @@ class App:
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts),
               "battery": self._kw("battery_power", sts)}
+        grid = self._kw("grid_power", sts)
+        if grid is not None:          # one signed meter (a P1 meter: + import) is used before the others
+            kw["import"], kw["export"] = max(grid, 0.0), max(-grid, 0.0)
         soc = self._num(sts.get("battery_soc"))
         if self.o.marstek:
             soc, kw["battery"] = self._battery(sts, now)
@@ -569,7 +575,10 @@ class App:
                               else "the battery SOC does not change while (dis)charging")
             return
         self.seen_at, self.blind_reported = now, False
-        projection = self.meter.projection_kw(now, kw["import"])
+        projection = self.meter.projection_kw(now, kw["import"], self._kw("quarter_average_power", sts))
+        meter_peak = self._kw("month_peak_power", sts)
+        if meter_peak is not None:
+            self.peaks.observe(now, self.tz, meter_peak)
         self.readings = Readings(now, local, soc, kw["load"], kw["pv"] or 0.0, kw["import"], projection, voltage)
         step = self.plan.step_at(now) if self.plan else None
         if self.solis:
@@ -591,6 +600,8 @@ class App:
                 self.decision = Decision("peak_shave", reason=f"the car {'charges' if self.car_state.charging else 'stopped'}"
                                                               f": the battery is kept at {self.shave_level:.0f} %")
             await self._apply(self.decision, local)
+            if isinstance(self.solis, M.Marstek) and self.control_on:
+                await self._follow(local, kw["import"] - (kw["export"] or 0.0), soc)
             await self._curtail(local)
         mode = self.solis.mode if self.control_on and self.solis else "shadow"
         self._modes[mode] = self._modes.get(mode, 0) + 1
@@ -799,6 +810,20 @@ class App:
             s.mode, s.shave = ("failed", None) if shave == "on" else ("self_use", False)
             self.event(f"The inverter's peak-shaving switch is {shave}, not what Battery Pilot set; correcting it.")
 
+    async def _follow(self, local: datetime, grid_kw: float, soc: float):
+        """A Marstek in peak shaving or solar hold: the passive power follows the grid meter."""
+        try:
+            await self.solis.follow(local, grid_kw, soc)
+        except Exception as e:  # noqa: BLE001
+            self.solis.mode = "failed"        # the next tick starts peak shaving again
+            self.solis.shave = self.solis.shave_set = self.solis.hold = self.solis.forced = None
+            now, key = self.clock(), "cmdfail:follow"
+            last = self._last.get(key)
+            if last is None or (now - last).total_seconds() >= CMD_EVENT_S:
+                self._last[key] = now
+                self.event(f"Marstek passive power not sent: {e}", logging.ERROR)
+        self._save_inverter()
+
     async def _apply(self, d: Decision, local: datetime):
         if d.command not in ("charge", "discharge", "current", "self_use", "peak_shave", "solar_hold"):
             return
@@ -842,12 +867,12 @@ class App:
     @property
     def can_peak_shave(self) -> bool:
         """The inverter's peak-shaving switch was found: the plan may leave the house on the grid."""
-        return "peak_shaving_switch" in self.ent_ids
+        return "peak_shaving_switch" in self.ent_ids or self.o.marstek     # (a Marstek: done by Battery Pilot)
 
     @property
     def can_solar_hold(self) -> bool:
         """The inverter's feed-in priority switch was found: the plan may put solar charging off."""
-        return "feed_in_priority_switch" in self.ent_ids
+        return "feed_in_priority_switch" in self.ent_ids or self.o.marstek
 
     @property
     def blocks_negative_export(self) -> bool:
