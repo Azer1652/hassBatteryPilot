@@ -810,6 +810,13 @@ day), and the round trip is given without it, with the figure including it next 
 Measurements saved by an earlier version cannot have it taken off, so the round-trip
 measurement starts again after the update that added it.
 
+The Solis setting *Battery Saving* (in the SolisCloud app under the battery settings) makes
+the inverter take its own power from the grid instead of the battery while it stands by at
+night. The inverter does not use less with it; the power only comes from elsewhere, and the
+measurement works with it on or off. Solis advises turning it off when the time-of-use
+charge and discharge times are used, which is how Battery Pilot steers the inverter, so
+leave it off unless you have checked that both work together.
+
 The plan does **not** use the measured value. It keeps using *Round-trip efficiency*. If
 the measured value (without the inverter's own use, when it is known) stays 3 points or
 more from the setting, change the setting yourself.

@@ -22,6 +22,7 @@ update this file.
 | Blocking export | Setting the export-limit entity to 0 stops export at negative prices and the inverter throttles the panels. | `App._curtail` |
 | The page in the Companion app | Tabs, the file download and the file picker work inside the app's web view. | `static/index.html` |
 | Inverter's own use | `import − household load − export` with the battery idle and no sun is the inverter's own draw (the Solis household load excludes it), and the draw is the same while the battery charges or discharges. *Battery Power Net* is DC, + discharging, as in the Solis Modbus integration's source; the owner's export of it (S6-EH1P) fits that sign. | `efficiency.EfficiencyMeter` (`_learn_draw`, `report`) |
+| Solis Battery Saving | Off. Solis's quick-setting guide for forced charge/discharge times says to turn it off with time-of-use; with it on, the inverter takes its standby power from the grid at night. How it interacts with Battery Pilot's time-of-use slots and force action was never tried. | `battery_pilot/DOCS.md` (*Measured efficiency*) |
 | ENTSO-e price list | The list is an attribute of the *Average electricity price* sensor (read from the integration's source, version 0.7.5). | `prices.py`, `App.refresh` |
 
 A price modifier template in the ENTSO-e integration (VAT or fees added) makes the dynamic
