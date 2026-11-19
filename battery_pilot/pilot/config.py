@@ -28,6 +28,7 @@ ENTITY_KEYS = (
 # (battery_voltage is already the nominal-voltage option).
 OVERRIDE_OPTION = {k: k for k in ENTITY_KEYS} | {"battery_voltage": "battery_voltage_sensor"}
 
+_YYYYMM = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 
@@ -38,7 +39,7 @@ class ConfigError(ValueError):
 @dataclass
 class Options:
     # contract
-    contract: str = "fixed"                  # the contract you are on now: fixed | dynamic
+    contract: str = "fixed"                  # the contract you are on now: fixed | dynamic | variable
     fixed_contract_end: str = ""             # YYYY-MM-DD, for renewal reminders
     grid_fees_c_kwh: float = 11.33           # added to every bought kWh, both contracts, incl. VAT
     injection_fee_c_kwh: float = 0.19        # subtracted from every sold kWh, both contracts
@@ -53,6 +54,20 @@ class Options:
     dynamic_sell_mult: float = 0.1           # dynamic sell = mult x market + add - injection fee
     dynamic_sell_add: float = -1.3
     dynamic_yearly_fee_eur: float = 15.0
+    # variable (monthly index): buy = (mult x index + add) x (1 + VAT) + grid fees, day and night apart
+    # (night 0 and 0: the day formula); sell = sell mult x index + sell add - injection fee.
+    # Index: the month's average market price, or the published one for the month it is set for.
+    # Day factor 0: no variable contract (it is left out of the comparison).
+    variable_day_mult: float = 0.0
+    variable_day_add: float = 0.0
+    variable_night_mult: float = 0.0
+    variable_night_add: float = 0.0
+    variable_vat_pct: float = 6.0
+    variable_sell_mult: float = 0.0
+    variable_sell_add: float = 0.0
+    variable_yearly_fee_eur: float = 0.0
+    variable_index_eur_mwh: float = 0.0      # a month's published index (0: none; the market average is used)
+    variable_index_month: str = ""           # YYYY-MM: the month that index is for
     night_start: str = "22:00"               # night tariff (fixed contract) and night charging window
     night_end: str = "07:00"
     weekend_is_night: bool = True
@@ -114,6 +129,19 @@ class Options:
         return self.battery_system == "marstek"
 
     @property
+    def variable_set(self) -> bool:
+        """A variable contract is filled in (or is the contract now): it is priced and compared too."""
+        return self.contract == "variable" or self.variable_day_mult > 0
+
+    @property
+    def variable_night(self) -> tuple[float, float]:
+        """(factor, fixed part) of the night formula; the day one when the night one is not filled in
+        (a single-rate meter), so a night is never priced at the grid fees alone."""
+        if self.variable_night_mult <= 0 and self.variable_night_add == 0:
+            return self.variable_day_mult, self.variable_day_add
+        return self.variable_night_mult, self.variable_night_add
+
+    @property
     def night_start_time(self) -> time:
         return _parse_hhmm(self.night_start)
 
@@ -127,8 +155,16 @@ class Options:
         return date.fromisoformat(s) if s else None
 
     def validate(self) -> None:
-        if self.contract not in ("fixed", "dynamic"):
-            raise ConfigError(f"contract must be 'fixed' or 'dynamic', not {self.contract!r}.")
+        if self.contract not in ("fixed", "dynamic", "variable"):
+            raise ConfigError(f"contract must be 'fixed', 'dynamic' or 'variable', not {self.contract!r}.")
+        if self.contract == "variable" and self.variable_day_mult <= 0:
+            raise ConfigError("contract is variable but its formula is not filled in: set variable_day_mult "
+                              "(the factor before the index on your supplier's tariff sheet), and the rest of it.")
+        if self.variable_index_month.strip() and not _YYYYMM.match(self.variable_index_month.strip()):
+            raise ConfigError(f"variable_index_month must look like 2026-11, not {self.variable_index_month!r}.")
+        if self.variable_index_eur_mwh > 0 and not self.variable_index_month.strip():
+            raise ConfigError("variable_index_eur_mwh is set but variable_index_month is empty: say which month "
+                              "(YYYY-MM) the index is for.")
         for name in ("night_start", "night_end"):
             if not _HHMM.match(getattr(self, name)):
                 raise ConfigError(f"{name} must look like 22:00, not {getattr(self, name)!r}.")
@@ -164,7 +200,7 @@ def from_dict(raw: dict) -> Options:
     """Build Options from the add-on's options.json (unknown keys are ignored)."""
     known = {f.name for f in fields(Options)} - {"entities"}
     kwargs = {k: v for k, v in raw.items() if k in known and v is not None}
-    for k in ("fixed_contract_end", "notify_service", "marstek_device_id"):
+    for k in ("fixed_contract_end", "notify_service", "marstek_device_id", "variable_index_month"):
         if k in kwargs:
             kwargs[k] = str(kwargs[k]).strip()
     opts = Options(**kwargs)

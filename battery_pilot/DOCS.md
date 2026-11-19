@@ -307,8 +307,9 @@ stateDiagram-v2
 ## The comparison
 
 - **Same usage:** every quarter-hour, what you actually bought and sold is priced on
-  both contracts. It is exact, but your battery behaved as it does on your current
-  contract. In a month that has market prices for only part of its quarter-hours (the
+  both contracts. When a variable contract is filled in, it is priced too, with the month's
+  index (see *A variable contract*). It is exact, but your battery behaved as it does on
+  your current contract. In a month that has market prices for only part of its quarter-hours (the
   price sensor was added during the month), both contracts are priced on the
   quarter-hours that have one.
 - **Best battery use:** every night, yesterday is replayed with your measured
@@ -322,7 +323,9 @@ stateDiagram-v2
   negative, as Battery Pilot would; otherwise those exports cost money. While export
   was really blocked the inverter held your panels back, so for those quarter-hours the
   replay takes the shade-corrected forecast when it is higher than what was measured. A
-  day counts only when both contracts could be replayed. This answers:
+  day counts only when both fixed and dynamic could be replayed. A variable contract
+  counts only the days since its formula was filled in, and is set against fixed on
+  those same days. This answers:
   what would each contract have cost me, with the battery used the best way for it?
 
 Both include the contract fees and the capacity tariff, for the part of the month the
@@ -677,7 +680,7 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
-| Your contract now | `contract` | fixed | Which contract's prices the battery is planned for. The comparison always shows both. |
+| Your contract now | `contract` | fixed | Which contract's prices the battery is planned for: `fixed`, `dynamic` or `variable`. The comparison always shows fixed and dynamic, and variable when its formula is filled in (see *A variable contract*). |
 | Fixed price ends on | `fixed_contract_end` | (empty) | Date (YYYY-MM-DD) for the reminders 6 weeks, 2 weeks and 3 days before. |
 | Fixed day rate | `fixed_day_rate` | 18.59 c/kWh | Energy price on the fixed contract by day, without grid fees. |
 | Fixed night rate | `fixed_night_rate` | 15.22 c/kWh | The same at night. Equal to the day rate for a single-rate contract. |
@@ -690,6 +693,16 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 | Dynamic: sell price × market | `dynamic_sell_mult` | 0.1 | Dynamic sell price = this × market + the next setting − injection fee. |
 | Dynamic: sell price + | `dynamic_sell_add` | −1.3 c/kWh | Usually negative: the supplier's deduction. |
 | Dynamic contract fee | `dynamic_yearly_fee_eur` | 15 €/year | Added in the comparison. |
+| Variable: day price × index | `variable_day_mult` | 0 (no variable contract) | Variable day buy price = (this × index + the next setting) × (1 + VAT) + grid fees. The factor before Belpex on your supplier's tariff sheet. |
+| Variable: day price + | `variable_day_add` | 0 c/kWh | The fixed part of the day formula, before VAT. |
+| Variable: night price × index | `variable_night_mult` | 0 | The same for the night rate. Leave this and the next one at 0 for a single-rate meter: the night then uses the day formula. |
+| Variable: night price + | `variable_night_add` | 0 c/kWh | The fixed part of the night formula, before VAT. |
+| Variable: VAT | `variable_vat_pct` | 6 % | VAT on the variable energy price; 0 when the formula already includes it. |
+| Variable: sell price × index | `variable_sell_mult` | 0 | Variable sell price = this × index + the next setting − injection fee. |
+| Variable: sell price + | `variable_sell_add` | 0 c/kWh | Usually negative: the supplier's deduction. |
+| Variable contract fee | `variable_yearly_fee_eur` | 0 €/year | Added in the comparison. |
+| Variable: published index | `variable_index_eur_mwh` | 0 (none) | Optional: the index your supplier published for one month, in EUR/MWh. Without it every month uses its average market price. |
+| Variable: month of that index | `variable_index_month` | (empty) | The month (YYYY-MM) that published index is for. Only that month uses it. |
 | Grid fees and taxes | `grid_fees_c_kwh` | 11.33 c/kWh | Added to every bought kWh on both contracts. Update each January. |
 | Injection fee | `injection_fee_c_kwh` | 0.19 c/kWh | Subtracted from every sold kWh on both contracts. |
 | Night tariff starts | `night_start` | 22:00 | Night rate, and the window for winter night charging. The window may cross midnight (22:00–07:00) or lie inside one day (01:00–06:00). |
@@ -703,6 +716,35 @@ The contract formulas in full (market prices in EUR/MWh):
   *fixed: sell price +* − injection fee
 - dynamic buy = (*buy × market* × market price + *buy +*) × (1 + VAT) + grid fees
 - dynamic sell = *sell × market* × market price + *sell +* − injection fee
+- variable buy = (*day* or *night × index* × index + *day* or *night +*) × (1 + VAT) + grid fees
+- variable sell = *sell × index* × index + *sell +* − injection fee
+
+#### A variable contract
+
+A variable (monthly-indexed) contract changes price once a month. The price follows an
+index, which in Belgium is nearly always Belpex (the Belgian day-ahead market price)
+averaged over the month. Your supplier's tariff sheet ("tariefkaart" or "fiche
+tarifaire") gives the formula, for example *0.1 × Belpex + 1.5 c€/kWh*. For that one,
+enter 0.1 as *Variable: day price × index* and 1.5 as *Variable: day price +*, then do the
+same for night and for injection. No public service publishes suppliers' formulas, so you
+enter them by hand, as you do the fixed rates.
+
+**The index.** Battery Pilot calculates it from the market prices it already reads (your
+price sensor, for example ENTSO-e): the average of the month, so far for the current
+month. Many suppliers weigh Belpex by a typical household's usage ("Belpex RLP"), which
+can differ a few percent from the plain average. When your supplier publishes the index of
+a month, you can enter it as *Variable: published index* with that month in *Variable:
+month of that index*. Only that month uses it, in the plan, the prices and the comparison.
+Battery Pilot keeps it with the month, so you can later enter the next month's index
+without changing the earlier one.
+
+**Planning.** Set *Your contract now* to `variable` to plan for it. Within a month the
+price only differs between day and night, so the battery is planned as on a fixed contract.
+
+**Comparing.** To compare a variable offer without switching, fill in its formula and keep
+*Your contract now* as it is: the comparison gets variable columns. Days replayed before
+you filled it in have no variable result, so the "variable − fixed" total sets the
+variable contract against fixed on the same days only.
 
 ### Grid and capacity tariff
 
@@ -958,9 +1000,9 @@ more from the setting, change the setting yourself.
 | `sensor.battery_pilot_solar_tomorrow` | The same for tomorrow | `forecast_kwh` |
 | `sensor.battery_pilot_quarter_projection` | Where this quarter-hour's average import is heading (kW) | |
 | `sensor.battery_pilot_month_peak` | This month's highest quarter-hour (kW) | `billed_kw`, `month_cost_eur`, `rolling_12_month_kw` |
-| `sensor.battery_pilot_buy_price` | Buy price now on your contract (c/kWh) | `contract`, `fixed`, `dynamic` (buy and sell on both), `market_eur_mwh` |
+| `sensor.battery_pilot_buy_price` | Buy price now on your contract (c/kWh) | `contract`, `fixed`, `dynamic` (buy and sell on both), `variable` (when filled in), `market_eur_mwh` |
 | `sensor.battery_pilot_sell_price` | Sell price now on your contract (c/kWh) | `contract` |
-| `sensor.battery_pilot_contract_comparison` | Dynamic minus fixed over the stored months (€; negative = dynamic cheaper) | `basis`, `fixed_eur`, `dynamic_eur`, `same_usage`, `with_strategy` |
+| `sensor.battery_pilot_contract_comparison` | Dynamic minus fixed over the stored months (€; negative = dynamic cheaper) | `basis`, `fixed_eur`, `dynamic_eur`, `variable_eur`, `variable_minus_fixed_eur`, `same_usage`, `with_strategy` |
 
 ## Emergency stop
 

@@ -60,16 +60,21 @@ def fill(app: App, res: dict) -> None:
         acc.update(imp_day=m["same"]["imp_day"], imp_night=m["same"]["imp_night"], exp=m["same"]["exp"],
                    market_sum=sum(m["market"]), market_n=len(m["market"]), dyn_c=m["same"]["dyn_c"],
                    peak_kw=m["fixed"]["peak_kw"], replay_days=m["days"])
-        for kind in ("fixed", "dynamic"):
+        for kind in ("fixed", "dynamic", "variable"):
+            if kind not in m:                # (variable: only when its formula is filled in)
+                continue
             acc["replay"][kind].update({k: m[kind][k] for k in ("cost_c", "imp", "exp", "charged", "discharged",
-                                                                 "grid_charged", "peak_kw")})
+                                                                 "grid_charged", "peak_kw")}, days=m["days"])
+            if kind == "variable":
+                acc["replay"][kind].update(fixed_cost_c=m["fixed"]["cost_c"], fixed_peak_kw=m["fixed"]["peak_kw"])
         app.peaks.months[key] = round(m["fixed"]["peak_kw"], 2)
         for i, avg in enumerate(m["market"]):
             app.daily_market[(date.fromisoformat(key + "-01") + timedelta(days=i)).isoformat()] = round(avg, 2)
 
 
-async def main(days: int, port: int, seconds: float | None):
-    o = Options(car_min_kw=3.5)      # (shows the car estimate)
+async def main(days: int, port: int, seconds: float | None, variable: bool = False):
+    o = Options(car_min_kw=3.5,      # (shows the car estimate)
+                **(yearsim.EXAMPLE_VARIABLE if variable else {}))
     res = history(days, o)
     w = yearsim.World(seed=1)
     live = [TODAY + timedelta(days=i) for i in range(-LIVE_DAYS, 2)]
@@ -120,5 +125,6 @@ if __name__ == "__main__":
                     help="3 days of history: ready in about 20 s, enough to look at or check the page")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--seconds", type=float, default=None, help="stop after this many seconds")
+    ap.add_argument("--variable", action="store_true", help="with an example variable contract filled in")
     a = ap.parse_args()
-    asyncio.run(main(3 if a.quick else a.days, a.port, a.seconds))
+    asyncio.run(main(3 if a.quick else a.days, a.port, a.seconds, a.variable))

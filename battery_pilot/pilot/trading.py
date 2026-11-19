@@ -19,7 +19,7 @@ from .tariffs import tariff
 def _slots(o: Options, kind: str, price_slots: list[PriceSlot], now: datetime, tz: ZoneInfo,
            market_avg: float | None, hours: int) -> list[tuple[datetime, float, float, float | None]]:
     """(start, buy, sell, market) of each price period in the coming hours, in c/kWh."""
-    t = tariff(kind, o)
+    t = tariff(kind, o, market_avg)
     end = now + timedelta(hours=hours)
     out = []
     if kind == "dynamic":

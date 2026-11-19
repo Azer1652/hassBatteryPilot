@@ -35,7 +35,7 @@ from pilot.load import LoadProfile  # noqa: E402
 from pilot.meter import QuarterRecord  # noqa: E402
 from pilot.prices import PriceSlot  # noqa: E402
 from pilot.solar import PvForecast, ShadeModel, hourly_from_daily  # noqa: E402
-from pilot.tariffs import capacity_month_eur, is_night, tariff  # noqa: E402
+from pilot.tariffs import capacity_month_eur, is_night, kinds, tariff  # noqa: E402
 
 TZ = ZoneInfo("Europe/Brussels")
 LAT, LON = 51.2, 4.4
@@ -141,6 +141,12 @@ class World:
         return recs
 
 
+# An example variable (monthly-indexed) formula in the shape of a Belgian tariff sheet: made-up
+# numbers, not a real supplier's (`--variable`, and `demo_dashboard.py --variable`).
+EXAMPLE_VARIABLE = dict(variable_day_mult=0.1, variable_day_add=1.5, variable_night_mult=0.09, variable_night_add=1.2,
+                        variable_sell_mult=0.08, variable_sell_add=-1.0, variable_yearly_fee_eur=30)
+
+
 def run(start: date, days: int, opts: Options | None = None, seed: int = 1, price_scale: float = 1.0,
         replan_every_h: int = 1, learn: bool = True, warmup_days: int = 7, block_negative: bool = False,
         peak_shave: bool = False, solar_hold: bool = False, forecast_error: bool = False,
@@ -153,7 +159,8 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
     o = opts or Options()
     w = World(seed, price_scale)
     shade, load = ShadeModel(), LoadProfile()
-    soc = {"fixed": 50.0, "dynamic": 50.0}
+    kinds_ = kinds(o)                        # fixed, dynamic, and variable when its formula is filled in
+    soc = {k: 50.0 for k in kinds_}
     months: dict[str, dict] = {}
     for i in range(-warmup_days, days):
         d = start + timedelta(days=i)
@@ -168,16 +175,18 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         key = d.strftime("%Y-%m")
         m = months.setdefault(key, {"days": 0, "pv": 0.0, "pv_fc": 0.0, "load": 0.0, "market": [],
                                     **{k: {"cost_c": 0.0, "imp": 0.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0,
-                                           "grid_charged": 0.0, "peak_kw": 0.0} for k in ("fixed", "dynamic")},
-                                    "nobat": {"fixed_c": 0.0, "dynamic_c": 0.0, "peak_kw": 0.0},
+                                           "grid_charged": 0.0, "peak_kw": 0.0} for k in kinds_},
+                                    "nobat": {**{f"{k}_c": 0.0 for k in kinds_}, "peak_kw": 0.0},
                                     # what the meter would show on the fixed contract ("same usage" view)
                                     "same": {"imp_day": 0.0, "imp_night": 0.0, "exp": 0.0, "dyn_c": 0.0}})
         today = [p.eur_mwh for p in prices if p.start.astimezone(TZ).date() == d]
         avg = sum(today) / len(today)
+        index = (sum(m["market"]) + avg) / (len(m["market"]) + 1)       # a variable contract: the month so far
         pvf = PvForecast(fc, shade, TZ)
         pv_fc = pvf.kwh
-        for kind in ("fixed", "dynamic"):
-            res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind], avg, replan_every_h,
+        for kind in kinds_:
+            res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind],
+                             index if kind == "variable" else avg, replan_every_h,
                              month_peak_kw=m[kind]["peak_kw"],
                              block_negative=block_negative, peak_shave=peak_shave,
                              solar_hold=solar_hold,
@@ -201,8 +210,8 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
             net = r.kwh["load"] - r.kwh["pv"]
             imp, exp = max(net, 0), max(-net, 0)
             mk = next(p.eur_mwh for p in prices if p.start <= r.start < p.end)
-            for kind in ("fixed", "dynamic"):
-                t = tariff(kind, o)
+            for kind in kinds_:
+                t = tariff(kind, o, index)
                 m["nobat"][f"{kind}_c"] += imp * t.buy(local, mk) - exp * t.sell(local, mk, avg)
             m["nobat"]["peak_kw"] = max(m["nobat"]["peak_kw"], imp * 4)
         m["days"] += 1
@@ -218,7 +227,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
 
 
 def month_eur(m: dict, kind: str, o: Options, battery: bool = True) -> float:
-    fee = (o.fixed_yearly_fee_eur if kind == "fixed" else o.dynamic_yearly_fee_eur) / 12 * m["days"] / 30.4
+    fee = tariff(kind, o).yearly_fee_eur / 12 * m["days"] / 30.4
     if battery:
         return m[kind]["cost_c"] / 100 + fee + capacity_month_eur(m[kind]["peak_kw"], o) * m["days"] / 30.4
     return m["nobat"][f"{kind}_c"] / 100 + fee + capacity_month_eur(m["nobat"]["peak_kw"], o) * m["days"] / 30.4
@@ -229,9 +238,11 @@ def table(res: dict) -> str:
     rows = ["month    days  solar  fcast  market | FIXED  €   grid-chg  export  peak | DYNAMIC €  grid-chg  export"
             "  peak | dyn-fix | no battery fix / dyn",
             "-" * 140]
-    tot = {"f": 0.0, "d": 0.0, "nf": 0.0, "nd": 0.0}
+    tot = {"f": 0.0, "d": 0.0, "nf": 0.0, "nd": 0.0, "v": 0.0}
     for key, m in res["months"].items():
         f, d = month_eur(m, "fixed", o), month_eur(m, "dynamic", o)
+        if "variable" in m:
+            tot["v"] += month_eur(m, "variable", o)
         nf, nd = month_eur(m, "fixed", o, False), month_eur(m, "dynamic", o, False)
         tot["f"] += f
         tot["d"] += d
@@ -244,7 +255,8 @@ def table(res: dict) -> str:
             f" {m['dynamic']['exp']:7.0f} {m['dynamic']['peak_kw']:5.2f} | {d - f:7.0f} | {nf:7.0f} / {nd:4.0f}")
     rows.append("-" * 140)
     rows.append(f"total: fixed €{tot['f']:.0f}, dynamic €{tot['d']:.0f}, dynamic - fixed €{tot['d'] - tot['f']:.0f}"
-                f"   (without battery: fixed €{tot['nf']:.0f}, dynamic €{tot['nd']:.0f})")
+                f"   (without battery: fixed €{tot['nf']:.0f}, dynamic €{tot['nd']:.0f})"
+                + (f"; variable €{tot['v']:.0f}, variable - fixed €{tot['v'] - tot['f']:.0f}" if o.variable_set else ""))
     sh = res["shade"]
     rows.append("learned shade (true): " + "  ".join(
         f"{mo}/{h}h {sh.factor(mo, h):.2f} ({true_shade(mo, h):.1f})" for mo, h in ((1, 10), (1, 12), (1, 15), (7, 10), (7, 15))))
@@ -265,8 +277,10 @@ def main():
     ap.add_argument("--solar-hold", action="store_true", help="the inverter has a feed-in priority switch")
     ap.add_argument("--forecast-error", action="store_true", help="the solar forecast is wrong about the day")
     ap.add_argument("--no-nowcast", action="store_true", help="do not correct the forecast during the day")
+    ap.add_argument("--variable", action="store_true", help="also replay an example variable contract")
     a = ap.parse_args()
-    res = run(date.fromisoformat(a.start), a.days, Options(winter_mode=a.winter_mode), seed=a.seed,
+    o = Options(winter_mode=a.winter_mode, **(EXAMPLE_VARIABLE if a.variable else {}))
+    res = run(date.fromisoformat(a.start), a.days, o, seed=a.seed,
               price_scale=a.price_scale, block_negative=a.block_negative, peak_shave=a.peak_shave,
               solar_hold=a.solar_hold, forecast_error=a.forecast_error, nowcast=not a.no_nowcast)
     print(table(res))

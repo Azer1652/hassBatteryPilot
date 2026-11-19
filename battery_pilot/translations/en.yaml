@@ -1,7 +1,7 @@
 configuration:
   contract:
     name: "Your contract now"
-    description: "The contract you are on. Battery Pilot plans for its prices; the comparison always shows both."
+    description: "The contract you are on. Battery Pilot plans for its prices; the comparison always shows fixed and dynamic, and variable when its formula is filled in."
   fixed_contract_end:
     name: "Fixed price ends on (YYYY-MM-DD)"
     description: "For reminders 6 weeks, 2 weeks and 3 days before your fixed price renews. Leave empty if you have none."
@@ -38,6 +38,36 @@ configuration:
   dynamic_yearly_fee_eur:
     name: "Dynamic contract fee (EUR/year)"
     description: "Fixed yearly fee of the dynamic contract."
+  variable_day_mult:
+    name: "Variable: day price x index"
+    description: "A variable contract's price changes each month with an index, usually the month's average Belpex price. Day buy price = (this x index in EUR/MWh + the next setting) x (1 + VAT) + grid fees. Copy the factor from your supplier's tariff sheet: 0.1 when it says 0.1 x Belpex for a price in c/kWh. Leave it at 0 to keep the variable contract out of the comparison."
+  variable_day_add:
+    name: "Variable: day price + (c/kWh)"
+    description: "The fixed part of the day formula on the tariff sheet, before VAT."
+  variable_night_mult:
+    name: "Variable: night price x index"
+    description: "The same for the night rate. Leave this and the next setting at 0 for a single-rate meter: the night is then priced with the day formula."
+  variable_night_add:
+    name: "Variable: night price + (c/kWh)"
+    description: "The fixed part of the night formula, before VAT."
+  variable_vat_pct:
+    name: "Variable: VAT (%)"
+    description: "VAT on the variable energy price. Set 0 if the formula on your tariff sheet already includes VAT."
+  variable_sell_mult:
+    name: "Variable: sell price x index"
+    description: "Variable sell price = this x the index (EUR/MWh) + the next setting."
+  variable_sell_add:
+    name: "Variable: sell price + (c/kWh)"
+    description: "Usually negative: the supplier's deduction on what you sell."
+  variable_yearly_fee_eur:
+    name: "Variable contract fee (EUR/year)"
+    description: "Fixed yearly fee of the variable contract."
+  variable_index_eur_mwh:
+    name: "Variable: published index (EUR/MWh)"
+    description: "Optional. The index your supplier published for one month (Belpex RLP, for example), for the month in the next setting. Without it, each month uses its average market price from your price sensor."
+  variable_index_month:
+    name: "Variable: month of that index (YYYY-MM)"
+    description: "The month the published index is for, such as 2026-11. Only that month uses it; Battery Pilot keeps it with that month, so you can enter the next month's index later without changing this one."
   grid_fees_c_kwh:
     name: "Grid fees and taxes (c/kWh, incl. VAT)"
     description: "Added to every bought kWh on both contracts. Update each January from your bill."

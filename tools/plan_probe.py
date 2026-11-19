@@ -92,8 +92,10 @@ def probe(a) -> str:
     o = load_options(a.settings, {"contract": a.contract} if a.contract else {})
     now = datetime.fromisoformat(a.at).replace(tzinfo=tz).astimezone(timezone.utc)
     pv = solar_fn(a.solar, tz)
-    plan = make_plan(now, tz, o, tariff(o.contract, o), price_slots(now, a.hours, tz, a.prices),
-                     lambda s, e: a.load * (e - s).total_seconds() / 3600, pv, a.soc,
+    prices = price_slots(now, a.hours, tz, a.prices)
+    avg = sum(p.eur_mwh for p in prices) / len(prices) if prices else None      # the month's average, roughly
+    plan = make_plan(now, tz, o, tariff(o.contract, o, avg), prices,
+                     lambda s, e: a.load * (e - s).total_seconds() / 3600, pv, a.soc, market_avg=avg,
                      horizon_h=a.hours, peak_shave=a.peak_shave, solar_hold=a.solar_hold)
     lines = [f"contract {o.contract}, battery {o.battery_capacity_kwh:g} kWh, min {o.battery_min_soc:g} %, "
              f"reserve {o.battery_reserve_soc:g} %, peak buffer {o.peak_buffer_pct} %, import limit {o.import_limit_kw:g} kW",
@@ -119,7 +121,8 @@ def main(argv=None) -> int:
     ap.add_argument("--at", default="2026-11-11T19:00", help="local start time (default: a November evening)")
     ap.add_argument("--tz", default="Europe/Brussels")
     ap.add_argument("--soc", type=float, default=30.0, help="battery level now, %%")
-    ap.add_argument("--contract", choices=("fixed", "dynamic"), help="default: the one in the settings")
+    ap.add_argument("--contract", choices=("fixed", "dynamic", "variable"),
+                    help="default: the one in the settings (variable needs its formula in the settings)")
     ap.add_argument("--settings", help="settings file exported from the page (or a bare options object)")
     ap.add_argument("--solar", type=float, default=3.0, help="solar per day after shade, kWh")
     ap.add_argument("--load", type=float, default=0.45, help="flat house load, kW")

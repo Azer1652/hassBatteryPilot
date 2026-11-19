@@ -28,7 +28,7 @@ replay runs in a thread; from the main loop `nightly(wait=False)` leaves it runn
 | `marstek.py` | `Marstek`: the same interface as `Solis` for a Marstek Venus (Local API passive mode, Auto button); `choose`: local reading first, cloud when the local one is stale |
 | `discovery.py` | finds the user's entities by name (`ENTITIES`), unless the options name them |
 | `config.py` | `Options` (every setting with its default), validation, `from_dict` |
-| `tariffs.py` | buy and sell price per contract, break-even |
+| `tariffs.py` | buy and sell price per contract (fixed, dynamic, variable: a monthly index, built with the month's market average), `kinds` (which are compared), break-even |
 | `prices.py` | price lists from ENTSO-e, Nord Pool or a generic sensor → `PriceSlot` |
 | `solar.py` | `PvForecast` (shade, intraday correction) and `ShadeModel` |
 | `load.py` | `LoadProfile`: 7 × 24 house consumption |
