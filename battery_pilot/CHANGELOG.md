@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.18.0
+
+- **The inverter's own use is measured and shown on its own.** A hybrid inverter draws some
+  power all day (tens of watts), whether the battery moves or not. The measured round-trip
+  efficiency counted it as battery loss, which made the battery look much worse than it is,
+  most of all when it charges slowly from a little winter sun. With the new optional entity
+  *Battery power* (`battery_power`, the Solis *Battery Power Net*, found automatically), Battery
+  Pilot measures the draw in hours without sun while the battery is idle (for example at night
+  at its minimum, or held by peak shaving). After 8 such hours it shows it in W and kWh a day,
+  on the page and as `sensor.battery_pilot_inverter_draw`, and gives the round trip without
+  it, with the figure including it next to it. The hint to change *Round-trip efficiency* now
+  compares the setting with the figure without the draw.
+- **The round-trip measurement starts again** after this update: the saved totals cannot have
+  the draw taken off. Until 150 SOC points each way are measured again the page says how far it
+  is, and since when.
+- The grid-charging and solar-charging round trips show from 50 SOC points each, instead of
+  only after 150.
+- The documentation explains the Solis *Battery Saving* setting: it takes the inverter's
+  standby power from the grid instead of the battery, does not lower it, and Solis advises
+  turning it off with the time-of-use charge and discharge times Battery Pilot uses.
+
 ## 2.17.3
 
 - **A Home Assistant restart is ridden out quietly.** While Home Assistant restarts, its API
