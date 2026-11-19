@@ -1,6 +1,7 @@
 # Battery Pilot
 
-Battery Pilot steers a home battery on a Solis hybrid inverter so it costs you as
+Battery Pilot steers a home battery on a Solis hybrid inverter (or a Marstek Venus beside
+another inverter, such as a Solax: see *A Marstek battery*) so it costs you as
 little as possible, and tells you whether a fixed or a dynamic electricity contract
 would be cheaper for your house. It runs all the time and has its own page in the
 sidebar.
@@ -75,7 +76,8 @@ What it does:
 
 ## Before you start
 
-1. **Solis Modbus** (HACS) with a working local connection to the inverter.
+1. **Solis Modbus** (HACS) with a working local connection to the inverter. With a Marstek
+   battery instead: see *A Marstek battery* below.
 2. A **solar forecast** in the Energy dashboard (Settings → Dashboards → Energy →
    Solar panels → forecast), for example **Forecast.Solar**. Leave its damping off:
    Battery Pilot learns the shade itself.
@@ -391,12 +393,15 @@ log says which setting to fill in.
 | Setting | Found automatically | Needed | Used for | Without it |
 | --- | --- | --- | --- | --- |
 | `grid_import_power` | a sensor named like `grid_import_power` or `import_power` | required | The quarter-hour meter: monthly capacity peak, the projection of where this quarter-hour is heading, peak warnings, pausing charging, and the "same usage" bill (kWh bought). | Battery Pilot does not start. |
-| `house_load_power` | `household_load_power`, `house_load` or `load_power` | required | Grid-charge current that keeps import under the limit (it follows the house load), learning your consumption pattern and your usual quarter-hour peaks, the night target, and the nightly replay. | Battery Pilot does not start. |
+| `house_load_power` | `household_load_power`, `house_load` or `load_power` | required (with a Marstek: or worked out from grid, solar and battery) | Grid-charge current that keeps import under the limit (it follows the house load), learning your consumption pattern and your usual quarter-hour peaks, the night target, and the nightly replay. | Battery Pilot does not start. |
 | `battery_soc` | `battery_soc` | required | Planning from the battery's real state, stopping a charge or export at its target, the nightly replay's starting point. | Battery Pilot does not start. |
 | `grid_export_power` | `grid_export_power` or `export_power` (not an export *limit*) | optional | kWh sold, in the "same usage" bill. | Sold kWh count as 0 in the comparison. |
 | `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
 | `battery_power` | `battery_power_net` (the Solis *Battery Power Net*: + discharging, − charging; not the unsigned *Battery Power*) | optional | Measuring the inverter's own use, so it can be shown on its own and left out of the measured round-trip efficiency (see *Measured efficiency*). | The measured efficiency includes the inverter's own use. |
 | `battery_voltage_sensor` | `battery_voltage` | optional | Turning amps into kW for the charge current and the plan. | The *Battery nominal voltage* setting is used. |
+| `grid_power` | with a Marstek battery: a HomeWizard P1 meter's *Power* (`p1_meter_power`); otherwise only when set | optional | One signed grid meter (+ import, − export), used instead of `grid_import_power` and `grid_export_power` while it has a value (they are the fallback). A P1 meter is fast and measures what you are billed on. | The two entities above. |
+| `quarter_average_power` | with a Marstek battery: the P1 meter's *Average demand*; otherwise only when set | optional | The meter's own average of the running quarter-hour, for the projection that pauses charging before the capacity peak is passed. | Battery Pilot's own quarter-hour meter. |
+| `month_peak_power` | with a Marstek battery: the P1 meter's *Peak demand current month*; otherwise only when set | optional | The month's capacity peak as the meter has it: it counts when it is higher than Battery Pilot measured. | Battery Pilot's own measurement. |
 
 Power sensors can be in W or kW: the unit is read from the entity.
 
@@ -444,6 +449,95 @@ entities match, the one with `solis` in its name wins.
 
 If the page says the battery is charging but it does not, switch to the other one. The log says
 at the start which one is used.
+
+### A Marstek battery
+
+With *Battery* (`battery_system`) set to `marstek`, Battery Pilot plans and steers a
+Marstek Venus (C, D or E) instead of a Solis. The grid, house and solar readings come from
+your inverter's integration as in the table above; with **Solax Modbus** (wills106) they are
+found by themselves: `…_grid_import`, `…_grid_export`, `…_house_load` and
+`…_pv_power_total`, and its `…_export_control_user_limit` for blocking export.
+
+The battery is seen by two integrations, and Battery Pilot uses both:
+
+- **Marstek Local API** (jaapp/ha-marstek-local-api, HACS): required. Its readings are the
+  first choice, and it is the only way to steer the battery: a charge or discharge is its
+  `marstek_local_api.set_passive_mode` action (power = current × *Battery nominal voltage*,
+  for 5 minutes, sent again every 2 minutes while it should go on), and self-use is its
+  *Auto mode* button.
+- **Marstek Cloud** (DoctaShizzle/marstek_cloud, HACS): optional, a backup for the
+  readings only (it cannot steer).
+
+The local link drops out now and then. The local integration then keeps showing its last
+values, so Battery Pilot watches its *Last message received* sensor: with no message for
+*Marstek: reading too old after* (`marstek_stale_s`, 300 s), the cloud's SOC and power are used
+instead, as long as the cloud's report is not that old either. The log says when it switches
+and back, and the *Log* tab shows where the readings come from. With neither fresh, the SOC is
+unknown: after a minute a charge or discharge is stopped (Auto mode). Every Marstek action has
+20 seconds to answer; one that fails or times out counts as a failed command (the log says the
+Marstek did not answer, and after three a problem shows on the page), and nothing is sent for a
+minute before the next try, so a struggling local API is not flooded. When no command gets
+through, the last passive command ends by itself within 5 minutes.
+
+| Setting | Found automatically | Needed |
+| --- | --- | --- |
+| `battery_soc` | the Local API's *State of charge* | required, unless the cloud's is found |
+| `battery_power` | the Local API's *Power* (+ charging) | optional: the house-load correction below, the efficiency figure |
+| `battery_voltage_sensor` | the Local API's *Voltage* | optional |
+| `marstek_auto_mode_button` | the Local API's *Auto mode* button | required |
+| `marstek_last_message` | the Local API's *Last message received* | required: without it a silent local link (whose values freeze) cannot be noticed |
+| `battery_soc_backup` | the cloud's *State of Charge* | optional: the backup |
+| `battery_charge_power_backup`, `battery_discharge_power_backup` | the cloud's *Charge Power* and *Discharge Power* | optional |
+| `battery_report_time_backup` | the cloud's *Report Time* | needed for the backup: a cloud figure is used only with a report time that is recent (an epoch time or a date; without a time zone, Home Assistant's) |
+| `marstek_device_id` | the device of the Local API's entities | required for the passive action; set it only if the log asks |
+
+They are found in Home Assistant's entity registry by the integration they belong to, so
+renamed entities are found too. One battery is supported; with several on the Local API, set
+the entities of the one to steer.
+
+**House load.** A Solax's *House Load* is what the inverter gives minus what goes to the
+grid, so it counts the Marstek's charging as consumption and its discharging as negative
+consumption. With *Marstek: house load includes the battery* (`marstek_load_includes_battery`,
+on) Battery Pilot adds the battery's power back (so it learns your real consumption); turn it
+off if your house-load sensor already leaves the battery out.
+
+**Who measures what.** The P1 meter measures only what goes to and comes from the grid; solar
+comes from the inverter (`pv_power`, the Solax *PV Power Total*), and the battery's power from
+the Marstek. Without a house-load sensor (a Solax without its own meter, for one), Battery Pilot
+works the house load out from the three: grid (+ import) + solar + the battery's discharge
+(− its charge). `pv_power` is then required.
+
+**Settings for a Venus E** (5.12 kWh, 2.5 kW): *Battery capacity* 5.12, *Battery nominal
+voltage* 51.2, *Maximum charge current* and *Maximum discharge current* 48 (2.5 kW; 15 for a
+battery limited to 800 W), and a *Battery minimum SOC* at or above the one set in the
+Marstek app (it is usually 10 %, the default here).
+
+**Peak shaving and solar hold** are done by Battery Pilot, since a Marstek has no such modes:
+in peak shaving it sets the passive power from the grid meter (a P1 meter is best) every 10
+seconds, so the battery gives only what the house takes above *Grid import limit* (never below
+the shaving level, the battery minimum), and charges with what would be exported. A new power is
+sent when it differs 200 W or more, at most once a minute (every 30 seconds while the grid is
+more than 0.5 kW over the limit, to protect the capacity peak), and the command is renewed every
+2 minutes; it lapses after 5. Solar hold is passive at 0 W. So the plan can keep the battery for the evening
+cooking peak, the peak buffer and the winter level work, and the battery covers the car's peaks.
+How much to keep, and whether to charge for it at night, follows from the solar forecast and the
+peaks it has learned (see *How it decides*).
+
+**The capacity tariff.** Charging from the grid never takes the quarter-hour over *Grid import
+limit* (`import_limit_kw`): the charge power follows the house load, and pauses when the
+quarter-hour heads over it. With a P1 meter that projection starts from the meter's own
+quarter-hour average. Set the limit a little under the peak you want to stay below (2.3 kW for
+2.5 kW).
+
+**Full power.** A Marstek's converter draws a roughly fixed power whenever it runs, so charging
+fast and then waiting loses less than charging slowly. With *Charge and discharge at full
+power* (`full_power`) on, a planned charge runs as fast as the import limit and *Maximum charge
+current* allow (instead of being spread over the hour), and an export at *Maximum discharge
+current*. Once the target is reached within the hour, the charge holds at the minimum current
+(10 A), at most 2 % above the target, as without the option.
+
+Battery Pilot warns at the start when the battery settings still look like a Solis's (16 kWh,
+or more than 2.5 kW).
 
 ### Electric car (read every 10 seconds, only when set)
 
@@ -624,6 +718,11 @@ The contract formulas in full (market prices in EUR/MWh):
 
 | Setting | Key | Default | What it does |
 | --- | --- | --- | --- |
+| Battery | `battery_system` | solis | `solis`: a Solis hybrid. `marstek`: a Marstek Venus (see *A Marstek battery*). |
+| Marstek device ID | `marstek_device_id` | (empty) | Only when the log asks for it. |
+| Marstek: reading too old after (s) | `marstek_stale_s` | 300 | A local reading without a message this long, or a cloud report this old, is not used. |
+| Charge and discharge at full power | `full_power` | off | A charge or discharge as fast as the limits allow instead of spread over its hour (see *A Marstek battery*). |
+| Marstek: house load includes the battery | `marstek_load_includes_battery` | on | Takes the Marstek's power out of the house load. |
 | Solis slot entities | `slot_entities` | time_charging | Which set of time-of-use entities to drive; switch to `grid_time_of_use` if charging does nothing. |
 | Solis charge command | `charge_command` | auto | `auto`: the Solis Modbus force action when Home Assistant has it, else the time-of-use slots. `force` or `time_slot` to choose. |
 | Solis Modbus slave ID | `solis_slave` | (empty) | Only with several inverters on the integration: where the force action goes. |

@@ -24,6 +24,7 @@ Once a night `nightly()` learns shade and load from yesterday's records and repl
 | `simulate.py` | `Battery` and `step`: the energy balance shared by plan replay, night target and tests |
 | `controller.py` | `decide`: one plan step + live readings → one inverter command |
 | `solis.py` | `Solis`: the commands, through the Solis Modbus integration's entities |
+| `marstek.py` | `Marstek`: the same interface as `Solis` for a Marstek Venus (Local API passive mode, Auto button); `choose`: local reading first, cloud when the local one is stale |
 | `discovery.py` | finds the user's entities by name (`ENTITIES`), unless the options name them |
 | `config.py` | `Options` (every setting with its default), validation, `from_dict` |
 | `tariffs.py` | buy and sell price per contract, break-even |
@@ -104,6 +105,40 @@ return to self-use, and `_reconcile` reads that switch back too. `tick()` stops 
 and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
 Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop stalls,
 `App.healthy`); the add-on linter rejects the old `watchdog` key in `config.yaml`.
+
+## A Marstek battery (`marstek.py`, `battery_system: marstek`)
+
+`App.solis` is then a `marstek.Marstek` (same attributes and methods; `force` is always true, so the
+renewal and the reconcile paths of the Solis force action apply; peak shaving and solar hold are
+emulated, see below). Every action goes through `Marstek._call` with `CALL_TIMEOUT_S` (`HA.call(timeout=)`):
+a timeout is `MarstekTimeout`, a command failure (`_cmd_failures`, the problem banner), not `HAUnreachable`.
+After a failure `Marstek.failed` sets `retry_at`; `App._marstek_resting` sends nothing before it
+(`RETRY_S`), in `_apply` and `_follow`. Passive commands last `PASSIVE_S` (300 s), renewed every
+`RENEW_S` (120 s); `follow` sends at most every `FOLLOW_GAP_S` (60 s), `URGENT_GAP_S` (30 s) when the grid
+is `URGENT_KW` over the limit, and only changes of `FOLLOW_STEP_W`. Watts are clamped to `max_charge_w`/
+`max_discharge_w`. Readings count only with a known age (`choose`); `marstek_last_message` is required.
+`PeakTracker.observe` ignores the first quarter of a month (the P1 still shows last month's peak).
+The fake: `local_down` raises `HAUnreachable` from `TimeoutError` (records the timeout), `marstek_lag_s`
+delays a new passive power.
+Charge/discharge = `marstek_local_api.set_passive_mode` (W = amps × volts, `PASSIVE_S`, renewed every
+`RENEW_S`), self-use = the Local API's *Auto mode* button. Discovery uses the entity registry
+(`config/entity_registry/list`, matched by platform + unique-ID suffix in `marstek.REGISTRY`), with the
+local integration's default names as fallback; `discovery.SOLIS_ONLY` keys are not looked for.
+`App._battery` picks SOC and power per tick (`marstek.choose`: the local value while *Last message
+received* ≤ `marstek_stale_s`, else the cloud's while its report time is that fresh, else None → blind).
+With `marstek_load_includes_battery` the battery power (+ discharging) is added to the house load (a
+Solax *House Load* counts an AC-coupled battery), live and in `bootstrap`. Peak shaving and solar hold are emulated
+(`can_peak_shave`/`can_solar_hold` are true with a Marstek): `Marstek.peak_shave`/`solar_hold` start
+passive at 0 W and `App._follow` calls `Marstek.follow` every tick with the grid (+ import) to set the
+passive power (`shave_power`: integral on the power last sent, battery only above the limit, surplus
+charged, nothing below the shaving level), so planner and simulator semantics are what a Solis does.
+`grid_power` (one signed meter, a P1), `quarter_average_power` (`QuarterMeter.projection_kw`) and
+`month_peak_power` (`PeakTracker.observe`) are auto-found only with a Marstek. Without `house_load_power` (Marstek only; `pv_power` then required) `App.tick` uses
+import − export + pv + battery. `full_power` (any battery):
+`controller.decide` charges at the follow current and discharges at the maximum instead of pacing; the
+energy per slot, and so planner and simulator, are unchanged (`simulate.step` still paces: only the
+timing inside a slot differs). `tests/fake_ha.py` with
+`marstek=True` is a Solax + Marstek house (`local_down`, `cloud_down`); `tests/test_marstek.py`.
 
 ## Solar hold and the peak buffer
 
