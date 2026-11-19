@@ -227,6 +227,9 @@ configuration:
   marstek_auto_mode_button:
     name: "Marstek Auto mode button"
     description: "Only with a Marstek battery: the Local API's Auto mode button (self-use). Leave empty to find it automatically."
+  marstek_mode_select:
+    name: "Marstek operating mode select"
+    description: "Only with a Marstek battery: a select entity with the battery's operating modes, used for Auto mode (self-use) instead of the Auto mode button. Leave empty to find it automatically."
   marstek_last_message:
     name: "Marstek last message entity"
     description: "Only with a Marstek battery: the Local API's Last message received sensor, to notice a silent link (required). Leave empty to find it automatically."

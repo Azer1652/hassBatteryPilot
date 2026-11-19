@@ -205,12 +205,17 @@ class FakeHA:
             self.s[eid]["state"] = str(data["value"])
         elif domain == "time" and service == "set_value":
             self.s[eid]["state"] = data["time"]
-        elif domain == "marstek_local_api" or (domain == "button" and "marstek" in str(eid)):
+        elif domain == "marstek_local_api" or (domain in ("button", "select") and "marstek" in str(eid)):
             if self.local_down:
                 # the integration retries for 45 s; the app's client gives up at its timeout
                 self.call_timeouts.append(timeout)
                 raise HAUnreachable(f"POST /services/{domain}/{service}: TimeoutError") from TimeoutError()
-            if domain == "button":
+            if domain == "select":
+                assert data["option"] in self.s[eid]["attributes"]["options"], data
+                self.s[eid]["state"] = data["option"]
+                if data["option"] == "Auto":
+                    self.forced = self.pending = None
+            elif domain == "button":
                 if eid.endswith("auto_mode"):
                     self.forced = self.pending = None
             else:

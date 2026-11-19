@@ -70,22 +70,38 @@ REGISTRY = {
     "battery_voltage": (LOCAL, "battery_voltage"),
     "marstek_last_message": (LOCAL, "last_message_received"),
     "marstek_auto_mode_button": (LOCAL, "auto_mode_button"),
+    "marstek_mode_select": (LOCAL, "operating_mode", "select"),   # (the sensor of the same name is not it)
     "battery_soc_backup": (CLOUD, "soc"),
     "battery_charge_power_backup": (CLOUD, "charge"),
     "battery_discharge_power_backup": (CLOUD, "discharge"),
     "battery_report_time_backup": (CLOUD, "report_time"),
 }
+
+
+def auto_option(options) -> str:
+    """The option of an operating-mode select that is Auto mode (its spelling varies)."""
+    for o in options or []:
+        if str(o).strip().lower() in ("auto", "auto mode", "automatic"):
+            return str(o)
+    for o in options or []:
+        if "auto" in str(o).lower():
+            return str(o)
+    return "Auto"
+
+
 # Unique IDs that end like one above but are something else.
 NOT = {"charge": ("total_charge",)}
 
 
 def registry_match(key: str, registry: list[dict]) -> list[dict]:
     """Entity registry entries of the Marstek integrations that are `key`."""
-    platform, suffix = REGISTRY[key]
+    platform, suffix, *domain = REGISTRY[key]
     out = []
     for e in registry or []:
         uid = str(e.get("unique_id") or "")
         if e.get("platform") != platform or e.get("disabled_by") or not uid.endswith("_" + suffix):
+            continue
+        if domain and not str(e.get("entity_id") or "").startswith(domain[0] + "."):
             continue
         if any(uid.endswith("_" + other) for other in NOT.get(suffix, ())):
             continue
@@ -180,6 +196,7 @@ class Marstek:
     shave_limit_kw: float = 0.0
     shave_soc: float = 0.0
     retry_at: datetime | None = None    # after a failed command: nothing is sent before this
+    auto_option: str = "Auto"           # the operating-mode select's option for Auto mode
 
     def waiting(self, t: datetime) -> bool:
         """A command failed less than RETRY_S ago: the local API gets a rest."""
@@ -294,7 +311,12 @@ class Marstek:
         self._note(t_local, "solar hold: passive 0 W, surplus to the grid")
 
     async def self_use(self, t_local: datetime, why: str = ""):
-        await self._call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
+        """Auto mode: through the operating-mode select when there is one, else the Auto mode button."""
+        if "marstek_mode_select" in self.entities:
+            await self._call("select", "select_option", {"entity_id": self.entities["marstek_mode_select"],
+                                                          "option": self.auto_option})
+        else:
+            await self._call("button", "press", {"entity_id": self.entities["marstek_auto_mode_button"]})
         self.mode, self.slot_hour, self.amps, self.forced, self.power_w = "self_use", "", 0, False, 0
         self.shave, self.hold = False, False
         self._note(t_local, "auto mode (self-use)" + (f" ({why})" if why else ""))

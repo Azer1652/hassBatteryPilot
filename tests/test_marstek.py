@@ -422,3 +422,47 @@ async def test_the_last_message_sensor_is_required(tmpdata):
     found, missing = resolve_all(Options(**MARSTEK), {k: v for k, v in (await fake.states()).items()
                                                       if "last_message" not in k}, True, fake.registry)
     assert "marstek_last_message" in missing
+
+
+async def test_auto_mode_through_the_operating_mode_select(tmpdata):
+    """Without the Auto mode button, the operating-mode select picks Auto."""
+    from fake_ha import st
+
+    fake = FakeHA(utc(2026, 11, 19, 12), soc=40, marstek=True)
+    del fake.s["button.marstek_venuse_auto_mode"]
+    fake.registry = [e for e in fake.registry if e["entity_id"] != "button.marstek_venuse_auto_mode"]
+    fake.s["select.marstek_venuse_operating_mode"] = st("Manual", options=["Auto", "AI", "Manual", "Passive"])
+    fake.registry.append({"entity_id": "select.marstek_venuse_operating_mode", "platform": "marstek_local_api",
+                          "unique_id": "aabbcc_operating_mode", "device_id": "dev1", "disabled_by": None})
+    fake.registry.append({"entity_id": "sensor.marstek_venuse_operating_mode", "platform": "marstek_local_api",
+                          "unique_id": "aabbcc_operating_mode", "device_id": "dev1", "disabled_by": None})
+    fake.s["sensor.marstek_venuse_operating_mode"] = st("Manual")
+    app = await start(tmpdata, fake)
+    assert app.ent_ids["marstek_mode_select"] == "select.marstek_venuse_operating_mode"
+    fake.s[FILL]["state"] = "on"
+    await run_until(app, fake, fake.now + timedelta(minutes=3))
+    assert app.solis.mode == "charge"
+    fake.s[CONTROL]["state"] = "off"
+    await run_until(app, fake, fake.now + timedelta(minutes=1))
+    assert ("select", "select_option", {"entity_id": "select.marstek_venuse_operating_mode", "option": "Auto"}) \
+        in fake.calls
+    assert fake.mode() == "self_use" and fake.s["select.marstek_venuse_operating_mode"]["state"] == "Auto"
+
+
+def test_auto_option_spellings():
+    assert M.auto_option(["AI", "Auto", "Manual"]) == "Auto"
+    assert M.auto_option(["ai", "auto_mode", "manual"]) == "auto_mode"
+    assert M.auto_option(None) == "Auto"
+
+
+async def test_without_the_passive_action_it_says_which_integration(tmpdata):
+    fake = FakeHA(utc(2026, 11, 19, 12), marstek=True)
+    real = fake.services
+
+    async def services():
+        return [d for d in await real() if d["domain"] != "marstek_local_api"]
+
+    fake.services = services
+    app = App(Options(**MARSTEK), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert not await app.setup()
+    assert "set_passive_mode" in app.problem

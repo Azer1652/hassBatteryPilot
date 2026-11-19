@@ -340,7 +340,8 @@ class App:
             self.event(f"Could not create the Battery Pilot helpers ({e}); control stays off.", logging.ERROR)
         if self.o.marstek:
             device = self.o.marstek_device_id or M.device_of(self.ent_ids.get("battery_soc"), registry) \
-                or M.device_of(self.ent_ids.get("marstek_auto_mode_button"), registry)
+                or M.device_of(self.ent_ids.get("marstek_auto_mode_button"), registry) \
+                or M.device_of(self.ent_ids.get("marstek_mode_select"), registry)
             if not device:
                 self.problem = ("The Marstek battery's device was not found in Home Assistant: set marstek_device_id "
                                 "(Settings > Devices > the battery: the ID at the end of the page's address), then "
@@ -348,16 +349,29 @@ class App:
                 self.event(self.problem, logging.ERROR)
                 return False
             log.info("  ok       marstek device: %s", device)
+            if not any(d.get("domain") == M.LOCAL and M.PASSIVE_SERVICE in (d.get("services") or {})
+                       for d in services or []):
+                self.problem = (f"Home Assistant has no {M.LOCAL}.{M.PASSIVE_SERVICE} action: Battery Pilot steers a "
+                                "Marstek through the Marstek Local API integration (jaapp/ha-marstek-local-api). "
+                                "Install or update it, then restart the app.")
+                self.event(self.problem, logging.ERROR)
+                return False
             if self.o.battery_capacity_kwh == 16.0 or max(self.o.max_charge_kw, self.o.max_discharge_kw) > 2.6:
                 self.event(f"The battery settings look like a Solis's ({self.o.battery_capacity_kwh:g} kWh, up to "
                            f"{max(self.o.max_charge_kw, self.o.max_discharge_kw):.1f} kW): for a Venus E set Battery "
                            "capacity 5.12 and the maximum charge and discharge currents 48 A.", logging.WARNING)
             self.problem = None
             self.solis = M.Marstek(self.ha, {k: v for k, v in self.ent_ids.items()
-                                             if k in ("marstek_auto_mode_button", "export_limit")},
+                                             if k in ("marstek_auto_mode_button", "marstek_mode_select",
+                                                      "export_limit")},
                                    device_id=device, volts=self.o.battery_voltage,
                                    max_charge_w=int(self.o.max_charge_kw * 1000),
                                    max_discharge_w=int(self.o.max_discharge_kw * 1000))
+            if "marstek_mode_select" in self.ent_ids:
+                opts = ((states.get(self.ent_ids["marstek_mode_select"]) or {}).get("attributes") or {}).get("options")
+                self.solis.auto_option = M.auto_option(opts)
+                log.info("  ok       marstek auto mode: %s → %s", self.ent_ids["marstek_mode_select"],
+                         self.solis.auto_option)
         else:
             self.problem = None
             self.solis = Solis(self.ha, {k: v for k, v in self.ent_ids.items() if k in SOLIS_NEEDED + SOLIS_OPTIONAL},

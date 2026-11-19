@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.19.2
+
+- **Marstek: Auto mode through the operating-mode select.** Some versions of the Marstek Local
+  API integration have an *Operating mode* select instead of an *Auto mode* button. Battery
+  Pilot now finds that select by itself (`marstek_mode_select`) and picks its Auto option for
+  self-use; the button is only needed without it. Before, the app stopped with "Required
+  entities are missing: marstek_auto_mode_button".
+- With a Marstek, the app checks at the start that Home Assistant has the
+  `marstek_local_api.set_passive_mode` action, and says which integration to install if not.
+
 ## 2.19.1
 
 Fixes from a code review, each with a test.

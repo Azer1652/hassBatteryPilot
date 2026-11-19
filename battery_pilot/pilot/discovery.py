@@ -53,6 +53,7 @@ ENTITIES = {
     "quarter_average_power": ("sensor", [r"^p1_meter_average_demand$"], False, True),
     "month_peak_power": ("sensor", [r"^p1_meter_peak_demand_current_month$"], False, True),
     "marstek_auto_mode_button": ("button", [r"^marstek_.*auto_mode$"], False, False),
+    "marstek_mode_select": ("select", [r"^marstek_.*operating_mode$"], False, False),
     "marstek_last_message": ("sensor", [r"^marstek_.*last_message_received$"], False, False),
     "battery_soc_backup": ("sensor", [], False, False),
     "battery_charge_power_backup": ("sensor", [], False, True),
@@ -70,6 +71,7 @@ SOLIS_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_c
               "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "peak_shaving_limit",
               "peak_shaving_soc", "feed_in_priority_switch")
 MARSTEK_ONLY = ("grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button",
+                "marstek_mode_select",
                 "marstek_last_message", "battery_soc_backup",
                 "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup")
 TIME_SLOT_KEYS = ("charge_start", "charge_end", "discharge_start", "discharge_end")
@@ -181,6 +183,8 @@ def resolve_all(opts: Options, states: dict, force: bool = False,
                                "marstek_last_message")
                    if out[k].entity_id is None and not (k == "grid_import_power" and out["grid_power"].entity_id)
                    and not (k == "house_load_power" and out["pv_power"].entity_id)]
+        if "marstek_auto_mode_button" in missing and out["marstek_mode_select"].entity_id:
+            missing.remove("marstek_auto_mode_button")      # Auto mode through the operating-mode select
         if out["battery_soc"].entity_id is None and out["battery_soc_backup"].entity_id is None:
             missing.append("battery_soc")
         return out, missing

@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.19.1"
+version: "2.19.2"
 slug: battery_pilot
 description: Plans and steers a home battery (Solis hybrid or Marstek Venus) against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -138,6 +138,7 @@ schema:
   quarter_average_power: str?
   month_peak_power: str?
   marstek_auto_mode_button: str?
+  marstek_mode_select: str?
   marstek_last_message: str?
   battery_soc_backup: str?
   battery_charge_power_backup: str?

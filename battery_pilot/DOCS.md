@@ -484,7 +484,8 @@ through, the last passive command ends by itself within 5 minutes.
 | `battery_soc` | the Local API's *State of charge* | required, unless the cloud's is found |
 | `battery_power` | the Local API's *Power* (+ charging) | optional: the house-load correction below, the efficiency figure |
 | `battery_voltage_sensor` | the Local API's *Voltage* | optional |
-| `marstek_auto_mode_button` | the Local API's *Auto mode* button | required |
+| `marstek_auto_mode_button` | the Local API's *Auto mode* button | required, unless the select below is found |
+| `marstek_mode_select` | a select `marstek_…_operating_mode` (an operating-mode select, as some versions of the integration have) | used for Auto mode before the button: Battery Pilot picks its option with *auto* in the name |
 | `marstek_last_message` | the Local API's *Last message received* | required: without it a silent local link (whose values freeze) cannot be noticed |
 | `battery_soc_backup` | the cloud's *State of Charge* | optional: the backup |
 | `battery_charge_power_backup`, `battery_discharge_power_backup` | the cloud's *Charge Power* and *Discharge Power* | optional |

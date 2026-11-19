@@ -19,7 +19,8 @@ ENTITY_KEYS = (
     "discharge_start", "discharge_end", "export_limit", "peak_shaving_switch", "peak_shaving_limit",
     "peak_shaving_soc", "feed_in_priority_switch", "forecast_power_now",
     "forecast_today", "forecast_tomorrow", "price_sensor", "car_charger_power",
-    "grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button", "marstek_last_message",
+    "grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button", "marstek_mode_select",
+    "marstek_last_message",
     "battery_soc_backup",
     "battery_charge_power_backup", "battery_discharge_power_backup", "battery_report_time_backup",
 )
