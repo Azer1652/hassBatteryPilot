@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.21.0
+
+For a hybrid inverter with more panels than AC output, for example 6.5 kWp on a 5 kW Solis
+S6-EH1P5K.
+
+- **New setting: *Inverter AC output* (`inverter_ac_kw`).** Set it to your inverter's rated
+  AC output (5 for an S6-EH1P5K). The limit is on the AC side only: the house and the grid
+  together get at most that much from the inverter, while the battery charges on the DC side
+  on top of it. With 6.5 kW of sun the battery takes the extra 1.5 kW while it has room; only
+  when it is full, or in solar hold, is the extra held back. The plan and the contract
+  comparison now count that loss. Before, they counted on the full export limit on top of what
+  the house used. A solar hold in an hour above the inverter's output is planned only when
+  keeping room in the battery is still worth more.
+- **Shade learning no longer mistakes a held-back inverter for shade.** Hours in which the
+  inverter was at its AC output (with the setting) or export was at the export limit (for
+  everyone) are left out. Before, a full battery on a clear day could teach Battery Pilot that
+  the panels are shaded at noon.
+- **What you have to do:** an update never changes your settings, so set *Inverter AC output*
+  yourself if your panels can give more than the inverter (0, the default, changes nothing).
+  For the plan to see those hours, the solar forecast must not be cut off at the inverter:
+  leave Forecast.Solar's *inverter size* empty, or give Solcast the panels' size as its AC
+  capacity.
+- **Not yet checked on a real inverter.** On a clear day, *Total PV Power* should go above the
+  inverter's output while the battery charges and stay near it once the battery is full.
+  Please also report what it does with *feed-in priority* (solar hold) on: if the battery
+  still takes the extra in that mode, solar hold could use it.
+
 ## 2.20.0
 
 A third contract type: **variable**, a Belgian monthly-indexed contract whose price changes
