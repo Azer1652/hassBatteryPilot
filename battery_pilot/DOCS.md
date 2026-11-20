@@ -752,6 +752,7 @@ variable contract against fixed on the same days only.
 | --- | --- | --- | --- |
 | Grid import limit | `import_limit_kw` | 2.3 kW | The quarter-hour average import Battery Pilot aims to stay under. Grid charging is planned 0.3 kW under it and pauses above it; the battery keeps energy for your usual peaks above it; warnings start 0.3 kW over it. Crossed only at a price that earns more than the higher capacity peak costs (see *Price spike* under *How it decides*); with *Capacity tariff* 0 it is never crossed. |
 | Normal export limit | `export_limit_kw` | 5.0 kW | The most your installation may export (Fluvius allows 5 kW on a single-phase connection). The plan never counts on more. After a negative-price block the inverter's export limit is put back to what it was before the block; this setting is used only when that could not be read. |
+| Inverter AC output | `inverter_ac_kw` | 0 kW (not limited) | Only when your panels can give more than the inverter's rated AC output, for example 6.5 kWp on a 5 kW Solis S6-EH1P5K (then 5). House consumption and export together never get more than this from the inverter: above it the panels charge the battery while it has room and are held back when it is full. The plan and the contract comparison count that loss, and those hours are not learned as shade. Solis only (a Marstek beside another inverter cannot catch it). See *Solar hold*. |
 | Capacity tariff | `capacity_tariff_eur_kw_year` | 52.37 €/kW/year | What one kW of monthly peak costs; weighs peaks in the plan, prices a higher peak at a price spike (one kW more this month costs this ÷ 12) and adds the capacity cost in the comparison. 0 if your grid has none. |
 | Capacity tariff minimum | `capacity_min_kw` | 2.5 kW | The lowest monthly peak that is billed: import up to it, or up to this month's highest quarter-hour so far, costs nothing extra. |
 | Car: smallest charging power | `car_min_kw` | 0 kW (off) | Switches car detection on. A jump in house consumption of at least this many kW above the level of the last 10 minutes, lasting 3 minutes, is taken as the car charging. The session ends when consumption is below that level plus half this value for 2 minutes. For a charger limited to 5 kW, about 3.5 is a good value. Not needed with the `car_charger_power` entity. See *Electric car*. |
@@ -828,6 +829,19 @@ keeps its room for hours in which surplus cannot be sold. Without the switch not
 changes. It has not yet been checked on a real inverter. On the first sunny day, check
 that the switch goes on in the morning, that export shows, and that the battery charges
 again at midday.
+
+When your panels can give more than the inverter's AC output, set *Inverter AC output*
+(`inverter_ac_kw`). The plan then knows that the house and the grid get at most that much from
+the inverter, and that above it the panels charge the battery or are held back. Battery Pilot
+assumes that with feed-in priority on the battery takes nothing, so above that output solar
+hold holds the panels back; the plan counts that loss, and plans solar hold in such an hour only
+when keeping the room is still worth more (for example when the battery fills up later anyway
+with solar that cannot be sold). For the plan to see those hours, the solar forecast must not be
+cut off at the inverter: leave Forecast.Solar's *inverter size* empty, or give Solcast the
+panels' size as its AC capacity. To check on a clear day: *Total PV Power* goes above the
+inverter's output while the battery charges, and stays near it once the battery is full. If it
+also goes above it with feed-in priority on, the inverter stores the rest in that mode too:
+please report it, the plan could then use that.
 
 ### Export and import the settings
 

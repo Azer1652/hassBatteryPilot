@@ -89,6 +89,9 @@ configuration:
   export_limit_kw:
     name: "Normal export limit (kW)"
     description: "The most your installation may export (Fluvius: 5 kW on a single-phase connection). The plan never counts on more, and it is restored after export was blocked at a negative price."
+  inverter_ac_kw:
+    name: "Inverter AC output (kW)"
+    description: "The hybrid inverter's rated AC output (5 for a Solis S6-EH1P5K), when the panels can give more: above it the panels charge the battery or are held back. 0: not limited. Solis only."
   capacity_tariff_eur_kw_year:
     name: "Capacity tariff (EUR per kW per year, incl. VAT)"
     description: "Fluvius 2026: about 52 EUR. Set 0 if your grid has no capacity tariff."

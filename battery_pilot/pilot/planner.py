@@ -11,7 +11,9 @@ slot the battery can only do what the Solis can be told to do:
               the way to keep what is in the battery for a dearer hour;
 * solar_hold - (only with the inverter's feed-in priority switch) solar surplus is
               exported and not stored: the way to keep room in the battery for hours
-              in which the surplus cannot be sold (negative price, export limit).
+              in which the surplus cannot be sold (negative price, export limit, or
+              above the inverter's AC output). Above that output solar hold holds the
+              panels back (`simulate.clip_kwh`), and that loss is in its cost.
 
 The cost of a slot is what is bought minus what is sold, plus battery wear,
 plus a penalty for grid import above the import limit (the capacity tariff).
@@ -53,7 +55,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Options
 from .prices import PriceSlot
-from .simulate import Battery
+from .simulate import Battery, clip_kwh
 from .simulate import step as sim_step
 from .tariffs import Tariff, in_window, is_night
 
@@ -164,6 +166,7 @@ def _flow(b: Battery, s: Slot, de: float, curtail_negative: bool) -> tuple[float
         grid, dis = net + de / b.eta_c, 0.0
     else:
         grid, dis = net + de * b.eta_d, -de
+    grid += clip_kwh(b, s.pv_kwh, max(de, 0.0), dis, s.hours)   # above the inverter's AC output: held back
     imp, exp = (grid, 0.0) if grid > 0 else (0.0, -grid if grid < 0 else 0.0)
     exp = min(exp, b.export_limit_kw * s.hours)
     revenue = 0.0 if (curtail_negative and s.sell < 0) else exp * s.sell

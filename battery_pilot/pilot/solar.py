@@ -63,17 +63,19 @@ class ShadeModel:
             out.append(round(sum(f * x for f, x in zip(self.factors[m], self.weights[m])) / w, 3) if w > 0 else None)
         return out
 
-    def learn_records(self, records: list[QuarterRecord], forecast_archive: dict[str, float], tz: ZoneInfo) -> int:
+    def learn_records(self, records: list[QuarterRecord], forecast_archive: dict[str, float], tz: ZoneInfo,
+                      export_limit_kw: float | None = None, ac_max_kw: float | None = None) -> int:
         """Learn from closed quarters and the hourly forecast that was archived for them.
-        Hours in which export was blocked are skipped: the inverter held the panels back then,
-        and that is not shade."""
+        Hours in which the inverter may have held the panels back (`held_back`: export blocked,
+        at the export limit or at its AC output) are skipped: that is not shade."""
         by_hour: dict[datetime, list[QuarterRecord]] = {}
         for r in records:
             by_hour.setdefault(r.start.replace(minute=0), []).append(r)
         n = 0
         for hour, recs in by_hour.items():
             fc = forecast_archive.get(hour.isoformat())
-            if fc is None or len(recs) < 4 or any(r.covered.get("pv", 0) < 0.9 or r.blocked for r in recs):
+            if fc is None or len(recs) < 4 or any(r.covered.get("pv", 0) < 0.9
+                                                  or held_back(r, export_limit_kw, ac_max_kw) for r in recs):
                 continue
             local = hour.astimezone(tz)
             n += self.learn(local.month, local.hour, sum(r.kwh["pv"] for r in recs), fc)
@@ -137,22 +139,35 @@ def hourly_from_daily(day: date, total_kwh: float, latitude: float, longitude: f
     return {h: total_kwh * w / tot for h, w in weights.items()} if tot > 0 else {}
 
 
+def held_back(r: QuarterRecord, export_limit_kw: float | None = None, ac_max_kw: float | None = None) -> bool:
+    """The inverter may have held the panels back in this quarter: export blocked, export at the
+    export limit, or its AC output (house + export - import) at its rating (`inverter_ac_kw`)."""
+    if r.blocked:
+        return True
+    k = r.kwh
+    if export_limit_kw and k.get("export", 0.0) * 4 >= 0.95 * export_limit_kw:
+        return True
+    ac = (k.get("load", 0.0) + k.get("export", 0.0) - k.get("import", 0.0)) * 4
+    return bool(ac_max_kw) and ac >= 0.95 * ac_max_kw
+
+
 def intraday_factor(records: list[QuarterRecord], hourly: dict[datetime, float], shade: ShadeModel,
-                    now: datetime, tz: ZoneInfo, export_limit_kw: float | None = None) -> tuple[float, float]:
+                    now: datetime, tz: ZoneInfo, export_limit_kw: float | None = None,
+                    ac_max_kw: float | None = None) -> tuple[float, float]:
     """(measured / expected solar over the last hours of today, the expected kWh it rests on).
 
     The shade factors are an average over weeks; this is today: a day much cloudier or clearer
-    than forecast. Quarters in which the inverter held the panels back (export blocked, or at
-    the export limit) are skipped: that is not weather."""
+    than forecast. Quarters in which the inverter held the panels back (`held_back`) are
+    skipped: that is not weather."""
     today = now.astimezone(tz).date()
     quarter = timedelta(minutes=15)
     actual = expected = 0.0
     for r in records:
         if r.start < now - timedelta(hours=NOWCAST_WINDOW_H) or r.start + quarter > now:
             continue
-        if r.start.astimezone(tz).date() != today or r.covered.get("pv", 0) < 0.9 or r.blocked:
+        if r.start.astimezone(tz).date() != today or r.covered.get("pv", 0) < 0.9:
             continue
-        if export_limit_kw and r.kwh.get("export", 0.0) * 4 >= 0.95 * export_limit_kw:
+        if held_back(r, export_limit_kw, ac_max_kw):
             continue
         hour = r.start.replace(minute=0, second=0, microsecond=0)
         fc = hourly.get(hour)
@@ -176,10 +191,11 @@ class PvForecast:
         self.nowcast: tuple[float, datetime] | None = None     # (factor, measured at)
 
     def observe(self, records: list[QuarterRecord], now: datetime, past: dict[datetime, float] | None = None,
-                export_limit_kw: float | None = None) -> float:
+                export_limit_kw: float | None = None, ac_max_kw: float | None = None) -> float:
         """Compare today's measured solar with the forecast and correct the rest of today.
         `past`: the forecast as it was for hours that have started, where `hourly` no longer has them."""
-        factor, _ = intraday_factor(records, {**self.hourly, **(past or {})}, self.shade, now, self.tz, export_limit_kw)
+        factor, _ = intraday_factor(records, {**self.hourly, **(past or {})}, self.shade, now, self.tz,
+                                    export_limit_kw, ac_max_kw)
         self.nowcast = (factor, now) if abs(factor - 1) > 1e-6 else None
         return factor
 

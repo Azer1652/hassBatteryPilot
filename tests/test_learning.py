@@ -62,6 +62,29 @@ def test_an_hour_with_blocked_export_does_not_teach_shade():
     assert QuarterRecord.from_json(QuarterRecord(start, {}, {}, blocked=True).to_json()).blocked
 
 
+def test_an_hour_at_the_inverter_ac_output_or_the_export_limit_does_not_teach_shade():
+    """6.5 kWp on a 5 kW inverter with a full battery: the panels give what the inverter can pass
+    (house + export at 5 kW), not what the sun offers. That is not shade."""
+    start = local(2026, 6, 14, 13)
+
+    def hour(export):
+        return [QuarterRecord(start + timedelta(minutes=15 * i), {"import": 0, "export": export, "load": 0.1,
+                                                                   "pv": export + 0.1},
+                              {"import": 1, "export": 1, "load": 1, "pv": 1}) for i in range(4)]
+    archive = {start.isoformat(): 6.5}
+    at_ac = hour(4.9 / 4)                              # 0.1 + 4.9 = 5 kW out of the inverter
+    assert ShadeModel().learn_records(at_ac, archive, BXL) == 1                     # (without the setting: learned)
+    m = ShadeModel()
+    assert m.learn_records(at_ac, archive, BXL, export_limit_kw=5.0, ac_max_kw=5.0) == 0
+    assert m.factor(6, 15) == 1.0
+    assert ShadeModel().learn_records(hour(4.0 / 4), archive, BXL, export_limit_kw=5.0, ac_max_kw=5.0) == 1
+    at_export = hour(4.9 / 4)
+    assert ShadeModel().learn_records(at_export, archive, BXL, export_limit_kw=5.0) == 0
+    for r in at_ac:                                    # a grid charge in the same quarter: not at the output
+        r.kwh["import"] = 1.0
+    assert ShadeModel().learn_records(at_ac, archive, BXL, ac_max_kw=5.0) == 1
+
+
 def test_learn_from_quarters_with_archived_forecast():
     m = ShadeModel()
     start = local(2026, 1, 14, 14)
@@ -168,6 +191,11 @@ def test_dawn_and_missing_data_say_nothing_about_the_day():
     for r in clipped:
         r.kwh["export"] = 5.0 / 4
     assert intraday_factor(clipped, hourly, shade, now, BXL, export_limit_kw=5.0)[0] == 1.0
+    at_ac = quarters(local(2026, 6, 15, 9), 3, 0.2)
+    for r in at_ac:                                    # house + export = the inverter's 5 kW
+        r.kwh["load"], r.kwh["export"] = 1.0 / 4, 4.0 / 4
+    assert intraday_factor(at_ac, hourly, shade, now, BXL, export_limit_kw=5.0)[0] < 1.0
+    assert intraday_factor(at_ac, hourly, shade, now, BXL, export_limit_kw=5.0, ac_max_kw=5.0)[0] == 1.0
     # yesterday's quarters and the quarter still running do not count
     assert intraday_factor(quarters(local(2026, 6, 14, 9), 3, 0.2), hourly, shade, now, BXL)[0] == 1.0
     assert intraday_factor(quarters(local(2026, 6, 15, 12), 0.25, 0.0), hourly, shade, now, BXL)[0] == 1.0

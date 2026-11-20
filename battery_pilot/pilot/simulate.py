@@ -11,6 +11,11 @@
               only what is above it; solar surplus is stored as in self-use;
 * solar_hold - solar surplus is exported and not stored; a deficit as in self-use.
 
+With `Battery.ac_max_kw` (a hybrid whose panels can give more than its AC output) the
+inverter passes at most that much to the house and the grid; the rest charges the battery
+while it can, else the panels are held back (`clip_kwh`, counted as curtailed): in
+solar hold the battery waits, so everything above that output is held back.
+
 It is used to replay a plan against measured load and solar (the contract
 comparison), to work out the night target, and by the tests.
 """
@@ -38,13 +43,15 @@ class Battery:
     export_limit_kw: float = 5.0
     capacity_c_per_kw_month: float = 52.37 / 12 * 100
     buffer_soc: float = 0.0     # self-use stops here; below it only what is above the import limit (0: the minimum)
+    ac_max_kw: float = 0.0      # the hybrid inverter's AC output (0: not limited)
 
     @classmethod
     def from_options(cls, o: Options) -> Battery:
         return cls(o.battery_capacity_kwh, o.battery_min_soc, o.battery_reserve_soc, o.max_charge_kw,
                    o.max_discharge_kw, o.charge_efficiency, o.discharge_efficiency, o.wear_cost_c_kwh,
                    o.import_limit_kw, o.export_limit_kw, o.capacity_tariff_eur_kw_year / 12 * 100,
-                   o.battery_min_soc + o.peak_buffer_pct if o.peak_buffer_pct > 0 else 0.0)
+                   o.battery_min_soc + o.peak_buffer_pct if o.peak_buffer_pct > 0 else 0.0,
+                   o.ac_max_kw)
 
     @property
     def self_floor(self) -> float:
@@ -53,6 +60,14 @@ class Battery:
 
     def kwh(self, soc_points: float) -> float:
         return soc_points * self.capacity_kwh / 100
+
+
+def clip_kwh(b: Battery, pv_kwh: float, charge_dc: float, discharge_dc: float, hours: float) -> float:
+    """Solar the inverter cannot pass in `hours`: its AC output (solar not stored, plus what
+    the battery gives) above `ac_max_kw`. The panels are held back by that much."""
+    if b.ac_max_kw <= 0:
+        return 0.0
+    return max(pv_kwh - charge_dc / b.eta_c + discharge_dc * b.eta_d - b.ac_max_kw * hours, 0.0)
 
 
 @dataclass
@@ -121,11 +136,12 @@ def step(b: Battery, soc: float, action: str, target_soc: float, load_kwh: float
         else:
             charge_dc = min(-net * b.eta_c, room, b.max_charge_kw * hours)
 
-    grid = net + charge_dc / b.eta_c - discharge_dc * b.eta_d
+    clipped = clip_kwh(b, pv_kwh, charge_dc, discharge_dc, hours)
+    grid = net + charge_dc / b.eta_c - discharge_dc * b.eta_d + clipped
     imp, exp = max(grid, 0.0), max(-grid, 0.0)
-    curtailed = 0.0
+    curtailed = clipped
     if exp > b.export_limit_kw * hours:
-        curtailed, exp = exp - b.export_limit_kw * hours, b.export_limit_kw * hours
+        curtailed, exp = curtailed + exp - b.export_limit_kw * hours, b.export_limit_kw * hours
     if curtail and exp > 0:
         curtailed, exp = curtailed + exp, 0.0
     new_soc = soc + (charge_dc - discharge_dc) * 100 / b.capacity_kwh

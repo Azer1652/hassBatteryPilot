@@ -395,6 +395,9 @@ class App:
             self.event("The peak buffer needs the inverter's peak-shaving switch, which was not found: "
                        "it is off.", logging.WARNING)
             self.o.peak_buffer_pct = 0
+        if self.o.inverter_ac_kw and self.o.marstek:
+            self.event("Inverter AC output (inverter_ac_kw) is for a Solis hybrid: a Marstek beside another "
+                       "inverter cannot take what that inverter holds back. It is not used.", logging.WARNING)
         if self.o.winter_hold_soc and not self.can_peak_shave:
             self.event("The winter level (winter_hold_soc) needs the inverter's peak-shaving switch, which was "
                        "not found: it is off.", logging.WARNING)
@@ -1215,7 +1218,8 @@ class App:
             self.problem = None
         current = sticky_action(self.plan, now, soc, self.o.battery_reserve_soc) if self.readings else None
         # Today's weather against the forecast, from the quarters measured so far.
-        self.pv.observe(self.records, now, past=self._archive_hours(), export_limit_kw=self.o.export_limit_kw)
+        self.pv.observe(self.records, now, past=self._archive_hours(), export_limit_kw=self.o.export_limit_kw,
+                        ac_max_kw=self.o.ac_max_kw)
         # While the car charges, the next hour has its power on top of the house (how long it goes
         # on is not known: the plan is redone every few minutes from the real battery level).
         car_kw = self.car_state.power_kw if self.car_state.charging else 0.0
@@ -1326,7 +1330,8 @@ class App:
         recs = day_records(self.records, start, end)
         if recs:              # (none on the first day after install: nothing measured yet)
             self._close_day(y)
-            n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz)
+            n_shade = self.shade.learn_records(recs, self.forecast_archive, self.tz,
+                                               export_limit_kw=self.o.export_limit_kw, ac_max_kw=self.o.ac_max_kw)
             n_load = self.load.learn_records(recs, self.tz)
             self.efficiency.learn_records(recs)
             self.event(f"Learned from {y}: {n_load} hours of consumption, {n_shade} hours of solar vs forecast.")
@@ -1388,7 +1393,8 @@ class App:
                              var_idx if kind == "variable" else avg,
                              block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold,
-                             on_replan=lambda past, t: pv_fc.observe(past, t, export_limit_kw=self.o.export_limit_kw))
+                             on_replan=lambda past, t: pv_fc.observe(past, t, export_limit_kw=self.o.export_limit_kw,
+                                                                     ac_max_kw=self.o.ac_max_kw))
             if res is None:
                 return None
             results[kind] = res

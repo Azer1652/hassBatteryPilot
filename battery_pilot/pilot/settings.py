@@ -26,7 +26,7 @@ RANGES = {
     "variable_night_add": (-20, 50), "variable_vat_pct": (0, 30), "variable_sell_mult": (0, 1),
     "variable_sell_add": (-50, 50), "variable_yearly_fee_eur": (0, 1000), "variable_index_eur_mwh": (0, 1000),
     "grid_fees_c_kwh": (0, 60), "injection_fee_c_kwh": (0, 20),
-    "import_limit_kw": (0.5, 50), "export_limit_kw": (0, 50),
+    "import_limit_kw": (0.5, 50), "export_limit_kw": (0, 50), "inverter_ac_kw": (0, 50),
     "capacity_tariff_eur_kw_year": (0, 500), "capacity_min_kw": (0, 20),
     "car_min_kw": (0, 25), "car_battery_kwh": (0, 200), "car_charge_kw": (0, 25),
     "battery_capacity_kwh": (1, 200), "battery_min_soc": (0, 50), "battery_reserve_soc": (0, 95),

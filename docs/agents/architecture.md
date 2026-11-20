@@ -159,6 +159,19 @@ to self-use when it is gone (not within 120 s of the last command), since the ba
 house then. Like `peak_shave` it is in `controller.ACTIVE`, ended on control off, blind, stop and
 restart, and read back by `_reconcile`. Unverified on a real inverter. Without the entity nothing changes.
 
+The inverter's AC output (`inverter_ac_kw`, off by default; `Options.ac_max_kw`, 0 with a Marstek;
+`Battery.ac_max_kw`): a hybrid with more panels than AC output passes at most that to the house and
+the grid. `simulate.clip_kwh` (solar not stored + what the battery gives, above the rating) is added
+to the grid flow and counted as curtailed, in `simulate.step` and in `planner._flow` alike, so the
+plan, the replay and `car.coverage` agree. Self-use already stores surplus first, so it clips only
+with a full battery or above the maximum charge; solar hold stores nothing (assumed), so above the
+rating it holds the panels back, and the plan weighs that loss: a hard "no hold above the rating"
+rule made it pick a one-point discharge instead where storing at noon was worth nothing (the battery
+fills later anyway with unsellable solar). The controller has nothing to do: the inverter clips by
+itself. `solar.held_back` keeps quarters at the export limit or the AC output (house + export −
+import ≥ 95 % of it) out of `ShadeModel.learn_records` and `intraday_factor`. `fake_ha(ac_max_kw=)`
+models it (`held_kw`, `held_kwh`).
+
 The peak buffer (`peak_buffer_pct`, off by default; `Battery.buffer_soc`/`self_floor`): self-use stops at
 minimum + buffer and below it the battery gives only what is above the import limit. `simulate.step`
 does that in self-use; `optimize` (`self_move`, only with `peak_shave=True`) the same and labels such a

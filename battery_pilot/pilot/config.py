@@ -74,6 +74,7 @@ class Options:
     # grid
     import_limit_kw: float = 2.3
     export_limit_kw: float = 5.0
+    inverter_ac_kw: float = 0.0              # the hybrid inverter's rated AC output (0: not limited)
     capacity_tariff_eur_kw_year: float = 52.37
     capacity_min_kw: float = 2.5
     # battery
@@ -127,6 +128,12 @@ class Options:
     @property
     def marstek(self) -> bool:
         return self.battery_system == "marstek"
+
+    @property
+    def ac_max_kw(self) -> float:
+        """The inverter's AC output limit for the plan (0: none). A Marstek beside another
+        inverter is AC-coupled: it cannot take what that inverter holds back."""
+        return 0.0 if self.marstek else self.inverter_ac_kw
 
     @property
     def variable_set(self) -> bool:

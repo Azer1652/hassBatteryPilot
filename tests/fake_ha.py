@@ -37,8 +37,14 @@ class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
                  prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
                  battery_power=False, inverter_draw_kw=0.0, marstek=False,
-                 p1_peak=0):
+                 p1_peak=0, ac_max_kw=0.0):
         self.now = now
+        # ac_max_kw: the Solis passes at most this to the house and the grid (0: no limit); the panels
+        # give more only while the battery takes it, else they are held back (`held_kw`, and the PV
+        # sensor shows what they gave). Feed-in priority stores nothing, so it holds them back too.
+        self.ac_max_kw = ac_max_kw
+        self.held_kw = 0.0
+        self.held_kwh = 0.0
         # marstek: a Solax (grid, house, solar) and a Marstek Venus seen by the Marstek Local API and the
         # Marstek Cloud integrations, instead of a Solis. local_down / cloud_down: that link is silent (its
         # sensors keep their last values; the local actions fail).
@@ -357,6 +363,10 @@ class FakeHA:
                 ch = min(-net * 0.97, 2.56, room / h if h else 9e9)
                 batt, grid = ch, net + ch / 0.97
         self.soc = min(max(self.soc + batt * h / CAP * 100, 0), 100)
+        # the inverter's AC output (to the house and the grid) is load - grid; above its rating the panels give less
+        self.held_kw = max(load - grid - self.ac_max_kw, 0.0) if self.ac_max_kw > 0 and not self.marstek else 0.0
+        grid += self.held_kw
+        self.held_kwh += self.held_kw * h
         grid += self.inverter_draw_kw
         self.import_kw = max(grid, 0)
         self.now += dt
@@ -366,7 +376,7 @@ class FakeHA:
         self.s["sensor.solis_grid_import_power"]["state"] = str(round(max(grid, 0) * 1000))
         self.s["sensor.solis_grid_export_power"]["state"] = str(round(max(-grid, 0) * 1000))
         self.s["sensor.solis_household_load_power"]["state"] = str(round(self.load_fn(self.now) * 1000))
-        self.s["sensor.solis_total_pv_power"]["state"] = str(round(self.pv_fn(self.now) * 1000))
+        self.s["sensor.solis_total_pv_power"]["state"] = str(round(max(self.pv_fn(self.now) - self.held_kw, 0) * 1000))
         self.s["sensor.solis_battery_soc"]["state"] = str(round(self.soc, 1))
         if "sensor.solis_battery_power_net" in self.s:     # DC, + discharging
             self.s["sensor.solis_battery_power_net"]["state"] = str(round(-batt * 1000))

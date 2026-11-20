@@ -897,6 +897,73 @@ def test_the_simulator_exports_all_surplus_in_solar_hold():
     assert r.discharge_dc_kwh == pytest.approx(0.8 / B.eta_d) and r.import_kwh == pytest.approx(0)
 
 
+# ---------------------------------------------------------------- the inverter's AC output
+AC = replace(B, ac_max_kw=5.0)      # 6.5 kWp on a 5 kW hybrid
+
+
+def test_above_the_inverter_ac_output_the_battery_takes_the_rest_or_the_panels_are_held_back():
+    full = step(AC, 100, "self_use", 0, 0.5, 6.5, 1.0)
+    assert full.export_kwh == pytest.approx(4.5) and full.curtailed_kwh == pytest.approx(1.5)
+    assert step(B, 100, "self_use", 0, 0.5, 6.5, 1.0).export_kwh == pytest.approx(5.0)    # without it: as before
+    room = step(AC, 50, "self_use", 0, 0.5, 6.5, 1.0)          # charging at its maximum covers the overflow
+    assert room.charge_dc_kwh == pytest.approx(B.max_charge_kw) and room.curtailed_kwh == 0
+    assert room == step(B, 50, "self_use", 0, 0.5, 6.5, 1.0)
+    held = step(AC, 50, "solar_hold", 0, 0.5, 6.5, 1.0)         # feed-in priority stores nothing (assumed)
+    assert held.charge_dc_kwh == 0 and held.export_kwh == pytest.approx(4.5) and held.curtailed_kwh == pytest.approx(1.5)
+    under = step(AC, 50, "solar_hold", 0, 0.5, 4.0, 1.0)
+    assert under.export_kwh == pytest.approx(3.5) and under.curtailed_kwh == 0
+    # export above the export limit and the AC output both count as curtailed
+    low_export = replace(AC, export_limit_kw=3.0)
+    r = step(low_export, 100, "self_use", 0, 0.5, 6.5, 1.0)
+    assert r.export_kwh == pytest.approx(3.0) and r.curtailed_kwh == pytest.approx(3.0)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_energy_balance_with_the_inverter_ac_output(seed):
+    rnd = random.Random(seed)
+    soc = rnd.uniform(0, 100)
+    for _ in range(50):
+        action = rnd.choice(["self_use", "charge", "discharge", "solar_hold", "peak_shave"])
+        load, pv, h = rnd.uniform(0, 3), rnd.uniform(0, 8), rnd.choice([0.25, 1.0])
+        r = step(AC, soc, action, rnd.uniform(0, 100), load * h, pv * h, h, curtail=rnd.random() < 0.2)
+        lhs = load * h - pv * h + r.charge_dc_kwh / B.eta_c - r.discharge_dc_kwh * B.eta_d
+        assert lhs == pytest.approx(r.import_kwh - r.export_kwh - r.curtailed_kwh, abs=1e-9)
+        assert load * h + r.export_kwh - r.import_kwh <= AC.ac_max_kw * h + 1e-9   # what the inverter passes
+        soc = r.soc
+
+
+def test_the_plan_counts_what_the_inverter_cannot_pass():
+    slots = hourly([30] * 3, [4] * 3, load=0.5, pv=6.5)
+    plain, capped = optimize(B, slots, 100), optimize(AC, slots, 100)
+    assert [s.action for s in capped] == [s.action for s in plain] == ["self_use"] * 3
+    assert all(s.export_kwh == pytest.approx(5.0) for s in plain)
+    assert all(s.export_kwh == pytest.approx(4.5) for s in capped)
+    assert sum(s.cost_c for s in capped) == pytest.approx(sum(s.cost_c for s in plain) + 3 * 0.5 * 4)
+    some = hourly([30] * 4, [4] * 4, load=0.5, pv=3.0)
+    assert optimize(AC, some, 40, solar_hold=True) == optimize(B, some, 40, solar_hold=True)   # never above it
+
+
+def test_solar_hold_above_the_ac_output_counts_what_it_holds_back():
+    """Blocked hours later fill the battery anyway, so storing at noon is worth nothing: solar hold
+    stays, now with the 1.5 kWh the inverter cannot pass counted (4.5 kWh sold, not 5)."""
+    pv = [3.0] * 3 + [6.5] * 2 + [3.0] * 5 + [0.0] * 4
+    slots = hourly([20] * 10 + [30] * 4, [8] * 5 + [-2] * 5 + [8] * 4, load=[0.5] * 10 + [1.5] * 4, pv=pv)
+    kw = dict(terminal_c_kwh=20, curtail_negative=True, solar_hold=True)
+    plain, capped = optimize(B, slots, 20, **kw), optimize(AC, slots, 20, **kw)
+    assert plain[4].action == capped[4].action == "solar_hold"
+    assert plain[4].export_kwh == pytest.approx(5.0) and capped[4].export_kwh == pytest.approx(4.5)
+    for s in capped:      # the simulator does what the plan expects
+        r = step(AC, s.soc_start, s.action, s.soc_end, s.load_kwh, s.pv_kwh, s.hours, curtail=s.sell < 0)
+        assert r.export_kwh == pytest.approx(s.export_kwh, abs=0.05)
+
+
+def test_the_ac_output_is_not_used_with_a_marstek():
+    """A Marstek beside another inverter is AC-coupled: it cannot take what that inverter holds back."""
+    assert Battery.from_options(Options(inverter_ac_kw=5.0)).ac_max_kw == 5.0
+    assert Battery.from_options(Options(inverter_ac_kw=5.0, battery_system="marstek")).ac_max_kw == 0.0
+    assert Battery.from_options(Options()).ac_max_kw == 0.0
+
+
 def test_a_plan_made_in_the_last_minute_before_a_boundary_starts_now():
     """No gap: the seconds before the boundary belong to the next slot, at that slot's price."""
     at = lambda h, m, s=0: datetime(2026, 6, 14, h, m, s, tzinfo=BXL).astimezone(timezone.utc)   # noqa: E731

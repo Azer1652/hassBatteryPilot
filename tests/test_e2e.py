@@ -138,6 +138,28 @@ async def test_a_cloudy_day_lowers_what_the_plan_expects_from_the_afternoon(tmpd
     assert app.status()["solar"]["today_factor"] == app.today_factor
 
 
+@pytest.mark.parametrize("ac_option", [0.0, 5.0])
+@pytest.mark.slow
+async def test_a_full_battery_on_a_5_kw_inverter_is_not_learned_as_shade(tmpdata, ac_option):
+    """6.5 kWp on a 5 kW Solis, a clear June day as forecast, the battery full by mid-morning: from
+    10:00 to 16:00 the inverter holds the panels back at 5 kW. Without *Inverter AC output* the
+    nightly learning takes that for shade; with it those hours are left out."""
+    day = date(2026, 6, 15)
+    fc = {**sun(day, 58), **sun(day + timedelta(days=1), 58)}          # 6.5 kWh in the noon hour
+    fake = FakeHA(utc(2026, 6, 15, 4, 0), soc=95, forecast=fc, load=lambda t: 0.45, ac_max_kw=5.0,
+                  pv=lambda t: fc.get(t.replace(minute=0, second=0, microsecond=0), 0.0))
+    app = await start(tmpdata, fake, inverter_ac_kw=ac_option)
+    await run(app, fake, utc(2026, 6, 15, 23, 0), step_s=60)
+    assert fake.held_kwh > 3                                         # the inverter held the panels back
+    fake.now = utc(2026, 6, 16, 0, 30)
+    await app.nightly()
+    assert app.shade.weights[5][9] > 0 and app.shade.factor(6, 9) == pytest.approx(1.0, abs=0.03)
+    if ac_option:
+        assert all(app.shade.weights[5][h] == 0 for h in (11, 12, 13, 14))   # not learned
+    else:
+        assert app.shade.factor(6, 12) < 0.85                       # taken for shade
+
+
 # ---------------------------------------------------------------- the DST nights
 @pytest.mark.parametrize("night,hours", [(date(2026, 3, 28), 23), (date(2026, 10, 24), 25)])
 @pytest.mark.slow
