@@ -1,4 +1,5 @@
 """The whole app against a simulated Home Assistant, house, battery and Solis."""
+import json
 import logging
 import os
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from pilot.compare import Comparison
 from pilot.config import Options
 from pilot.meter import QuarterRecord
 from pilot.migrate import MARK
+from pilot.solar import week_of
 from pilot.web import make_web
 
 CURTAIL = "input_boolean.battery_pilot_block_negative_export"
@@ -206,7 +208,7 @@ async def test_nightly_learning_and_contract_replay(tmpdata, block):
     ws = m["with_strategy"]
     assert ws["fixed"]["eur"] > 0 and ws["dynamic"]["eur"] > 0
     assert ws["dynamic"]["battery_in_kwh"] > 0
-    assert app.shade.factor(3, 12) < 0.95                    # learned the shade
+    assert app.shade.factor(date(2026, 3, 10), 12) < 0.95    # learned the shade
     assert app.load.learned()
     s = app.comparison.summary(Options(), fake.now, TZ)
     assert "with_strategy" in s
@@ -237,13 +239,36 @@ async def test_state_survives_a_restart(tmpdata):
     fake = FakeHA(utc(2026, 1, 14, 12))
     app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app.setup()
-    app.shade.learn(1, 13, 0.3, 1.0)
+    app.shade.learn(date(2026, 1, 14), 13, 0.3, 1.0)
     app.peaks.months["2026-01"] = 3.3
     app.save_state()
     app2 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
     assert await app2.setup()
-    assert app2.shade.factors[0][13] == pytest.approx(0.3)
+    assert app2.shade.factors[week_of(date(2026, 1, 14))][13] == pytest.approx(0.3)
     assert app2.peaks.months["2026-01"] == 3.3
+
+
+async def test_shade_learned_per_month_by_2_21_is_carried_over(tmpdata):
+    """A state saved before the weekly shade: the plan's solar after shade is the same on day one."""
+    fake = FakeHA(utc(2026, 1, 14, 12))
+    app = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app.setup()
+    app.save_state()
+    with open(app.state_file, encoding="utf-8") as f:
+        s = json.load(f)
+    factors, weights = [[1.0] * 24 for _ in range(12)], [[0.0] * 24 for _ in range(12)]
+    factors[0][15], weights[0][15] = 0.3, 30.0
+    s["shade"] = {"factors": factors, "weights": weights}
+    with open(app.state_file, "w", encoding="utf-8") as f:
+        json.dump(s, f)
+    app2 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app2.setup()
+    assert app2.shade.at(utc(2026, 1, 14, 15), TZ) == pytest.approx(0.3, abs=0.02)
+    assert any("now kept per week" in e["text"] for e in app2.events)
+    app2.save_state()
+    app3 = App(Options(), fake, data_dir=tmpdata, clock=lambda: fake.now)
+    assert await app3.setup()
+    assert not any("now kept per week" in e["text"] for e in app3.events)
 
 
 async def test_dashboard_status_is_complete(tmpdata):
@@ -256,10 +281,13 @@ async def test_dashboard_status_is_complete(tmpdata):
         assert k in s
     assert s["breakeven"] == {"night": 137, "day": 168}
     # the shade tooltips tell a learned cell from one still at the default factor
-    app.shade.learn(1, 13, 0.3, 1.0)
-    kwh = app.status()["solar"]["shade_kwh"]
-    assert len(kwh) == 12 and all(len(row) == 24 for row in kwh)
-    assert kwh[0][13] == 1.0 and kwh[0][14] == 0.0
+    app.shade.learn(date(2026, 1, 14), 13, 0.3, 1.0)
+    solar = app.status()["solar"]
+    kwh, k = solar["shade_kwh"], week_of(date(2026, 1, 14))
+    assert len(kwh) == 52 and all(len(row) == 24 for row in kwh) and len(solar["shade"]) == 52
+    assert solar["shade_weeks"][0] == "01-01" and solar["shade_weeks"][k] <= "01-14" < solar["shade_weeks"][k + 1]
+    assert kwh[k][13] == 1.0 and kwh[k][14] == 0.0
+    assert solar["shade"][k][13] < 0.9 and solar["shade"][k + 1][13] < 0.9      # (the weeks around it borrow)
     # the House tab: the learned peaks per weekday and hour, None where nothing is learned yet
     app.load.learn_peak(2, 18, 3.4)
     load = app.status()["load"]
@@ -345,8 +373,8 @@ async def test_history_planned_vs_actual(tmpdata):
     assert await app.setup()
     for h in range(9, 16):
         for _ in range(10):
-            app.shade.learn(3, h, 0.8, 1.0)                  # what was learned before: 80 % at these hours
-    before = app.shade.factor(3, 12)
+            app.shade.learn(date(2026, 3, 10), h, 0.8, 1.0)  # what was learned before: 80 % at these hours
+    before = app.shade.factor(date(2026, 3, 10), 12)
     await run_until(app, fake, utc(2026, 3, 11, 0, 30), step_s=120)
 
     assert os.path.exists(os.path.join(tmpdata, "history", "2026-03-10.json"))
@@ -364,7 +392,7 @@ async def test_history_planned_vs_actual(tmpdata):
 
     # Today's day-ahead plan already uses what was learned from yesterday's sun.
     today = app.history_day(date(2026, 3, 11))
-    after = app.shade.factor(3, 12)
+    after = app.shade.factor(date(2026, 3, 11), 12)
     assert after < before - 0.02
     noon = today["day_ahead"]["hours"][12]
     assert noon[2] == pytest.approx(noon[1] * after, abs=0.01)

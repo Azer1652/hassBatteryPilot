@@ -1,7 +1,8 @@
 """A synthetic year for Battery Pilot: does it do the right things, and what does each contract cost?
 
 The house: 6 kWp of panels near Antwerp, trees that shade the panels when the
-winter sun is low (true shade the app does not know and must learn), about
+sun is low behind them (true shade the app does not know and must learn; it
+follows the sun's position, so it changes a little every day), about
 13-15 kWh a day with a morning bump, an evening peak and a short cooking
 spike, a 16 kWh battery. Prices: a seasonal market level with morning and
 evening peaks, a solar dip at noon that turns negative on sunny summer days,
@@ -19,6 +20,7 @@ as in the real app.
 from __future__ import annotations
 
 import argparse
+import functools
 import math
 import os
 import random
@@ -43,13 +45,52 @@ KWP = 6.0
 MARKET_BY_MONTH = [120, 110, 95, 80, 70, 65, 70, 75, 90, 105, 115, 125]   # EUR/MWh
 
 
-def true_shade(month: int, hour: int) -> float:
-    """Trees: low winter sun is blocked in the morning and afternoon."""
-    if month in (11, 12, 1, 2):
-        return 0.3 if hour < 11 or hour >= 14 else 0.9
-    if month in (3, 10):
-        return 0.6 if hour < 10 or hour >= 15 else 1.0
-    return 1.0
+def sun_position(t: datetime) -> tuple[float, float]:
+    """(elevation, azimuth) of the sun in degrees at a UTC time (NOAA's approximation)."""
+    t = t.astimezone(timezone.utc)
+    hr = t.hour + t.minute / 60
+    g = 2 * math.pi / 365 * (t.timetuple().tm_yday - 1 + (hr - 12) / 24)
+    eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
+                    - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g))
+    dec = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
+           + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
+    ha = math.radians((hr * 60 + eqt + 4 * LON) / 4 - 180)
+    lat = math.radians(LAT)
+    cz = min(max(math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha), -1.0), 1.0)
+    az = math.degrees(math.atan2(math.sin(ha), math.cos(ha) * math.sin(lat) - math.tan(dec) * math.cos(lat))) + 180
+    return 90 - math.degrees(math.acos(cz)), az
+
+
+def tree_line(azimuth: float) -> float:
+    """How high the trees reach (degrees above the horizon) in a direction: tall trees to the
+    south-east and south-west, a lower gap due south, open elsewhere."""
+    if 90 <= azimuth < 160:
+        return 20.0
+    if 160 <= azimuth < 200:
+        return 12.0
+    if 200 <= azimuth < 270:
+        return 18.0
+    return 3.0
+
+
+@functools.cache
+def true_shade(hour: datetime) -> float:
+    """What the trees let through in the hour that starts at `hour` (UTC): the sun behind them
+    gives 30 % through bare branches (November to April), 15 % through leaves (May to October).
+    It follows the sun, so it changes a little every day, fastest around March and September."""
+    doy = hour.astimezone(TZ).timetuple().tm_yday
+    leaves = min(max((doy - 105) / 25, 0.0), 1.0) * min(max((310 - doy) / 25, 0.0), 1.0)
+    through = 0.3 - 0.15 * leaves
+    num = den = 0.0
+    for k in range(6):
+        el, az = sun_position(hour + timedelta(minutes=5 + 10 * k))
+        if el <= 0:
+            continue
+        clear = min(max((el - tree_line(az)) / 2 + 0.5, 0.0), 1.0)     # a 2° soft edge
+        w = math.sin(math.radians(el))
+        num += w * (clear + (1 - clear) * through)
+        den += w
+    return num / den if den else 1.0
 
 
 @dataclass
@@ -134,7 +175,7 @@ class World:
             t = start + timedelta(minutes=15 * q)
             local = t.astimezone(TZ)
             hour = t.replace(minute=0)
-            pv = fc.get(hour, 0.0) / 4 * true_shade(local.month, local.hour) * min(max(rnd.gauss(1, 0.15), 0.3), 1.4)
+            pv = fc.get(hour, 0.0) / 4 * true_shade(hour) * min(max(rnd.gauss(1, 0.15), 0.3), 1.4)
             load = self.load_kw(local) / 4 * min(max(rnd.gauss(1, 0.1), 0.6), 1.5)
             recs.append(QuarterRecord(t, {"import": 0.0, "export": 0.0, "load": load, "pv": pv},
                                       {"import": 1.0, "export": 1.0, "load": 1.0, "pv": 1.0}, None))
@@ -162,6 +203,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
     kinds_ = kinds(o)                        # fixed, dynamic, and variable when its formula is filled in
     soc = {k: 50.0 for k in kinds_}
     months: dict[str, dict] = {}
+    shade_err = shade_fc = 0.0              # how far the learned shade is from the trees, weighed by forecast
     for i in range(-warmup_days, days):
         d = start + timedelta(days=i)
         if i < 0:
@@ -182,6 +224,10 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         today = [p.eur_mwh for p in prices if p.start.astimezone(TZ).date() == d]
         avg = sum(today) / len(today)
         index = (sum(m["market"]) + avg) / (len(m["market"]) + 1)       # a variable contract: the month so far
+        for h, v in fc.items():
+            if h.astimezone(TZ).date() == d:
+                shade_err += v * abs(shade.at(h, TZ) - true_shade(h))
+                shade_fc += v
         pvf = PvForecast(fc, shade, TZ)
         pv_fc = pvf.kwh
         for kind in kinds_:
@@ -223,7 +269,8 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
             archive = {h.isoformat(): v for h, v in fc.items()}
             shade.learn_records(recs, archive, TZ)
             load.learn_records(recs, TZ)
-    return {"months": months, "shade": shade, "load": load, "options": o}
+    return {"months": months, "shade": shade, "load": load, "options": o,
+            "shade_error_pct": 100 * shade_err / shade_fc if shade_fc else None}
 
 
 def month_eur(m: dict, kind: str, o: Options, battery: bool = True) -> float:
@@ -258,8 +305,13 @@ def table(res: dict) -> str:
                 f"   (without battery: fixed €{tot['nf']:.0f}, dynamic €{tot['nd']:.0f})"
                 + (f"; variable €{tot['v']:.0f}, variable - fixed €{tot['v'] - tot['f']:.0f}" if o.variable_set else ""))
     sh = res["shade"]
+    year = next(iter(res["months"]))[:4]
+    at = [datetime.fromisoformat(f"{year}-{md}T{h:02d}:00").replace(tzinfo=TZ).astimezone(timezone.utc)
+          for md, h in (("01-15", 10), ("01-15", 12), ("03-01", 9), ("03-20", 9), ("07-15", 12), ("10-15", 16))]
     rows.append("learned shade (true): " + "  ".join(
-        f"{mo}/{h}h {sh.factor(mo, h):.2f} ({true_shade(mo, h):.1f})" for mo, h in ((1, 10), (1, 12), (1, 15), (7, 10), (7, 15))))
+        f"{t.astimezone(TZ):%d/%m %Hh} {sh.at(t, TZ):.2f} ({true_shade(t):.2f})" for t in at)
+        + (f"; on the days replayed it was off by {res['shade_error_pct']:.1f} % of the forecast"
+           if res["shade_error_pct"] is not None else ""))
     rows.append("costs include energy, battery wear, contract fees and the capacity tariff. "
                 "grid-chg = kWh bought from the grid for the battery.")
     return "\n".join(rows)

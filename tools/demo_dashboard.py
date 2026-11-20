@@ -84,9 +84,8 @@ async def main(days: int, port: int, seconds: float | None, variable: bool = Fal
     weather = {d: random.Random(d.toordinal()).uniform(0.75, 1.2) for d in live}   # forecast error per day
 
     def pv(t):
-        local = t.astimezone(TZ)
         hour = t.replace(minute=0, second=0, microsecond=0)
-        return fc.get(hour, 0.0) * yearsim.true_shade(local.month, local.hour) * weather[local.date()]
+        return fc.get(hour, 0.0) * yearsim.true_shade(hour) * weather[t.astimezone(TZ).date()]
 
     start = datetime.combine(TODAY - timedelta(days=LIVE_DAYS), time(16, 0), TZ).astimezone(timezone.utc)
     fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices,

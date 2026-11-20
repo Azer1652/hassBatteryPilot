@@ -50,8 +50,13 @@ What it does:
   winter no battery energy is exported, except at a price so high that buying it back
   later costs less.
 - **Learns your tree shade.** It compares what your panels deliver with the forecast
-  for every month and hour of the day. Low winter sun behind trees gets its own
-  correction; summer noon keeps its own.
+  for every week of the year and hour of the day. Low winter sun behind trees gets its
+  own correction; summer noon keeps its own. Each day's correction blends the weeks
+  around it, the nearest most, so it follows the sun as it climbs past the trees in
+  spring and drops behind them in autumn, while one cloudy or sunny day does not throw
+  it off. The hours are on winter time, so the clock change does not move the sun to
+  another hour. What was learned counts half after a year, so a tree that was cut down
+  (or a new obstacle) is picked up within a season.
 - **Trades with the grid when it pays, and says why not.** Buying a kWh to sell it
   later earns `sell price × round-trip efficiency − wear − buy price`. The grid fees are
   on every kWh bought, so with the default rates a kWh bought at a market price of 0 must
@@ -339,9 +344,10 @@ difference (negative means dynamic is cheaper).
 
 ![Contract comparison per month (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/comparison.png)
 
-The page also shows the shade Battery Pilot learned for every month and hour (dark =
-the forecast is too high, e.g. low winter sun behind trees) and your monthly peaks. Tap or
-hover over a cell or a bar for its value:
+The page also shows the shade Battery Pilot learned for every week (rows, January at the
+top) and hour (dark = the forecast is too high, e.g. low winter sun behind trees) and your
+monthly peaks. Tap or hover over a cell or a bar for its value; a week with nothing learned
+yet shows what it takes from the weeks around it:
 
 ![Learned shade and monthly peaks (demo data)](https://raw.githubusercontent.com/Azer1652/hassSolarBattery/main/docs/screenshots/shade-peaks.png)
 

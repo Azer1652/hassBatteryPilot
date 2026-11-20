@@ -200,7 +200,7 @@ class App:
             if not isinstance(s, dict):
                 raise ValueError("not a JSON object")
             loaded = {
-                "peaks": PeakTracker.from_json(s.get("peaks")), "shade": ShadeModel.from_json(s.get("shade")),
+                "peaks": PeakTracker.from_json(s.get("peaks")), "shade": ShadeModel.from_json(s.get("shade"), self.tz),
                 "efficiency": EfficiencyMeter.from_json(s.get("efficiency")),
                 "car_months": {str(k): float(v) for k, v in (s.get("car_months") or {}).items()},
                 "load": LoadProfile.from_json(s.get("load")), "comparison": Comparison.from_json(s.get("comparison")),
@@ -235,6 +235,8 @@ class App:
             self.daily_market = {}
             self.event("The stored daily market averages were taken from parts of days (quarter-hour prices); "
                        "they are rebuilt from the prices of the last days.")
+        if self.shade.migrated:
+            self.event("The shade learned per month is now kept per week; what was learned is carried over.")
         self.pv = PvForecast({}, self.shade, self.tz)
         return True
 
@@ -1324,6 +1326,7 @@ class App:
         if self.last_nightly == today or local.time() < NIGHTLY_AT:
             return
         self.last_nightly = today
+        self.shade.fade_to(local.date())
         y = local.date() - timedelta(days=1)
         start = datetime.combine(y, time(0), self.tz).astimezone(timezone.utc)
         end = datetime.combine(local.date(), time(0), self.tz).astimezone(timezone.utc)
@@ -1577,6 +1580,13 @@ class App:
                 log.debug("publish %s failed: %s", eid, e)
 
     # ---------------------------------------------------------------- dashboard
+    def _shade_status(self, year: int) -> dict:
+        """The learned shade for the page: per week of this year (`shade_weeks`, its first day) and clock
+        hour, the factor the plan uses (`shade`) and the forecast kWh that week learned from (`shade_kwh`)."""
+        d = self.shade.display(year, self.tz)
+        return {"shade": d["factors"], "shade_kwh": d["kwh"], "shade_weeks": d["weeks"],
+                "shade_months": self.shade.month_summary(year)}
+
     def status(self) -> dict:
         now = self.clock()
         r = self.readings
@@ -1602,8 +1612,7 @@ class App:
             "solar": {"today": round(self.pv.day_total(now.astimezone(self.tz).date()), 1),
                       "tomorrow": round(self.pv.day_total(now.astimezone(self.tz).date() + timedelta(days=1)), 1),
                       "today_factor": self.today_factor,
-                      "shade": self.shade.to_json()["factors"], "shade_months": self.shade.month_summary(),
-                      "shade_kwh": [[round(w, 1) for w in row] for row in self.shade.weights]},
+                      **self._shade_status(now.astimezone(self.tz).year)},
             "load": {"daily_kwh": self.load.daily_kwh(), **self.load.to_json()},      # kw and peak, weekday x hour
             "peaks": {"months": self.peaks.months, "limit_kw": self.o.import_limit_kw,
                       "rolling_kw": self.peaks.rolling_average(self.o.capacity_min_kw)},

@@ -13,7 +13,7 @@ from pilot.planner import Slot, Step, make_plan, night_target, night_windows, op
 from pilot.prices import PriceSlot
 from pilot.simulate import Battery, step
 from pilot.simulate import step as sim_step
-from pilot.solar import PvForecast, ShadeModel
+from pilot.solar import PvForecast, ShadeModel, winter_time
 from pilot.tariffs import DynamicTariff, FixedTariff
 
 BXL = ZoneInfo("Europe/Brussels")
@@ -311,7 +311,7 @@ def _shaded_forecast(day_kwh, last=20, month=6):
     shade = ShadeModel()
     for h in range(6, 11):
         for _ in range(60):
-            shade.learn(month, h, 0.25, 1.0)
+            shade.learn(*winter_time(datetime(2026, month, 15, h, tzinfo=BXL), BXL), 0.25, 1.0)
     return PvForecast({t: v * scale for t, v in raw.items()}, shade, BXL)
 
 

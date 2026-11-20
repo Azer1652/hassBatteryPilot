@@ -8,6 +8,7 @@ from fake_ha import CHEAP_NIGHT, RATES_EARLY_2026, TZ, FakeHA, utc
 
 from pilot.app import App
 from pilot.config import Options
+from pilot.solar import week_of
 
 CONTROL = "input_boolean.battery_pilot_control"
 
@@ -153,11 +154,12 @@ async def test_a_full_battery_on_a_5_kw_inverter_is_not_learned_as_shade(tmpdata
     assert fake.held_kwh > 3                                         # the inverter held the panels back
     fake.now = utc(2026, 6, 16, 0, 30)
     await app.nightly()
-    assert app.shade.weights[5][9] > 0 and app.shade.factor(6, 9) == pytest.approx(1.0, abs=0.03)
+    k, clock = week_of(day), lambda h: datetime(2026, 6, 15, h, tzinfo=TZ)     # (cells on winter time: clock - 1)
+    assert app.shade.weights[k][8] > 0 and app.shade.at(clock(9), TZ) == pytest.approx(1.0, abs=0.03)
     if ac_option:
-        assert all(app.shade.weights[5][h] == 0 for h in (11, 12, 13, 14))   # not learned
+        assert all(app.shade.weights[k][h - 1] == 0 for h in (11, 12, 13, 14))   # not learned
     else:
-        assert app.shade.factor(6, 12) < 0.85                       # taken for shade
+        assert app.shade.at(clock(12), TZ) < 0.85                   # taken for shade
 
 
 # ---------------------------------------------------------------- the DST nights
@@ -201,7 +203,7 @@ async def test_the_first_start_learns_consumption_and_shade_from_the_recorder(tm
     assert await app.setup()
     assert app.load.learned()
     assert app.load.daily_kwh() == pytest.approx(0.4 * 20 + 1.2 * 4, rel=0.1)
-    assert app.shade.factor(3, 12) < 0.75
+    assert app.shade.factor(date(2026, 3, 11), 12) < 0.75
     assert any("Learned house consumption" in e["text"] for e in app.events)
 
 

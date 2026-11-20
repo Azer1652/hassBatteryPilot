@@ -240,10 +240,20 @@ clamp 0.3-1.6) scales the rest of today, fading with a 4-hour half-life. Tomorro
 shade learning (raw archive) are untouched. `yearsim --forecast-error` makes the forecast wrong about
 the day; `--no-nowcast` switches the correction off.
 
-`solar.ShadeModel`: 12 × 24 actual/forecast factors weighted by forecast kWh; skips hours with
-incomplete PV data and hours with a `QuarterRecord.blocked` quarter (export held at 0 by
+`solar.ShadeModel`: 52 weeks × 24 **winter-time** hours (`winter_time`: the clock minus DST, so a
+cell keeps one sun position all year) of actual/forecast factors, each a mean weighted by forecast kWh
+(cap 30 kWh per cell). `learn(day, hour)` updates the day's own week (`week_of`); `factor(day, hour)`
+blends the cells within 4 weeks of the day (triangular, × their kWh, + 0.5 kWh pull to 1), so it
+changes daily with no step at month ends; callers use `at(utc_hour, tz)`. `fade_to(day)` (nightly)
+halves the weights per 365 days and stores `faded`. A 12-row state (2.21.0 and before: month × clock
+hour) is carried over in `from_json(d, tz)` / `from_months`, weight × 7/30.4 per week. Learning skips
+hours with incomplete PV data and hours with a `QuarterRecord.blocked` quarter (export held at 0 by
 `App._curtail`: the inverter throttles the panels; the replay uses the forecast there when it is
-higher). `load.LoadProfile`: 7 × 24 kW EMA.
+higher). Why weeks with blending, not days or plain weeks: a cell gets one sample a year per day, so
+single days (or unblended weeks) learn the weather, not the trees; simulated in 2.22.0. `status()`
+sends the grid in clock hours per week of this year (`ShadeModel.display`). `yearsim.true_shade`
+puts trees on a horizon profile around the sun's position (`sun_position`), so it changes daily.
+`load.LoadProfile`: 7 × 24 kW EMA.
 
 ## Display-only figures (`efficiency.py`, `trading.py`)
 

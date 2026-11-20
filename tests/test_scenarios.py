@@ -54,8 +54,10 @@ def test_winter_fixed_charges_at_night_when_it_pays_and_keeps_peaks_low(winter):
 def test_winter_learns_the_tree_shade(winter):
     res, _ = winter
     sh = res["shade"]
-    assert sh.factor(1, 10) < 0.5 and sh.factor(1, 15) < 0.5     # low sun behind the trees (true 0.3)
-    assert sh.factor(1, 12) > 0.75                               # midday clear of them (true 0.9)
+    day = date(2026, 1, 15)
+    # low sun behind the trees (true 0.3), from one week of dim winter hours: still pulled a little towards 1
+    assert sh.factor(day, 10) < 0.55 and sh.factor(day, 15) < 0.55
+    assert sh.factor(day, 12) > 0.75                                 # midday clear of them (true 1.0)
 
 
 def test_summer_fixed_does_not_buy_for_the_battery(summer):

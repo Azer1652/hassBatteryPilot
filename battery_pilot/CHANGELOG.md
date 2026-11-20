@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.22.0
+
+Tree shade is now learned per week instead of per month.
+
+- **The shade correction follows the season day by day.** Battery Pilot compares what your
+  panels deliver with the forecast for every week of the year and hour of the day. Each day's
+  correction blends the weeks around it, the nearest most, so it changes a little every day
+  instead of jumping on the 1st of the month, and one cloudy or sunny day still does not throw
+  it off. This matters most in March and September, when the sun at a given hour climbs past
+  or drops behind the trees within a few weeks. A week per cell without the blending was
+  tried and is worse: each cell then sees too few days to average out the weather.
+- **Summer time no longer mixes two suns in one hour.** The hours are kept on winter time.
+  Before, the last week of March and of October counted 09:00 summer time (the sun an hour
+  lower) together with 09:00 winter time.
+- **Old learning fades.** What was learned counts half after a year, so a tree that was cut
+  down or a new obstacle is picked up within a season. Before, a dim winter hour could hold on
+  to its old value for years.
+- **What was learned is kept.** On the first start, the shade learned per month is carried
+  over to the weeks (the log says so). Nothing to do.
+- **The page** shows the shade per week, 52 rows from January at the top. A cell's tooltip
+  gives the week, the hour, the share of the forecast the panels deliver, and how much that
+  week learned from itself.
+- **Expect a small change.** In a simulated year (`tools/yearsim.py`, with trees that follow
+  the sun's position) the learned shade was 3.4 % of the forecast off instead of 3.9 % (5.6
+  instead of 6.8 % with an inaccurate weather forecast); the plan and the yearly costs barely
+  moved. Checked in simulation only.
+
 ## 2.21.0
 
 For a hybrid inverter with more panels than AC output, for example 6.5 kWp on a 5 kW Solis

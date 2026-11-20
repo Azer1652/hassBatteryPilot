@@ -66,7 +66,7 @@ def test_dst_days_have_their_real_length(day, minutes):
 def test_hour_ahead_keeps_the_forecast_after_the_shade_in_force():
     shade = ShadeModel()
     for _ in range(40):
-        shade.learn(1, 13, 0.3, 1.0)
+        shade.learn(date(2026, 1, 14), 13, 0.3, 1.0)
     hour = local(2026, 1, 14, 13)
     pv = PvForecast({hour: 1.0, hour + timedelta(hours=1): 0.5}, shade, BXL)
     start, _ = H.day_bounds(date(2026, 1, 14), BXL)
@@ -74,7 +74,7 @@ def test_hour_ahead_keeps_the_forecast_after_the_shade_in_force():
     h = H.hour_ahead(p, pv, lambda a, b: 0.4 * (b - a).total_seconds() / 3600, hour, start)
     assert h["hour"] == 13 * 60 and h["created"] == 13 * 60 + 4
     assert h["soc"] == [[784, 60], [840, 58]]
-    assert h["pv_raw"] == 1.0 and h["pv"] == pytest.approx(shade.factor(1, 13), abs=1e-3)
+    assert h["pv_raw"] == 1.0 and h["pv"] == pytest.approx(shade.factor(date(2026, 1, 14), 13), abs=1e-3)
     assert h["load"] == pytest.approx(0.4)
 
 

@@ -192,8 +192,9 @@
       <h2>Solar and tree shade</h2>
       <div class="kpis" id="solar"></div>
       <p class="muted" id="suntoday"></p>
-      <p class="muted">What your panels deliver compared with the forecast, by month (rows) and hour (columns).
-        Dark cells are hours the forecast overestimates, such as low winter sun behind trees.
+      <p class="muted">What your panels deliver compared with the forecast, by week of the year (rows) and hour
+        (columns). Dark cells are hours the forecast overestimates, such as low winter sun behind trees. Each day's
+        correction blends the weeks around it, so it follows the sun through the seasons.
         Tap or hover over a cell for its value.</p>
       <div class="hchart" id="shade"></div>
     </div>
@@ -662,41 +663,48 @@ const signed = (v) => `<span class="${v < 0 ? "neg" : "pos"}">${v < 0 ? "−" : 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const pad2 = (n) => String(n).padStart(2, "0");
 
-function shadeChart(el, f, kwh) {
-  // f: actual / forecast per month (rows) and hour (columns); kwh: the forecast energy each one was learned from
-  const left = 22, top = 4, cw = Math.max((Math.max(el.clientWidth, 260) - left - 4) / 17, 10), ch = 15;
-  let g = "";
+function shadeChart(el, f, kwh, weeks) {
+  // f: actual / forecast as the plan uses it, per week of the year (rows; weeks: each one's first day, "MM-DD")
+  // and clock hour (columns); kwh: the forecast energy that week itself learned from (the weeks around it count too)
+  const n = f.length, left = 22, top = 4, ch = 6, cw = Math.max((Math.max(el.clientWidth, 260) - left - 4) / 17, 10);
+  const day = (mmdd) => new Date(Date.UTC(2026, Number(mmdd.slice(0, 2)) - 1, Number(mmdd.slice(3, 5))));
   const months = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-  f.forEach((row, m) => {
-    g += `<text x="${left - 8}" y="${top + m * ch + 11}" text-anchor="end">${months[m]}</text>`;
+  let g = "";
+  f.forEach((row, w) => {
+    const m = day(weeks[w]).getUTCMonth();
+    if (w === 0 || m !== day(weeks[w - 1]).getUTCMonth()) {
+      g += `<text x="${left - 8}" y="${top + w * ch + 9}" text-anchor="end">${months[m]}</text>`;
+    }
     row.forEach((v, h) => {
       if (h < 5 || h > 21) return;
       const light = Math.round(Math.min(Math.max(v, 0), 1.2) / 1.2 * 100);
-      g += `<rect x="${left + (h - 5) * cw}" y="${top + m * ch}" width="${cw - 1}" height="${ch - 1}" rx="2"
+      g += `<rect x="${left + (h - 5) * cw}" y="${top + w * ch}" width="${cw - 1}" height="${ch - 1}" rx="1"
              fill="hsl(45, 85%, ${15 + light * 0.7}%)"/>`;
     });
   });
-  for (let h = 6; h <= 21; h += 3) g += `<text x="${left + (h - 5) * cw + cw / 2}" y="${top + 12 * ch + 12}" text-anchor="middle">${h}h</text>`;
-  g += `<rect class="xh" x="0" y="0" width="${cw - 1}" height="${ch - 1}" rx="2" fill="none" stroke="${css("--text")}"
+  for (let h = 6; h <= 21; h += 3) g += `<text x="${left + (h - 5) * cw + cw / 2}" y="${top + n * ch + 12}" text-anchor="middle">${h}h</text>`;
+  g += `<rect class="xh" x="0" y="0" width="${cw - 1}" height="${ch - 1}" rx="1" fill="none" stroke="${css("--text")}"
           stroke-width="2" visibility="hidden"/>`;
-  const sw = left + 17 * cw + 4, sh = top + 12 * ch + 18;
+  const sw = left + 17 * cw + 4, sh = top + n * ch + 18;
   el.innerHTML = `<svg viewBox="0 0 ${sw} ${sh}" width="${sw}" height="${sh}" tabindex="0" role="img"
-      aria-label="Shade by month and hour. Use the arrow keys to read the values.">${g}</svg>
+      aria-label="Shade by week and hour. Use the arrow keys to read the values.">${g}</svg>
     <div class="tip" hidden></div>`;
-  const monthName = (m) => new Date(Date.UTC(2026, m, 15)).toLocaleDateString([], {month: "long", timeZone: "UTC"});
-  chartTip(el, {key: "shade", W: sw, box: [left, left + 17 * cw, top, top + 12 * ch], grid: true,
-    value: (fx, fy) => [Math.floor(fy * 12), 5 + Math.floor(fx * 17)],
-    norm: ([m, h]) => [clamp(m, 0, 11), clamp(h, 5, 21)],
-    step: ([m, h], d, axis) => axis === "y" ? [m + d, h] : [m, h + d],
+  const dayName = (mmdd) => day(mmdd).toLocaleDateString([], {day: "numeric", month: "long", timeZone: "UTC"});
+  const today = new Date().toLocaleDateString("en-CA", {timeZone: tz}).slice(5);
+  chartTip(el, {key: "shade", W: sw, box: [left, left + 17 * cw, top, top + n * ch], grid: true,
+    value: (fx, fy) => [Math.floor(fy * n), 5 + Math.floor(fx * 17)],
+    norm: ([w, h]) => [clamp(w, 0, n - 1), clamp(h, 5, 21)],
+    step: ([w, h], d, axis) => axis === "y" ? [w + d, h] : [w, h + d],
     x: ([, h]) => left + (h - 5) * cw + cw / 2,
-    mark: ([m, h]) => ({x: left + (h - 5) * cw, y: top + m * ch}),
-    first: () => [Number(new Date().toLocaleString("en-GB", {month: "numeric", timeZone: tz})) - 1, 12],
-    html: ([m, h]) => {
-      const w = kwh ? kwh[m][h] : null;
-      let t = `<div><b>${monthName(m)}, ${pad2(h)}:00–${pad2(h + 1)}:00</b></div>`;
-      if (w === 0) return t + "<div>nothing learned yet: the forecast is used as is</div>";
-      t += `<div>the panels deliver <b>${fmt(f[m][h] * 100, 0)} %</b> of the forecast</div>`;
-      if (w) t += `<div class="h">learned from ${fmt(w, 1)} kWh of forecast</div>`;
+    mark: ([w, h]) => ({x: left + (h - 5) * cw, y: top + w * ch}),
+    first: () => [Math.max(weeks.filter((d) => d <= today).length - 1, 0), 12],
+    html: ([w, h]) => {
+      const learned = kwh ? kwh[w][h] : null;
+      let t = `<div><b>Week of ${dayName(weeks[w])}, ${pad2(h)}:00–${pad2(h + 1)}:00</b></div>`;
+      if (learned === 0 && Math.abs(f[w][h] - 1) < 0.0005) return t + "<div>nothing learned yet: the forecast is used as is</div>";
+      t += `<div>the panels deliver <b>${fmt(f[w][h] * 100, 0)} %</b> of the forecast</div>`;
+      if (learned === 0) t += '<div class="h">nothing learned in this week yet: taken from the weeks around it</div>';
+      else if (learned) t += `<div class="h">this week learned from ${fmt(learned, 1)} kWh of forecast; the weeks around it count too</div>`;
       return t;
     }});
 }
@@ -1349,7 +1357,7 @@ let render = function (s) {
   $("suntoday").textContent = sun && Math.abs(sun - 1) >= 0.15
     ? `In the last hours the panels gave ${Math.round(sun * 100)} % of the forecast after shade: ` +
       `the rest of today is planned ${sun < 1 ? "lower" : "higher"}.` : "";
-  shadeChart($("shade"), s.solar.shade, s.solar.shade_kwh);
+  shadeChart($("shade"), s.solar.shade, s.solar.shade_kwh, s.solar.shade_weeks);
   peaksChart($("peaks"), s.peaks);
   houseCard(s.load, s.peaks.limit_kw);
   $("peaknote").textContent = `Billed on the 12-month average: ${fmt(s.peaks.rolling_kw, 2)} kW.` +

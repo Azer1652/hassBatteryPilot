@@ -24,8 +24,8 @@ day/night rates, filling the battery at night would cost more than it saves.*
 - **Handles winter.** On a dull day ahead the battery is charged at night to carry the
   house, when the night price is low enough to pay for the losses and the wear.
   Otherwise it is kept for your peaks.
-- **Learns the shade of your trees** for every month and hour, and corrects the solar
-  forecast with it.
+- **Learns the shade of your trees** for every week of the year and hour of the day, and
+  corrects the solar forecast with it, day by day as the sun climbs and drops.
 - **Shows planned vs actual**, day by day: the battery level and solar the plan expected
   against what really happened.
 - **Earns from price spikes**: charges above the import limit, or sells below the reserve,

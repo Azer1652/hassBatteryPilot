@@ -8,7 +8,16 @@ from pilot.compare import Comparison
 from pilot.config import Options
 from pilot.load import LoadProfile
 from pilot.meter import PeakTracker, QuarterMeter, QuarterRecord, history_to_hourly
-from pilot.solar import PvForecast, ShadeModel, archive_forecast, hourly_from_daily, intraday_factor, parse_energy_forecast
+from pilot.solar import (
+    PvForecast,
+    ShadeModel,
+    archive_forecast,
+    hourly_from_daily,
+    intraday_factor,
+    parse_energy_forecast,
+    week_of,
+    winter_time,
+)
 
 BXL = ZoneInfo("Europe/Brussels")
 
@@ -21,20 +30,73 @@ def local(*a):
 def test_winter_tree_shade_and_summer_sun_are_learned_separately():
     m = ShadeModel()
     for _ in range(30):
-        m.learn(1, 15, actual_kwh=0.15, forecast_kwh=0.5)    # January 15:00: low sun behind the trees
-        m.learn(6, 12, actual_kwh=1.9, forecast_kwh=2.0)     # June noon: clear
-    assert m.factor(1, 15) == pytest.approx(0.3, abs=0.03)
-    assert m.factor(6, 12) == pytest.approx(0.95, abs=0.02)
-    assert m.factor(6, 15) == pytest.approx(1.0)             # nothing learned there
+        m.learn(date(2026, 1, 15), 15, actual_kwh=0.15, forecast_kwh=0.5)    # January 15:00: low sun behind the trees
+        m.learn(date(2026, 6, 15), 12, actual_kwh=1.9, forecast_kwh=2.0)     # June noon: clear
+    assert m.factor(date(2026, 1, 15), 15) == pytest.approx(0.3, abs=0.03)
+    assert m.factor(date(2026, 6, 15), 12) == pytest.approx(0.95, abs=0.02)
+    assert m.factor(date(2026, 6, 15), 15) == pytest.approx(1.0)             # nothing learned there
     assert m.month_summary()[0] == pytest.approx(0.3, abs=0.01)
+    assert m.month_summary()[2] is None
 
 
-def test_month_without_data_borrows_from_its_neighbours():
+def test_a_week_without_data_borrows_from_the_weeks_around_it():
     m = ShadeModel()
     for _ in range(40):
-        m.learn(12, 15, 0.15, 0.5)
-    assert 0.3 < m.factor(1, 15) < 0.8
-    assert m.factor(3, 15) == pytest.approx(1.0)
+        m.learn(date(2026, 12, 10), 15, 0.15, 0.5)
+    assert m.factor(date(2026, 12, 24), 15) == pytest.approx(0.3, abs=0.05)    # two weeks on
+    assert m.factor(date(2027, 1, 2), 15) < 0.6                                  # over new year too
+    assert m.factor(date(2027, 1, 20), 15) == pytest.approx(1.0)                 # six weeks on: too far
+
+
+def test_the_correction_follows_the_season_day_by_day():
+    """The trees let more through every day of March as the sun climbs: no step on 1 April."""
+    m = ShadeModel()
+    for i in range(31):
+        m.learn(date(2026, 3, 1 + i), 9, 0.4 + 0.5 * i / 30, 1.0)
+    f = [m.factor(date(2026, 3, 1) + timedelta(days=i), 9) for i in range(0, 35)]
+    assert f[4] < f[14] < f[24]
+    assert all(abs(b - a) < 0.03 for a, b in zip(f, f[1:]))                      # no jumps, 31 March to 1 April too
+    assert 0.55 < m.factor(date(2026, 3, 16), 9) < 0.75
+
+
+def test_hours_are_on_winter_time_so_the_clock_change_keeps_the_sun_in_its_cell():
+    assert winter_time(local(2026, 3, 26, 9), BXL) == (date(2026, 3, 26), 9)    # CET
+    assert winter_time(local(2026, 3, 30, 10), BXL) == (date(2026, 3, 30), 9)   # CEST: the same sun
+    m = ShadeModel()
+    for _ in range(20):
+        m.learn(*winter_time(local(2026, 3, 26, 9), BXL), 0.3, 1.0)
+    assert m.at(local(2026, 3, 30, 10), BXL) < 0.4
+    assert m.at(local(2026, 3, 30, 9), BXL) == pytest.approx(1.0)
+
+
+def test_old_learning_fades_by_half_in_a_year():
+    m = ShadeModel()
+    m.learn(date(2026, 1, 15), 12, 0.5, 1.0)
+    k = week_of(date(2026, 1, 15))
+    m.fade_to(date(2026, 1, 15))
+    m.fade_to(date(2026, 1, 15))                    # (twice the same night: once)
+    assert m.weights[k][12] == pytest.approx(1.0)
+    m.fade_to(date(2027, 1, 15))
+    assert m.weights[k][12] == pytest.approx(0.5)
+    m.fade_to(date(2026, 6, 1))                     # (a day before the last fade: nothing)
+    assert m.weights[k][12] == pytest.approx(0.5)
+    again = ShadeModel.from_json(m.to_json())
+    assert again.faded == date(2027, 1, 15) and again.factor(date(2026, 1, 15), 12) == pytest.approx(
+        m.factor(date(2026, 1, 15), 12), abs=1e-3)
+
+
+def test_the_month_model_of_2_21_is_carried_over():
+    factors, weights = [[1.0] * 24 for _ in range(12)], [[0.0] * 24 for _ in range(12)]
+    factors[0][15], weights[0][15] = 0.3, 30.0          # January 15:00 behind the trees
+    factors[6][14], weights[6][14] = 0.6, 30.0          # July 14:00 on the clock (summer time)
+    m = ShadeModel.from_json({"factors": factors, "weights": weights}, BXL)
+    assert m.migrated and len(m.factors) == 52
+    assert m.factor(date(2026, 1, 15), 15) == pytest.approx(0.3, abs=0.02)
+    assert m.at(local(2026, 7, 15, 14), BXL) == pytest.approx(0.6, abs=0.02)      # still 14:00 on the clock
+    assert m.factor(date(2026, 7, 15), 14) == pytest.approx(1.0)
+    total = sum(m.weights[k][15] for k in range(52) if m.factors[k][15] == 0.3)
+    assert total == pytest.approx(30.0, rel=0.1)       # as much evidence as before
+    assert not ShadeModel.from_json(m.to_json()).migrated
 
 
 def test_bug3_missing_pv_sensor_does_not_teach_darkness():
@@ -45,7 +107,7 @@ def test_bug3_missing_pv_sensor_does_not_teach_darkness():
                           {"import": 1, "export": 1, "load": 1, "pv": 0.0}) for i in range(4)]
     archive = {start.isoformat(): 1.2}
     assert m.learn_records(recs, archive, BXL) == 0
-    assert m.factor(1, 13) == 1.0
+    assert m.at(start, BXL) == 1.0
 
 
 def test_an_hour_with_blocked_export_does_not_teach_shade():
@@ -55,7 +117,7 @@ def test_an_hour_with_blocked_export_does_not_teach_shade():
     recs = [QuarterRecord(start + timedelta(minutes=15 * i), {"import": 0, "export": 0, "load": 0.1, "pv": 0.1},
                           {"import": 1, "export": 1, "load": 1, "pv": 1.0}, blocked=i == 2) for i in range(4)]
     assert m.learn_records(recs, {start.isoformat(): 4.0}, BXL) == 0
-    assert m.factor(6, 13) == 1.0
+    assert m.at(start, BXL) == 1.0
     for r in recs:
         r.blocked = False
     assert m.learn_records(recs, {start.isoformat(): 4.0}, BXL) == 1        # (the same hour, not blocked)
@@ -76,7 +138,7 @@ def test_an_hour_at_the_inverter_ac_output_or_the_export_limit_does_not_teach_sh
     assert ShadeModel().learn_records(at_ac, archive, BXL) == 1                     # (without the setting: learned)
     m = ShadeModel()
     assert m.learn_records(at_ac, archive, BXL, export_limit_kw=5.0, ac_max_kw=5.0) == 0
-    assert m.factor(6, 15) == 1.0
+    assert m.at(start, BXL) == 1.0
     assert ShadeModel().learn_records(hour(4.0 / 4), archive, BXL, export_limit_kw=5.0, ac_max_kw=5.0) == 1
     at_export = hour(4.9 / 4)
     assert ShadeModel().learn_records(at_export, archive, BXL, export_limit_kw=5.0) == 0
@@ -91,18 +153,19 @@ def test_learn_from_quarters_with_archived_forecast():
     recs = [QuarterRecord(start + timedelta(minutes=15 * i), {"import": 0, "export": 0, "load": 0.1, "pv": 0.1},
                           {"import": 1, "export": 1, "load": 1, "pv": 1.0}) for i in range(4)]
     assert m.learn_records(recs, {start.isoformat(): 1.0}, BXL) == 1
-    assert m.factors[0][14] == pytest.approx(0.4)
+    assert m.factors[week_of(date(2026, 1, 14))][14] == pytest.approx(0.4)
 
 
 def test_ratio_is_clamped_and_old_data_fades():
-    m = ShadeModel()
-    m.learn(3, 10, 0.0, 1.0)
-    assert m.factors[2][10] == pytest.approx(0.05)
+    m, day = ShadeModel(), date(2026, 3, 10)
+    k = week_of(day)
+    m.learn(day, 10, 0.0, 1.0)
+    assert m.factors[k][10] == pytest.approx(0.05)
     for _ in range(200):
-        m.learn(3, 10, 0.9, 1.0)
-    assert m.factors[2][10] == pytest.approx(0.9, abs=0.01)
-    assert m.weights[2][10] <= 30.0
-    assert ShadeModel.from_json(m.to_json()).factor(3, 10) == pytest.approx(m.factor(3, 10), abs=1e-3)
+        m.learn(day, 10, 0.9, 1.0)
+    assert m.factors[k][10] == pytest.approx(0.9, abs=0.01)
+    assert m.weights[k][10] <= 30.0
+    assert ShadeModel.from_json(m.to_json()).factor(day, 10) == pytest.approx(m.factor(day, 10), abs=1e-3)
 
 
 # ---------------------------------------------------------------- forecast
@@ -128,7 +191,7 @@ def test_daily_total_spread_over_daylight():
 def test_corrected_forecast_applies_shade_per_hour_and_overlap():
     shade = ShadeModel()
     for _ in range(40):
-        shade.learn(1, 15, 0.2, 1.0)
+        shade.learn(date(2026, 1, 14), 15, 0.2, 1.0)
     h15 = local(2026, 1, 14, 15)
     h12 = local(2026, 1, 14, 12)
     fc = PvForecast({h12: 2.0, h15: 1.0}, shade, BXL)
@@ -205,7 +268,7 @@ def test_the_correction_is_on_top_of_the_learned_shade():
     shade = ShadeModel()
     for h in range(8, 20):
         for _ in range(40):
-            shade.learn(6, h, 0.5, 1.0)                              # trees: half of the forecast, always
+            shade.learn(*winter_time(local(2026, 6, 15, h), BXL), 0.5, 1.0)   # trees: half of the forecast, always
     fc = PvForecast(june_day(), shade, BXL)
     f = fc.observe(quarters(local(2026, 6, 15, 9), 3, 1.0), local(2026, 6, 15, 12))     # as the shade predicts
     assert f == pytest.approx(1.0, abs=0.03)
