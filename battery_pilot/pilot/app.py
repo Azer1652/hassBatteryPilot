@@ -568,8 +568,8 @@ class App:
     async def tick(self):
         now = self.clock()
         keys = ("grid_import_power", "grid_export_power", "house_load_power", "pv_power", "battery_power",
-                "battery_soc", "battery_voltage", "tou_switch", "peak_shaving_switch", "feed_in_priority_switch",
-                "car_charger_power", "grid_power", "quarter_average_power", "month_peak_power") \
+                "inverter_grid_power", "battery_soc", "battery_voltage", "tou_switch", "peak_shaving_switch",
+                "feed_in_priority_switch", "car_charger_power", "grid_power", "quarter_average_power", "month_peak_power") \
             + (tuple(M.REGISTRY) if self.o.marstek else ())
         sts, away = await self._states_raw(keys)
         helpers = await asyncio.gather(self.ha.state(CONTROL), self.ha.state(CURTAIL), self.ha.state(CAR_FILL),
@@ -585,7 +585,7 @@ class App:
         self._force_shave_changed(self._helper("force_shave", helpers[3], self.force_shave_on, now))
         kw = {"import": self._kw("grid_import_power", sts), "export": self._kw("grid_export_power", sts),
               "load": self._kw("house_load_power", sts), "pv": self._kw("pv_power", sts),
-              "battery": self._kw("battery_power", sts)}
+              "battery": self._kw("battery_power", sts), "grid_port": self._kw("inverter_grid_power", sts)}
         grid = self._kw("grid_power", sts)
         if grid is not None:          # one signed meter (a P1 meter: + import) is used before the others
             kw["import"], kw["export"] = max(grid, 0.0), max(-grid, 0.0)
@@ -1572,7 +1572,8 @@ class App:
                             "friendly_name": "Battery Pilot inverter's own use",
                             "unit_of_measurement": "W", "device_class": "power", "icon": "mdi:power-plug-outline",
                             "kwh_per_day": eff["inverter_kwh_day"], "idle_hours_measured": eff["draw_hours"],
-                            "needed_hours": eff["needed_draw_hours"]}))
+                            "needed_hours": eff["needed_draw_hours"], "source": eff["draw_source"],
+                            "meters_w": eff["draw_meters_w"], "grid_port_w": eff["draw_grid_port_w"]}))
         for eid, state, attrs in sensors:
             try:
                 await self.ha.set_state(eid, state, attrs)

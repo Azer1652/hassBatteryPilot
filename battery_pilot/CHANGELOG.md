@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.23.0
+
+The inverter's own use can now be read at the inverter's grid connection.
+
+- **Read where it is drawn.** With the Solis *AC Grid Port Power* sensor (found
+  automatically; `inverter_grid_power` to pick another), Battery Pilot reads the inverter's own
+  use as what flows into its grid port at night, while the battery is idle and there is no sun.
+  Before, it was only worked out from the grid meter and the house load. That figure is still
+  measured and shown next to it as a check: on the page, *Inverter's own use: 80 W (1.9 kWh a
+  day, read at its grid port; the meters give 82 W)*, and on `sensor.battery_pilot_inverter_draw`
+  as the attributes `source`, `grid_port_w` and `meters_w`.
+- It needs the *Battery Power Net* entity as well, to tell when the battery is idle. Without
+  the grid-port sensor everything works as before.
+- The measured round trip still takes the meters' figure off when there is one, because the
+  battery's flow comes from the same meters.
+- **Starts from zero.** The grid-port figure shows after 8 idle hours, usually after the first
+  one or two nights; until then the meters' figure is shown.
+- The documentation says why the measured figure (about 80 W on an S6-EH1P at night) is
+  higher than the datasheet's self-consumption (under 40 W on the S6-EH1P L-PLUS): it is the
+  inverter connected and awake, ready for the battery.
+
 ## 2.22.0
 
 Tree shade is now learned per week instead of per month.

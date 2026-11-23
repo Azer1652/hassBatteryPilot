@@ -37,8 +37,9 @@ class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
                  prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
                  battery_power=False, inverter_draw_kw=0.0, marstek=False,
-                 p1_peak=0, ac_max_kw=0.0):
+                 p1_peak=0, ac_max_kw=0.0, grid_port_power=False, grid_port_bias_kw=0.0):
         self.now = now
+        self.grid_port_bias_kw = grid_port_bias_kw     # what the grid-port reading is off by (+ reads more out)
         # ac_max_kw: the Solis passes at most this to the house and the grid (0: no limit); the panels
         # give more only while the battery takes it, else they are held back (`held_kw`, and the PV
         # sensor shows what they gave). Feed-in priority stores nothing, so it holds them back too.
@@ -157,6 +158,8 @@ class FakeHA:
         if battery_power:       # Solis "Battery Power Net" (DC, + discharging), and the unsigned one beside it
             s["sensor.solis_battery_power_net"] = st(0, "W")
             s["sensor.solis_battery_power"] = st(0, "W")
+        if grid_port_power:     # Solis "AC Grid Port Power": + to the grid, - from the grid
+            s["sensor.solis_ac_grid_port_power"] = st(0, "W")
         if prices is not None:
             s["sensor.current_electricity_market_price"] = st(0.1, "€/kWh", prices=prices)
         if with_helpers:
@@ -380,6 +383,8 @@ class FakeHA:
         self.s["sensor.solis_battery_soc"]["state"] = str(round(self.soc, 1))
         if "sensor.solis_battery_power_net" in self.s:     # DC, + discharging
             self.s["sensor.solis_battery_power_net"]["state"] = str(round(-batt * 1000))
+        if "sensor.solis_ac_grid_port_power" in self.s:    # what the inverter gives the house and the grid
+            self.s["sensor.solis_ac_grid_port_power"]["state"] = str(round((load - grid + self.grid_port_bias_kw) * 1000))
 
     def _marstek_sensors(self, grid, batt, dt):
         w = {"sensor.solax_grid_import": max(grid, 0), "sensor.solax_grid_export": max(-grid, 0),

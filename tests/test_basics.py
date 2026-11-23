@@ -212,6 +212,17 @@ def test_finds_the_signed_battery_power_and_not_the_unsigned_one():
     assert found["battery_power"].scale == 0.001
 
 
+def test_finds_the_inverters_grid_port_power_but_not_with_a_marstek():
+    found, missing = discovery.resolve_all(Options(), SOLIS)
+    assert found["inverter_grid_power"].entity_id is None and "inverter_grid_power" not in missing   # optional
+    states = SOLIS | {"sensor.solis_s6_eh1p_ac_grid_port_power": _state("W"),
+                      "sensor.solis_s6_eh1p_active_power": _state("W")}
+    found, missing = discovery.resolve_all(Options(), states)
+    assert missing == [] and found["inverter_grid_power"].entity_id == "sensor.solis_s6_eh1p_ac_grid_port_power"
+    assert found["inverter_grid_power"].scale == 0.001
+    assert discovery.resolve("inverter_grid_power", Options(battery_system="marstek"), states).entity_id is None
+
+
 def test_slot_set_switch_picks_the_other_entities():
     found, _ = discovery.resolve_all(Options(slot_entities="grid_time_of_use"), SOLIS)
     assert found["discharge_end"].entity_id == "time.solis_grid_time_of_use_discharge_end_slot_1"

@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-CHANNELS = ("import", "export", "load", "pv", "battery")    # battery: DC power, + discharging (optional)
+# optional: battery (DC power, + discharging), grid_port (the inverter's AC grid port, + to the grid)
+CHANNELS = ("import", "export", "load", "pv", "battery", "grid_port")
 MAX_GAP = timedelta(minutes=3)
 MAX_STEP_BACK = timedelta(minutes=15)   # a clock set back up to this much is waited out
 QUARTER = timedelta(minutes=15)

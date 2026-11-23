@@ -81,9 +81,10 @@ def test_old_measurements_fade():
 DRAW_KW = 0.04
 
 
-def day_with_draw(d, eta=0.85 ** 0.5, draw_kw=DRAW_KW, battery=True, lo=30.0):
+def day_with_draw(d, eta=0.85 ** 0.5, draw_kw=DRAW_KW, battery=True, lo=30.0, port_kw=None):
     """Night idle (battery 0 W, no sun), 20 points in from solar, 20 points back to the house; the
-    inverter draws `draw_kw` all day on top of the house. The battery channel is DC, + discharging."""
+    inverter draws `draw_kw` all day on top of the house. The battery channel is DC, + discharging.
+    `port_kw`: the inverter's grid port reads its draw as this (None: no grid-port sensor)."""
     recs, soc, t = [], lo, T0 + timedelta(days=d)
     q_draw = draw_kw / 4
     for i in range(96):
@@ -98,6 +99,10 @@ def day_with_draw(d, eta=0.85 ** 0.5, draw_kw=DRAW_KW, battery=True, lo=30.0):
         else:                                              # night, battery idle: the grid feeds both
             kwh["import"], nxt = 0.1 + q_draw, soc
         covered = {c: 1.0 for c in CHANNELS} | ({} if battery else {"battery": 0.0})
+        if port_kw is None:
+            covered["grid_port"] = 0.0
+        else:       # what the inverter gives the house and the grid, its draw read as port_kw
+            kwh["grid_port"] = kwh["load"] + kwh["export"] - kwh["import"] + (q_draw - port_kw / 4)
         recs.append(QuarterRecord(t + timedelta(minutes=15 * i), kwh, covered, soc))
         soc = nxt
     return recs
@@ -117,6 +122,37 @@ def test_the_inverters_own_use_is_measured_and_left_out_of_the_round_trip():
     assert r["since"] == "2026-06-01"
     m2 = EfficiencyMeter.from_json(m.to_json())
     assert m2.report(75) == r
+
+
+def test_the_grid_port_gives_the_draw_and_the_meters_figure_stays_beside_it():
+    m = EfficiencyMeter()
+    for d in range(10):
+        m.learn_records(day_with_draw(d, port_kw=0.045))
+    r = m.report(75)
+    assert r["inverter_draw_w"] == 45 and r["draw_source"] == "grid port"
+    assert r["draw_grid_port_w"] == 45 and r["draw_meters_w"] == 40
+    assert r["inverter_kwh_day"] == pytest.approx(1.08, abs=0.01)
+    assert r["round_trip_pct"] == pytest.approx(85, abs=1)        # the meters' draw: the flow is theirs
+    m2 = EfficiencyMeter.from_json(m.to_json())
+    assert m2.report(75) == r
+    meters_only = EfficiencyMeter()
+    for d in range(10):
+        meters_only.learn_records(day_with_draw(d))
+    r = meters_only.report(75)
+    assert r["draw_source"] == "meters" and r["draw_grid_port_w"] is None and r["inverter_draw_w"] == 40
+
+
+def test_the_grid_port_alone_gives_the_draw_and_needs_the_battery_sensor():
+    m = EfficiencyMeter()
+    for d in range(10):
+        recs = day_with_draw(d, port_kw=0.045)
+        m.learn_records([QuarterRecord(r.start, r.kwh, r.covered | {"load": 0.0}, r.soc) for r in recs])
+    r = m.report(75)
+    assert r["draw_meters_w"] is None and r["inverter_draw_w"] == 45 and r["draw_source"] == "grid port"
+    m = EfficiencyMeter()
+    for d in range(10):
+        m.learn_records(day_with_draw(d, battery=False, port_kw=0.045))
+    assert m.report(75)["inverter_draw_w"] is None      # without it an idle battery cannot be told apart
 
 
 def test_without_the_battery_sensor_the_round_trip_keeps_the_draw():
@@ -167,3 +203,28 @@ async def test_the_app_measures_the_draw_from_the_battery_power_sensor(tmp_path)
     assert eff["inverter_draw_w"] == pytest.approx(40, abs=2)
     draw = fake.published["sensor.battery_pilot_inverter_draw"]
     assert float(draw["state"]) == pytest.approx(40, abs=2) and draw["attributes"]["unit_of_measurement"] == "W"
+
+
+async def test_the_app_reads_the_draw_at_the_grid_port(tmp_path):
+    from fake_ha import FakeHA, utc
+
+    from pilot.app import App
+    from pilot.config import Options
+
+    fake = FakeHA(utc(2026, 11, 17, 20, 0), soc=10.0, load=lambda t: 0.3, battery_power=True,
+                  inverter_draw_kw=DRAW_KW, grid_port_power=True, grid_port_bias_kw=-0.005)
+    app = App(Options(), fake, data_dir=str(tmp_path / "data"), clock=lambda: fake.now)
+    assert await app.setup()
+    assert app.ent_ids["inverter_grid_power"] == "sensor.solis_ac_grid_port_power"
+    end = fake.now + timedelta(hours=10)
+    while fake.now < end:
+        await app.step()
+        fake.advance(timedelta(seconds=60))
+    assert all(r.covered["grid_port"] > 0.9 for r in app.records[1:])
+    app.efficiency.learn_records(app.records)
+    await app.publish()
+    draw = fake.published["sensor.battery_pilot_inverter_draw"]
+    assert float(draw["state"]) == pytest.approx(45, abs=2)
+    assert draw["attributes"]["source"] == "grid port"
+    assert draw["attributes"]["grid_port_w"] == pytest.approx(45, abs=2)
+    assert draw["attributes"]["meters_w"] == pytest.approx(40, abs=2)

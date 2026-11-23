@@ -89,7 +89,7 @@ async def main(days: int, port: int, seconds: float | None, variable: bool = Fal
 
     start = datetime.combine(TODAY - timedelta(days=LIVE_DAYS), time(16, 0), TZ).astimezone(timezone.utc)
     fake = FakeHA(start, soc=38, load=lambda t: w.load_kw(t.astimezone(TZ)), pv=pv, forecast=fc, prices=prices,
-                  peak_shaving=True, battery_power=True, inverter_draw_kw=0.035)
+                  peak_shaving=True, battery_power=True, inverter_draw_kw=0.035, grid_port_power=True)
     fake.s["input_boolean.battery_pilot_control"]["state"] = "on"
     data = tempfile.mkdtemp(prefix="battery-pilot-demo-")
     options_path = os.path.join(data, "options.json")     # (the settings card exports and imports this file)

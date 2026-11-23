@@ -188,6 +188,9 @@ configuration:
   battery_power:
     name: "Battery power entity"
     description: "Leave empty to find it automatically (Battery Power Net: + discharging, - charging). Used to measure the inverter's own use."
+  inverter_grid_power:
+    name: "Inverter grid-port power entity"
+    description: "Leave empty to find it automatically (Solis AC Grid Port Power: + to the grid, - from the grid). Reads the inverter's own use where it is drawn; needs the battery power entity too."
   battery_soc:
     name: "Battery SOC entity"
     description: "Leave empty to find it automatically."

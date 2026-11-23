@@ -592,8 +592,11 @@ function efficiencyNote(e) {
   // Without the inverter's own use when it is known (it draws that whether the battery moves or not).
   const cfg = e.configured_pct;
   const has = (v) => v !== null && v !== undefined;
+  // Read at the inverter's grid port when it has that sensor; the meters' figure beside it as a check.
+  const port = e.draw_source === "grid port"
+    ? `, read at its grid port` + (has(e.draw_meters_w) ? `; the meters give ${fmt(e.draw_meters_w, 0)} W` : "") : "";
   const draw = has(e.inverter_draw_w)
-    ? ` Inverter's own use: ${fmt(e.inverter_draw_w, 0)} W (${fmt(e.inverter_kwh_day, 1)} kWh a day).`
+    ? ` Inverter's own use: ${fmt(e.inverter_draw_w, 0)} W (${fmt(e.inverter_kwh_day, 1)} kWh a day${port}).`
     : has(e.draw_hours) && e.draw_hours > 0
     ? ` Inverter's own use: measuring (${fmt(e.draw_hours, 0)} of ${fmt(e.needed_draw_hours, 0)} idle hours).` : "";
   const from = e.since ? ` since ${dayName(e.since)}` : "";

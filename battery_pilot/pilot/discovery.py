@@ -22,6 +22,8 @@ ENTITIES = {
     "pv_power": ("sensor", [r"total_pv_power", r"pv_power$", r"solax.*_pv_power_total$"], False, True),
     # signed DC battery power (+ discharge); not the unsigned `battery_power`
     "battery_power": ("sensor", [r"battery_power_net$"], False, True),
+    # the inverter's own reading at its grid connection, + to the grid (Solis "AC Grid Port Power")
+    "inverter_grid_power": ("sensor", [r"ac_grid_port_power$"], False, True),
     "battery_soc": ("sensor", [r"battery_soc$", r"battery_soc"], True, False),
     "battery_voltage": ("sensor", [r"battery_voltage$", r"battery_voltage"], False, False),
     "tou_switch": ("switch", [r"time_of_use$", r"time_of_use"], True, False),
@@ -67,7 +69,7 @@ MARSTEK_PATTERNS = {
     "battery_voltage": [r"^marstek_[a-z0-9]+_voltage$"],
 }
 # Solis-only entities: not looked for with a Marstek battery.
-SOLIS_ONLY = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
+SOLIS_ONLY = ("inverter_grid_power", "tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
               "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "peak_shaving_limit",
               "peak_shaving_soc", "feed_in_priority_switch")
 MARSTEK_ONLY = ("grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button",
@@ -85,6 +87,7 @@ NEEDED_FOR = {
     "grid_export_power": "the contract comparison (sold kWh)",
     "pv_power": "learning tree shade",
     "battery_power": "measuring the inverter's own use (the efficiency figure)",
+    "inverter_grid_power": "reading the inverter's own use at its grid port (it is worked out from the meters without it)",
     "battery_voltage": "amps to kW (the battery_voltage option is used without it)",
     "export_limit": "blocking export at negative prices",
     "peak_shaving_switch": "peak shaving: keeping the battery for a dearer hour while the grid feeds the house",

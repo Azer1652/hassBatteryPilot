@@ -407,6 +407,7 @@ log says which setting to fill in.
 | `grid_export_power` | `grid_export_power` or `export_power` (not an export *limit*) | optional | kWh sold, in the "same usage" bill. | Sold kWh count as 0 in the comparison. |
 | `pv_power` | `total_pv_power` or `pv_power` | optional | Learning tree shade (what the panels delivered vs the forecast), the charge current (solar adds room under the limit), the nightly replay. | Shade is not learned (the forecast is used as is); hours without solar data are skipped, never counted as dark, and so are hours in which export was blocked (the inverter holds the panels back then). |
 | `battery_power` | `battery_power_net` (the Solis *Battery Power Net*: + discharging, − charging; not the unsigned *Battery Power*) | optional | Measuring the inverter's own use, so it can be shown on its own and left out of the measured round-trip efficiency (see *Measured efficiency*). | The measured efficiency includes the inverter's own use. |
+| `inverter_grid_power` | `ac_grid_port_power` (the Solis *AC Grid Port Power*: + to the grid, − from the grid; not *Active Power*). Not looked for with a Marstek battery | optional, with `battery_power` | Reading the inverter's own use where it is drawn: what flows into its grid port while the battery is idle without sun. The figure from the meters is kept beside it as a check. | The inverter's own use is worked out from the grid meter and the house load. |
 | `battery_voltage_sensor` | `battery_voltage` | optional | Turning amps into kW for the charge current and the plan. | The *Battery nominal voltage* setting is used. |
 | `grid_power` | with a Marstek battery: a HomeWizard P1 meter's *Power* (`p1_meter_power`); otherwise only when set | optional | One signed grid meter (+ import, − export), used instead of `grid_import_power` and `grid_export_power` while it has a value (they are the fallback). A P1 meter is fast and measures what you are billed on. | The two entities above. |
 | `quarter_average_power` | with a Marstek battery: the P1 meter's *Average demand*; otherwise only when set | optional | The meter's own average of the running quarter-hour, for the projection that pauses charging before the capacity peak is passed. | Battery Pilot's own quarter-hour meter. |
@@ -992,9 +993,16 @@ battery's flow above includes it, which makes the round trip look worse than it 
 all when the battery charges or discharges slowly. With the `battery_power` entity
 (*Battery Power Net*), Battery Pilot measures it in quarter-hours without sun while the
 battery is idle (for example at night with the battery at its minimum, or held by peak
-shaving): there, what the grid gives beyond the house is the inverter's own use. After 8
-such hours it is shown on its own (`sensor.battery_pilot_inverter_draw`, in W and kWh a
-day), and the round trip is given without it, with the figure including it next to it.
+shaving): there, what the grid gives beyond the house is the inverter's own use. With the
+`inverter_grid_power` entity as well (the Solis *AC Grid Port Power*), the same quarter-hours
+also give it directly: what flows into the inverter's grid connection. That figure is then
+the one shown, with the meters' figure next to it as a check. After 8 such hours it is shown
+on its own
+(`sensor.battery_pilot_inverter_draw`, in W and kWh a day), and the round trip is given
+without it (the meters' figure when there is one, since the battery's flow comes from the
+same meters), with the figure including it next to it. Solis datasheets give a lower
+self-consumption (the S6-EH1P L-PLUS: under 40 W); the measured figure is the inverter
+awake at night, connected and ready for the battery.
 Measurements saved by an earlier version cannot have it taken off, so the round-trip
 measurement starts again after the update that added it.
 
@@ -1014,8 +1022,8 @@ more from the setting, change the setting yourself.
 | Entity | State | Main attributes |
 | --- | --- | --- |
 | `sensor.battery_pilot_plan` | The inverter's mode now, as on the plan chart: `self_use`, `charge`, `discharge`, `peak_shave` or `solar_hold` | `mode` (shadow/active), `soc_target`, `reason`, `winter`, `plan_cost_eur`, `boost_kw` (the higher import limit the plan pays for at a price spike, or empty), `next_hours` (the next 24 hours, each with the inverter's `mode` and the plan's `action`) |
-| `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), without the inverter's own use when that is known, or unknown until there is enough data | `round_trip_pct`, `round_trip_with_draw_pct` (including the inverter's own use), `inverter_draw_w`, `inverter_kwh_day`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_points`, `solar_points`, `grid_round_trip_pct`, `solar_round_trip_pct`, `since` |
-| `sensor.battery_pilot_inverter_draw` | The inverter's own use (W), measured while the battery is idle without sun; unknown without the `battery_power` entity or before 8 idle hours | `kwh_per_day`, `idle_hours_measured`, `needed_hours` |
+| `sensor.battery_pilot_efficiency` | The battery's measured round-trip efficiency (%), without the inverter's own use when that is known, or unknown until there is enough data | `round_trip_pct`, `round_trip_with_draw_pct` (including the inverter's own use), `inverter_draw_w`, `inverter_kwh_day`, `draw_source`, `draw_meters_w`, `draw_grid_port_w`, `configured_pct`, `charge_points`, `discharge_points`, `needed_points`, `grid_points`, `solar_points`, `grid_round_trip_pct`, `solar_round_trip_pct`, `since` |
+| `sensor.battery_pilot_inverter_draw` | The inverter's own use (W), measured while the battery is idle without sun; unknown without the `battery_power` entity or before 8 idle hours | `kwh_per_day`, `idle_hours_measured`, `needed_hours`, `source` (`grid port` or `meters`), `meters_w`, `grid_port_w` |
 | `sensor.battery_pilot_car_power` | What the car takes now (kW, 0 when not charging). Only published when car detection is on | `charging`, `source` (`house consumption` or `charger sensor`), `month_kwh`, `peak_shaving` |
 | `sensor.battery_pilot_night_target` | SOC needed when the night window ends (%) | `winter`, `need_kwh`, `solar_kwh` |
 | `sensor.battery_pilot_solar_today` | Solar forecast for today after shade and today's weather correction (kWh) | `forecast_kwh` (before correction), `today_factor` (what the panels gave in the last hours against the forecast after shade; 1.0 = as forecast) |

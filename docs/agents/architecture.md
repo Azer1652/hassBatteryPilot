@@ -261,11 +261,16 @@ puts trees on a horizon profile around the sun's position (`sun_position`), so i
 export − import − pv against the SOC change, quarters with complete data and SOC 15-95 %, 60-day
 half-life, a value after 150 SOC points each way). `learn_records` is called from `App.nightly()`.
 The inverter's own use: with the optional `battery_power` entity (Solis *Battery Power Net*, DC,
-+ discharging; meter channel `battery`, the only optional channel in `meter.CHANNELS`), quarters
-with |battery| and pv under 5 Wh give `import − load − export` as the draw (kept between −50 and
-200 W). After 8 such hours `round_trip_pct` is without it (draw × hours of each kind taken off what
-went in, added to what came out) and `round_trip_with_draw_pct` keeps it; `hours` per kind are
-counted for that, and state saved without them starts over (`from_json`). Display only
++ discharging; meter channel `battery`, optional in `meter.CHANNELS`), quarters with |battery| and
+pv under 5 Wh give `import − load − export` as the draw (`draw_kwh`, kept between −50 and 200 W).
+With the optional `inverter_grid_power` entity as well (Solis *AC Grid Port Power*, + to the grid;
+meter channel `grid_port`, the other optional channel; Solis only) the same quarters give
+`−grid_port` (`port_kwh`). `draw_kw()` is the grid port's figure when it has 8 hours, else the
+meters'; `report` gives both (`draw_meters_w`, `draw_grid_port_w`, `draw_source`). After 8 such
+hours `round_trip_pct` is without the draw (draw × hours of each kind taken off what went in, added
+to what came out; the meters' draw when there is one, since the flow comes from the same meters)
+and `round_trip_with_draw_pct` keeps it; `hours` per kind are counted for that, and state saved
+without them starts over (`from_json`). Display only
 (`status["efficiency"]`, `sensor.battery_pilot_efficiency`, `sensor.battery_pilot_inverter_draw`):
 the plan keeps using `round_trip_efficiency_pct`.
 
