@@ -105,7 +105,12 @@ peak-shaving switch on; every other command turns it off (`_shave_off`). `peak_s
 `controller.ACTIVE` with charge, discharge and failed: control off, blind, stop and restart
 return to self-use, and `_reconcile` reads that switch back too. `tick()` stops a charge/discharge after
 `BLIND_S` without SOC/import (or a frozen SOC), keeps helper states through short read failures,
-and reads the time-of-use switch back (`_reconcile`). `refresh()` runs as a background task.
+and reads the time-of-use, peak-shaving and feed-in priority switches back (`_reconcile`): after two
+ticks that disagree, `Solis.mode` becomes what the inverter now does (or `failed`) and `decide` starts
+from there, so inside a band that allows both modes (winter level, peak buffer) the new mode is kept.
+The event (`_drift` + `_after_drift`) is written after the decision: which switch, when and who
+changed it (`changed_by`, from the state's context), and what Battery Pilot does about it.
+`refresh()` runs as a background task.
 Health: the Dockerfile `HEALTHCHECK` calls `/health` (503 when the main loop stalls,
 `App.healthy`); the add-on linter rejects the old `watchdog` key in `config.yaml`.
 

@@ -63,3 +63,11 @@ Things that cost time before. Read once.
 
 - In a cloud session many hosts are blocked (a supplier's download site, for example). Ask the
   owner for the file instead of retrying. `pdftotext -layout` reads tariff cards well.
+- The Solis Modbus integration (github.com/Pho3niX90/solis_modbus, public; clone it to read) keeps
+  the inverter's storage mode in one register, 43110, as bits: Self-Use 0, Time of Use 1, Feed-in
+  Priority 6, Peak Shaving 11, Allow grid charging 5. Its switches read-modify-write that register and
+  clear conflicting bits when one goes on (`sensor_data/switch_sensors.py`, `conflicts_with`); nothing
+  is cleared when one goes off. It writes 43110 only from those switches, its *Storage Mode* select or
+  the `solis_write_holding_register` action; its own background writes are the clock (43000) and
+  keep-alives on other registers. The hidden sensor *Storage control Switch value* holds the raw
+  43110, and *Operating Mode* (33122) the mode the inverter runs (2 Self-Use, 512 Peak Shaving).

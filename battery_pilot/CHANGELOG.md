@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.24.0
+
+When something else changes the inverter, the log now says who, and what Battery Pilot does about it.
+
+- **Who changed it.** When the time-of-use, peak-shaving or feed-in priority switch is found
+  different from what Battery Pilot set, the event gives the time and who changed it: an
+  automation or script in Home Assistant, a user or an app in Home Assistant, or nobody in Home
+  Assistant (then the change was read from the inverter: the Solis app, SolisCloud or the
+  inverter itself).
+- **What happens next.** The event used to end with "correcting it" even when nothing was
+  sent. It now says what Battery Pilot does: for example *Battery Pilot sets peak shaving: …*, or
+  *Battery Pilot leaves it in self-use: self-use down to the winter level (80 %)*. Between the
+  winter level and 5 points above it both modes are allowed, so a peak-shaving switch turned off
+  there (say at 82 % with a winter level of 80 %) stays off until the battery is down to the level.
+- **Self-Use is switched back on.** The Solis Modbus integration switches the inverter's
+  *Self-Use mode* off whenever peak shaving or feed-in priority goes on, and nothing switched it on
+  again, so after peak shaving the inverter was left with no storage mode switched on. Battery
+  Pilot now switches *Self-Use mode* on whenever it ends peak shaving or solar hold, and with every
+  charge or discharge command. The switch is found automatically (`switch.…_self_use_mode`;
+  `self_use_switch` to pick another); without it nothing changes.
+
 ## 2.23.0
 
 The inverter's own use can now be read at the inverter's grid connection.

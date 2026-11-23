@@ -14,6 +14,7 @@ from pilot.ha import HAUnreachable
 
 TZ = ZoneInfo("Europe/Brussels")
 V = 51.2
+APP_USER = "supervisor-user"     # the user an app's actions run as (the Supervisor's)
 CAP = 16.0
 # A fixed contract whose night rate is low enough for night charging to pay after losses and wear:
 # with the default rates it does not, and a winter night then gets no charge target.
@@ -37,7 +38,7 @@ class FakeHA:
     def __init__(self, now: datetime, soc=30.0, load=lambda t: 0.5, pv=lambda t: 0.0, forecast=None,
                  prices=None, with_helpers=True, peak_shaving=False, feed_in_priority=False, force_action=False,
                  battery_power=False, inverter_draw_kw=0.0, marstek=False,
-                 p1_peak=0, ac_max_kw=0.0, grid_port_power=False, grid_port_bias_kw=0.0):
+                 p1_peak=0, ac_max_kw=0.0, grid_port_power=False, grid_port_bias_kw=0.0, self_use_switch=False):
         self.now = now
         self.grid_port_bias_kw = grid_port_bias_kw     # what the grid-port reading is off by (+ reads more out)
         # ac_max_kw: the Solis passes at most this to the house and the grid (0: no limit); the panels
@@ -155,6 +156,8 @@ class FakeHA:
             s["number.solis_peak_baseline_soc"] = st(50, "%")
         if feed_in_priority:    # the Solis feed-in priority: solar surplus is exported, not stored
             s["switch.solis_feed_in_priority"] = st("off")
+        if self_use_switch:     # the Solis Self-Use mode bit: the integration clears it when peak shaving
+            s["switch.solis_self_use_mode"] = st("on")     # or feed-in priority goes on (see `call`)
         if battery_power:       # Solis "Battery Power Net" (DC, + discharging), and the unsigned one beside it
             s["sensor.solis_battery_power_net"] = st(0, "W")
             s["sensor.solis_battery_power"] = st(0, "W")
@@ -168,6 +171,7 @@ class FakeHA:
             s["input_boolean.battery_pilot_fill_battery_for_car"] = st("off")
             s["input_boolean.battery_pilot_force_peak_shaving"] = st("off")
         self.s = s
+        self._ctx = 0
         self.helpers_created: list[str] = []
         self.advance(timedelta(0))
 
@@ -200,6 +204,18 @@ class FakeHA:
             v = {**v, "state": self.override[eid]}
         return None if v is None else {"entity_id": eid, **v}
 
+    def flip(self, eid, state, user_id=None, parent_id=None):
+        """Change a switch as Home Assistant records it: a new context (`user_id`: a user or an app
+        called the action; `parent_id`: an automation or script did; neither: the integration read
+        the change from the inverter) and `last_changed` when the state changes."""
+        if eid not in self.s:
+            return
+        self._ctx += 1
+        if self.s[eid]["state"] != state:
+            self.s[eid]["last_changed"] = self.now.isoformat()
+        self.s[eid]["state"] = state
+        self.s[eid]["context"] = {"id": f"ctx{self._ctx}", "parent_id": parent_id, "user_id": user_id}
+
     async def supervisor(self, method, path, body=None):
         if self.supervisor_error:
             raise RuntimeError(self.supervisor_error)
@@ -223,7 +239,17 @@ class FakeHA:
             raise RuntimeError("Modbus timeout")
         self.calls.append((domain, service, data))
         eid = data.get("entity_id")
-        if domain in ("switch", "input_boolean") and isinstance(eid, str):
+        if domain == "switch" and isinstance(eid, str):
+            if eid not in self.s:               # an unknown switch fails, as in Home Assistant
+                raise KeyError(eid)
+            self.flip(eid, "on" if service == "turn_on" else "off", user_id=APP_USER)
+            # the Solis Modbus integration's conflicting mode bits (register 43110)
+            if service == "turn_on" and eid in ("switch.solis_peak_shaving_mode", "switch.solis_feed_in_priority"):
+                self.flip("switch.solis_self_use_mode", "off", user_id=APP_USER)
+            elif service == "turn_on" and eid == "switch.solis_self_use_mode":
+                for other in ("switch.solis_peak_shaving_mode", "switch.solis_feed_in_priority"):
+                    self.flip(other, "off", user_id=APP_USER)
+        elif domain == "input_boolean" and isinstance(eid, str):
             self.s[eid]["state"] = "on" if service == "turn_on" else "off"
         elif domain == "number" and service == "set_value":
             self.s[eid]["state"] = str(data["value"])

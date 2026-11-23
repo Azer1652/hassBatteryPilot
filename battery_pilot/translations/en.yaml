@@ -233,6 +233,9 @@ configuration:
   feed_in_priority_switch:
     name: "Feed-in priority switch entity"
     description: "Leave empty to find it automatically (switch …feed_in_priority). With it, Battery Pilot can send solar surplus to the grid first and keep room in the battery for hours in which the surplus cannot be sold (negative price, export limit)."
+  self_use_switch:
+    name: "Self-use switch entity"
+    description: "Leave empty to find it automatically (switch …self_use_mode). With it, Battery Pilot puts the inverter back in its Self-Use mode when it ends peak shaving or solar hold; without it the inverter is left with no storage mode switched on."
   car_charger_power:
     name: "Car charger power entity"
     description: "Optional, never found automatically. A power sensor of the charger (kW or W). When set, the car counts as charging above 1 kW and the jump detection is not used."

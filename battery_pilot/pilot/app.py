@@ -55,6 +55,30 @@ HA_BACK_GRACE_S = 120  # after Home Assistant comes back, integrations (forecast
 HA_AWAY_PROBLEM = "waiting for Home Assistant (restarting?)"
 MODE_TEXT = {"charge": "charging", "discharge": "discharging", "self_use": "self-use",
              "peak_shave": "peak shaving", "solar_hold": "solar hold"}
+
+
+def changed_by(st: dict | None) -> str:
+    """Who made a state's last change, from the context Home Assistant keeps with it: an automation
+    or script (a parent context), a user or an app (a user, also the Supervisor's for apps), else the
+    integration itself, which for a Solis switch means it read the change from the inverter.
+    Empty when the state carries no context."""
+    ctx = (st or {}).get("context")
+    if not isinstance(ctx, dict) or not ctx.get("id"):
+        return ""
+    if ctx.get("parent_id"):
+        return "it was switched in Home Assistant by an automation or a script"
+    if ctx.get("user_id"):
+        return "it was switched in Home Assistant by a user or an app"
+    return ("it was not switched in Home Assistant but read from the inverter (changed in the Solis app, "
+            "SolisCloud or by the inverter itself)")
+
+
+def changed_at(st: dict | None, tz) -> str:
+    """The local time (HH:MM:SS) of a state's last change, or empty."""
+    try:
+        return datetime.fromisoformat((st or {})["last_changed"]).astimezone(tz).strftime("%H:%M:%S")
+    except (KeyError, TypeError, ValueError):
+        return ""
 HEALTH_S = 600        # the main loop must have gone round this recently (it sleeps 300 s between setup tries)
 
 
@@ -623,9 +647,7 @@ class App:
         self.readings = Readings(now, local, soc, kw["load"], kw["pv"] or 0.0, kw["import"], projection, voltage)
         step = self.plan.step_at(now) if self.plan else None
         if self.solis:
-            self._reconcile(now, (sts.get("tou_switch") or {}).get("state"),
-                            (sts.get("peak_shaving_switch") or {}).get("state"),
-                            (sts.get("feed_in_priority_switch") or {}).get("state"))
+            drift = self._reconcile(now, sts)
             # (a charge or discharge is not stopped for the last minutes before a slot boundary)
             step = step_to_follow(self.plan, now, Battery.from_options(self.o), self.solis.mode)
             self.solis.volts = voltage
@@ -640,6 +662,8 @@ class App:
                     and self.solis.shave_set and self.solis.shave_set[1] != self.shave_level):
                 self.decision = Decision("peak_shave", reason=f"the car {'charges' if self.car_state.charging else 'stopped'}"
                                                               f": the battery is kept at {self.shave_level:.0f} %")
+            for text in drift:
+                self.event(f"{text} {self._after_drift()}")
             await self._apply(self.decision, local)
             if isinstance(self.solis, M.Marstek) and self.control_on:
                 await self._follow(local, kw["import"] - (kw["export"] or 0.0), soc)
@@ -819,14 +843,20 @@ class App:
             self.decision = Decision("self_use", reason="measurements unavailable")
             await self._apply(self.decision, local)
 
-    def _reconcile(self, now: datetime, tou: str | None, shave: str | None = None, hold: str | None = None):
-        """Read the time-of-use and peak-shaving switches back: if something else changed one, the
-        next command corrects it."""
+    def _reconcile(self, now: datetime, sts: dict) -> list[str]:
+        """Read the time-of-use, peak-shaving and feed-in priority switches back. When something else
+        changed one, `Solis.mode` becomes what the inverter now does (or `failed`), so the next
+        decision starts from there: it sets Battery Pilot's mode again, or keeps the new one where the
+        controller allows both (the winter level's band, the peak buffer's). Returns what changed, as
+        the start of an event that `tick` finishes with what Battery Pilot does about it."""
         s = self.solis
+        found: list[str] = []
+        tou, shave, hold = ((sts.get(k) or {}).get("state")
+                            for k in ("tou_switch", "peak_shaving_switch", "feed_in_priority_switch"))
         settling = self._cmd_at is not None and (now - self._cmd_at).total_seconds() < TOU_SETTLE_S
         if not self.control_on or settling:
             self._tou_mismatch = self._shave_mismatch = self._hold_mismatch = 0
-            return
+            return found
         if tou not in ("on", "off"):      # no readable time-of-use switch (optional in force mode): the others still count
             wrong = False
         elif s.force:                     # time of use stays off: the force action does the work
@@ -838,14 +868,14 @@ class App:
         if self._tou_mismatch >= 2:
             self._tou_mismatch = 0
             s.mode = "failed" if tou == "on" else "self_use"
-            self.event(f"The inverter's time-of-use switch is {tou}, not what Battery Pilot set; correcting it.")
+            found.append(self._drift("time-of-use switch", tou, sts.get("tou_switch")))
         wrong = (hold == "on" and s.mode in ("self_use", "charge", "discharge", "peak_shave")) \
             or (hold == "off" and s.mode == "solar_hold")
         self._hold_mismatch = self._hold_mismatch + 1 if wrong else 0
         if self._hold_mismatch >= 2:
             self._hold_mismatch = 0
             s.mode, s.hold = ("failed", None) if hold == "on" else ("self_use", False)
-            self.event(f"The inverter's feed-in priority switch is {hold}, not what Battery Pilot set; correcting it.")
+            found.append(self._drift("feed-in priority switch", hold, sts.get("feed_in_priority_switch")))
         wrong = (shave == "on" and s.mode in ("self_use", "charge", "discharge", "solar_hold")) \
             or (shave == "off" and s.mode == "peak_shave")
         self._shave_mismatch = self._shave_mismatch + 1 if wrong else 0
@@ -853,7 +883,26 @@ class App:
             self._shave_mismatch = 0
             # on: the next command switches it off again; off: the inverter is in self-use
             s.mode, s.shave = ("failed", None) if shave == "on" else ("self_use", False)
-            self.event(f"The inverter's peak-shaving switch is {shave}, not what Battery Pilot set; correcting it.")
+            found.append(self._drift("peak-shaving switch", shave, sts.get("peak_shaving_switch")))
+        return found
+
+    def _drift(self, name: str, state: str, st: dict | None) -> str:
+        """'The inverter's <switch> went <state> at <time>, not what Battery Pilot set: <who>.'"""
+        at = changed_at(st, self.tz)
+        who = changed_by(st)
+        return (f"The inverter's {name} went {state}{f' at {at}' if at else ''}, not what Battery Pilot set"
+                + (f": {who}." if who else "."))
+
+    def _after_drift(self) -> str:
+        """What Battery Pilot does about a switch something else changed: the decision of this tick."""
+        d, mode = self.decision, self.solis.mode
+        if d.command in MODE_TEXT:
+            return f"Battery Pilot sets {MODE_TEXT[d.command]}: {d.reason}."
+        if d.command == "current":
+            return f"Battery Pilot sets the current to {d.amps} A: {d.reason}."
+        if mode in MODE_TEXT:
+            return f"Battery Pilot leaves it in {MODE_TEXT[mode]}: {d.reason}."
+        return f"Battery Pilot sends nothing yet: {d.reason}."
 
     async def _follow(self, local: datetime, grid_kw: float, soc: float):
         """A Marstek in peak shaving or solar hold: the passive power follows the grid meter."""

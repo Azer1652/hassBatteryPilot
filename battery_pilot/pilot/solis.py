@@ -14,6 +14,11 @@ peak-shaving switch off again.
 Solar hold (optional, when the integration has the feed-in priority switch): solar
 surplus goes to the grid and not into the battery. Handled like peak shaving.
 
+Self-use (optional, when the integration has the Self-Use Mode switch): the integration clears the
+inverter's Self-Use bit when peak shaving or feed-in priority is switched on, so switching those off
+left the inverter with no storage mode at all. Every command that ends them (self-use, charge,
+discharge) switches Self-Use on after them, which is the value SolisCloud writes for Self Use.
+
 Force (`method == "force"`, when the integration has the actions): charge and discharge go
 through the Solis Modbus actions `solis_force_battery_charge` / `_discharge` (the inverter's
 remote control: mode, power in W and a timeout of at most 30 minutes, after which the
@@ -31,7 +36,7 @@ log = logging.getLogger(__name__)
 NEEDED = ("tou_switch", "grid_charge_switch", "charge_current", "discharge_current",
           "charge_start", "charge_end", "discharge_start", "discharge_end")
 OPTIONAL = ("export_limit", "peak_shaving_switch", "peak_shaving_limit", "peak_shaving_soc",
-            "feed_in_priority_switch")
+            "feed_in_priority_switch", "self_use_switch")
 FORCE_DOMAIN = "solis_modbus"
 FORCE_MINUTES = 30              # the longest timeout the action accepts
 FORCE_RENEW_S = 10 * 60         # sent again this often while it should go on
@@ -113,6 +118,8 @@ class Solis:
         if "feed_in_priority_switch" in self.entities and self.hold is not False:
             await self._call("switch", "turn_off", "feed_in_priority_switch")
             self.hold = False
+        # after them: the integration clears Self-Use when either goes on (no write when it is on already)
+        await self._maybe("switch", "turn_on", "self_use_switch")
 
     async def solar_hold(self, t_local: datetime):
         """Solar surplus to the grid, not into the battery (the inverter's feed-in priority)."""

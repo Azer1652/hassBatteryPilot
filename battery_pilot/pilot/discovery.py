@@ -39,6 +39,7 @@ ENTITIES = {
     "peak_shaving_limit": ("number", [r"peak_max_usable_grid_power", r"max_usable_grid_power"], False, False),
     "peak_shaving_soc": ("number", [r"peak_baseline_soc", r"baseline_soc"], False, False),
     "feed_in_priority_switch": ("switch", [r"feed_in_priority(_mode)?$", r"feed_in_priority"], False, False),
+    "self_use_switch": ("switch", [r"self_use_mode$"], False, False),
     "forecast_power_now": ("sensor", [r"^power_production_now$", r"power_production_now"], False, False),
     "forecast_today": ("sensor", [r"^energy_production_today$"], False, False),
     "forecast_tomorrow": ("sensor", [r"^energy_production_tomorrow$"], False, False),
@@ -71,7 +72,7 @@ MARSTEK_PATTERNS = {
 # Solis-only entities: not looked for with a Marstek battery.
 SOLIS_ONLY = ("inverter_grid_power", "tou_switch", "grid_charge_switch", "charge_current", "discharge_current", "charge_start",
               "charge_end", "discharge_start", "discharge_end", "peak_shaving_switch", "peak_shaving_limit",
-              "peak_shaving_soc", "feed_in_priority_switch")
+              "peak_shaving_soc", "feed_in_priority_switch", "self_use_switch")
 MARSTEK_ONLY = ("grid_power", "quarter_average_power", "month_peak_power", "marstek_auto_mode_button",
                 "marstek_mode_select",
                 "marstek_last_message", "battery_soc_backup",
@@ -93,6 +94,7 @@ NEEDED_FOR = {
     "peak_shaving_switch": "peak shaving: keeping the battery for a dearer hour while the grid feeds the house",
     "peak_shaving_limit": "setting the peak-shaving power to the import limit (the inverter's own value is used without it)",
     "feed_in_priority_switch": "solar hold: exporting morning surplus to keep room in the battery for midday",
+    "self_use_switch": "putting the inverter back in its Self-Use mode after peak shaving or solar hold",
     "peak_shaving_soc": "setting the peak-shaving battery level (the inverter's own value is used without it)",
     "forecast_power_now": "learning tree shade",
     "forecast_today": "the solar forecast when HA's energy forecast is not set up",

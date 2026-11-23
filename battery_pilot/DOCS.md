@@ -439,6 +439,7 @@ Power sensors can be in W or kW: the unit is read from the entity.
 | `peak_shaving_limit` | number `…peak_max_usable_grid_power` | optional: the grid power the inverter shaves to; without it the inverter's own value is used |
 | `peak_shaving_soc` | number `…peak_baseline_soc` | optional: the battery level the inverter keeps while peak shaving; without it the inverter's own value is used |
 | `feed_in_priority_switch` | switch `…feed_in_priority` / `…feed_in_priority_mode` | optional: without it the plan never uses solar hold |
+| `self_use_switch` | switch `…self_use_mode` | optional: switched on whenever Battery Pilot ends peak shaving or solar hold (the Solis Modbus integration switches it off when either starts); without it the inverter is left with no storage mode switched on |
 
 Slot entities come in two sets on Solis Modbus (`time_charging` and
 `grid_time_of_use`); the *Solis slot entities* setting picks which one. When several
@@ -605,7 +606,7 @@ or more than 2.5 kW).
 | Renew | At every new clock hour while still charging or exporting, and every 10 minutes with the force action. | The same as Charge / Discharge. |
 | Peak shaving | The plan says peak shaving in this slot (only when the peak-shaving switch was found). | *Time of use* off, peak-shaving grid power = *Grid import limit*, peak-shaving baseline SOC = *Battery minimum SOC* (so the inverter does not refill the battery from the grid by itself; or the lowest value the entity accepts), *peak-shaving mode* on. The two numbers are written only when they change. |
 | Solar hold | The plan says solar hold in this slot, the *feed-in priority* switch was found and the solar surplus is at least 0.3 kW. | *Time of use* off, *feed-in priority* on. Back to self-use when the surplus is gone (not within 120 s of the last command). |
-| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Stop force charge/discharge* (with the force action), *time of use* off, and *peak-shaving mode* and *feed-in priority* off when Battery Pilot switched them on. Everything else is left as it is. |
+| Self-use | The plan says self-use, a target is reached, charging pauses for a peak, *Battery Pilot control* is switched off, the measurements are lost, or the app stops. | *Stop force charge/discharge* (with the force action), *time of use* off, *peak-shaving mode* and *feed-in priority* off when Battery Pilot switched them on, and *Self-Use mode* on (when that switch was found; the Solis Modbus integration switches it off whenever peak shaving or feed-in priority goes on, and charge and discharge switch it on too). Everything else is left as it is. |
 | Block export | *Battery Pilot block negative export* is on, an export-limit entity exists and the sell price is below zero. | Export limit 0 W, and back to the value it had before (at most *Normal export limit*) when the price is positive again. An installation already at 0 W (zero export) is left alone. |
 
 How the charge current is chosen: enough to reach the plan's SOC by the end of the
@@ -636,8 +637,14 @@ at an extreme price.
   (the app's Info tab): the app reports its health to Docker, and the watchdog restarts
   it when that fails.
 - **Someone else changes the inverter:** while *Battery Pilot control* is on, the
-  time-of-use switch is read back every tick and corrected if something else changed it.
-  With control off, your own settings are never touched.
+  time-of-use, peak-shaving and feed-in priority switches are read back every tick. When
+  something else changed one, the log says which switch, when, and who changed it: an
+  automation or script in Home Assistant, a user or an app in Home Assistant, or nothing in
+  Home Assistant (then the change was read from the inverter: the Solis app, SolisCloud or the
+  inverter itself). It also says what Battery Pilot does about it: usually it sets its own
+  mode again. Where its own rules allow both peak shaving and self-use (from the winter level
+  to 5 points above it, and up to 2 points above the peak buffer when the plan says self-use),
+  it keeps the mode the inverter is in. With control off, your own settings are never touched.
 - **Home Assistant restarts:** no command can reach the inverter then, so it keeps its
   setting (a force command or a time-of-use slot ends by itself). The log shows one line when
   Home Assistant goes away and one when it is back; Battery Pilot then sends its command again
