@@ -16,7 +16,7 @@ configuration:
     description: "Fixed yearly fee of the fixed contract."
   fixed_sell_mult:
     name: "Fixed: sell price x market"
-    description: "Fixed contract sell price = this x the month's average market price (EUR/MWh) + the next setting. For a flat sell rate, set this to 0."
+    description: "Fixed contract sell price = this x the month's average market price (EUR/MWh) + the next setting. The factor before Belpex on your injection tariff sheet (Eneco Injection), with no correction. For a flat sell rate, set this to 0."
   fixed_sell_add:
     name: "Fixed: sell price + (c/kWh)"
     description: "Added to the fixed sell price (negative for a deduction). For a flat sell rate, put the rate here."
@@ -54,8 +54,8 @@ configuration:
     name: "Variable: VAT (%)"
     description: "VAT on the variable energy price. Set 0 if the formula on your tariff sheet already includes VAT."
   variable_sell_mult:
-    name: "Variable: sell price x index"
-    description: "Variable sell price = this x the index (EUR/MWh) + the next setting."
+    name: "Variable: sell price x market"
+    description: "Variable sell price = this x the month's average market price (EUR/MWh) + the next setting. The published index below is for buying only."
   variable_sell_add:
     name: "Variable: sell price + (c/kWh)"
     description: "Usually negative: the supplier's deduction on what you sell."
@@ -73,7 +73,7 @@ configuration:
     description: "Added to every bought kWh on both contracts. Update each January from your bill."
   injection_fee_c_kwh:
     name: "Injection fee (c/kWh)"
-    description: "Grid operator fee on every sold kWh, on both contracts."
+    description: "Grid operator fee on every sold kWh, on every contract. In Flanders 0 for solar panels up to 10 kVA (Fluvius only charges it above that)."
   night_start:
     name: "Night tariff starts (HH:MM)"
     description: "Start of the night tariff, and of the window for winter night charging."

@@ -1292,9 +1292,8 @@ class App:
             del self.winter_days[d]
         self.label_plan(now)
         self._log_plan(now)
-        avg = self.market_avg_month(now)
-        self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz,
-                                           self.variable_index(now) if k == "variable" else avg)
+        avg, idx = self.market_avg_month(now), self.variable_index(now)
+        self.trading = {k: trading.margins(self.o, k, self.price_slots, now, self.tz, avg, index=idx)
                         for k in kinds(self.o)}
         boost, seen = self.plan.boost, self.boost_seen
         # The plan is redone every few minutes while a boost runs: announce a window once, unless
@@ -1441,9 +1440,8 @@ class App:
             s0 = soc0.get(kind)
             if s0 is None:
                 s0 = recs[0].soc if recs and recs[0].soc is not None else 50.0
-            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0,
-                             var_idx if kind == "variable" else avg,
-                             block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
+            res = replay_day(recs, kind, self.o, self.tz, price_slots, self.load, pv_fc.kwh, s0, avg,
+                             index=var_idx, block_negative=block_negative, month_peak_kw=(peak0 or {}).get(kind, 0.0),
                              peak_shave=self.can_peak_shave, solar_hold=self.can_solar_hold,
                              on_replan=lambda past, t: pv_fc.observe(past, t, export_limit_kw=self.o.export_limit_kw,
                                                                      ac_max_kw=self.o.ac_max_kw))

@@ -17,9 +17,10 @@ from .tariffs import tariff
 
 
 def _slots(o: Options, kind: str, price_slots: list[PriceSlot], now: datetime, tz: ZoneInfo,
-           market_avg: float | None, hours: int) -> list[tuple[datetime, float, float, float | None]]:
+           market_avg: float | None, hours: int,
+           index: float | None = None) -> list[tuple[datetime, float, float, float | None]]:
     """(start, buy, sell, market) of each price period in the coming hours, in c/kWh."""
-    t = tariff(kind, o, market_avg)
+    t = tariff(kind, o, index if index is not None else market_avg)
     end = now + timedelta(hours=hours)
     out = []
     if kind == "dynamic":
@@ -37,13 +38,15 @@ def _slots(o: Options, kind: str, price_slots: list[PriceSlot], now: datetime, t
 
 
 def margins(o: Options, kind: str, price_slots: list[PriceSlot], now: datetime, tz: ZoneInfo,
-            market_avg: float | None = None, hours: int = 24) -> dict | None:
+            market_avg: float | None = None, hours: int = 24, index: float | None = None) -> dict | None:
     """The best trade and the best shift in the coming hours, per kWh bought from the grid.
 
     trade: buy a kWh, sell what is left of it later. shift: buy a kWh, use what is left of it in a
     later hour instead of buying then. `margin_c` is what one bought kWh earns after the conversion
-    losses and battery wear (negative: it loses). None without prices for this contract."""
-    slots = _slots(o, kind, price_slots, now, tz, market_avg, hours)
+    losses and battery wear (negative: it loses). None without prices for this contract.
+    `market_avg`: the month's average market price (the fixed and variable sell price follow it);
+    `index`: a variable contract's buy index for the month (without it: `market_avg`)."""
+    slots = _slots(o, kind, price_slots, now, tz, market_avg, hours, index)
     if len(slots) < 2:
         return None
     b = Battery.from_options(o)

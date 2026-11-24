@@ -42,11 +42,12 @@ class Options:
     contract: str = "fixed"                  # the contract you are on now: fixed | dynamic | variable
     fixed_contract_end: str = ""             # YYYY-MM-DD, for renewal reminders
     grid_fees_c_kwh: float = 11.33           # added to every bought kWh, both contracts, incl. VAT
-    injection_fee_c_kwh: float = 0.19        # subtracted from every sold kWh, both contracts
+    injection_fee_c_kwh: float = 0.0         # grid operator's fee per sold kWh, all contracts (Fluvius: none
+                                             # for solar up to 10 kVA, 0.1751 c/kWh excl. VAT above)
     fixed_day_rate: float = 18.59            # c/kWh incl. VAT, without grid fees
     fixed_night_rate: float = 15.22
-    fixed_sell_mult: float = 0.0798          # fixed sell = mult x month avg market (EUR/MWh) + add
-    fixed_sell_add: float = -2.72
+    fixed_sell_mult: float = 0.076           # fixed sell = mult x month avg market (EUR/MWh) + add - fee:
+    fixed_sell_add: float = -3.0             # Eneco Injection, Nov 2026 (Belpex-injectie = the plain average)
     fixed_yearly_fee_eur: float = 65.0
     dynamic_buy_mult: float = 0.102          # dynamic buy = (mult x market + add) x (1 + VAT) + grid fees
     dynamic_buy_add: float = 0.408
@@ -55,7 +56,8 @@ class Options:
     dynamic_sell_add: float = -1.3
     dynamic_yearly_fee_eur: float = 15.0
     # variable (monthly index): buy = (mult x index + add) x (1 + VAT) + grid fees, day and night apart
-    # (night 0 and 0: the day formula); sell = sell mult x index + sell add - injection fee.
+    # (night 0 and 0: the day formula); sell = sell mult x the month's average market price + sell add
+    # - injection fee (the injection price is not weighted like a published buy index).
     # Index: the month's average market price, or the published one for the month it is set for.
     # Day factor 0: no variable contract (it is left out of the comparison).
     variable_day_mult: float = 0.0

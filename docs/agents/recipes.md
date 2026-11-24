@@ -93,6 +93,13 @@ The defaults are a Flemish Eneco contract on Fluvius Antwerpen. From a supplier'
 
 - dynamic: `(dynamic_buy_mult × Belpex + dynamic_buy_add) × (1 + VAT)` and
   `dynamic_sell_mult × Belpex + dynamic_sell_add`, the yearly fee;
+- fixed sell: the *Eneco Injection* card's `mult × Belpex + add`, as printed. Eneco's
+  "Belpex-injectie" is the plain monthly average of the day-ahead prices (its published values in
+  `indexatieparameters-elek.pdf` match the day-ahead data to the cent), which is what
+  `App.market_avg_month` gives: no correction factor. Variable contracts sell on the same average,
+  even when their buy index (Belpex-RLP-M) is published;
+- `injection_fee_c_kwh` stays 0: Fluvius charges no injection tariff for solar up to 10 kVA (its
+  yearly "distributienettarief injectie" sheet, 0.1751 c/kWh excl. VAT in 2026, is for larger ones);
 - `grid_fees_c_kwh` = distribution offtake tariff + excise + green power levy, for the grid area;
 - `capacity_tariff_eur_kw_year` for the same area.
 

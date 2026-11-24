@@ -1,5 +1,5 @@
 name: Battery Pilot
-version: "2.24.0"
+version: "2.24.1"
 slug: battery_pilot
 description: Plans and steers a home battery (Solis hybrid or Marstek Venus) against your contract, prices, solar forecast and tree shade, and compares fixed with dynamic contracts
 url: https://github.com/Azer1652/hassSolarBattery
@@ -22,8 +22,8 @@ options:
   fixed_day_rate: 18.59
   fixed_night_rate: 15.22
   fixed_yearly_fee_eur: 65
-  fixed_sell_mult: 0.0798
-  fixed_sell_add: -2.72
+  fixed_sell_mult: 0.076
+  fixed_sell_add: -3
   dynamic_buy_mult: 0.102
   dynamic_buy_add: 0.408
   dynamic_vat_pct: 6
@@ -41,7 +41,7 @@ options:
   variable_index_eur_mwh: 0
   variable_index_month: ""
   grid_fees_c_kwh: 11.33
-  injection_fee_c_kwh: 0.19
+  injection_fee_c_kwh: 0
   night_start: "22:00"
   night_end: "07:00"
   weekend_is_night: true

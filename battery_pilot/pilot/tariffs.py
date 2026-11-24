@@ -9,11 +9,17 @@ Dynamic: buy  = (dynamic_buy_mult x market + dynamic_buy_add) x (1 + VAT) + grid
          sell = dynamic_sell_mult x market + dynamic_sell_add - injection fee
 Variable (a Belgian monthly-indexed contract: the price changes each month, not each hour):
          buy  = (variable_{day|night}_mult x index + variable_{day|night}_add) x (1 + VAT) + grid fees
-         sell = variable_sell_mult x index + variable_sell_add - injection fee
+         sell = variable_sell_mult x (this month's average market price) + variable_sell_add - injection fee
          index = the month's average market price (EUR/MWh), or the index published for that month
          (variable_index_eur_mwh for variable_index_month; the app keeps it with the month).
-         Suppliers mostly use Belpex, the Belgian day-ahead price, as a monthly average (often weighted
-         by the household load profile, "Belpex RLP"); the plain average is close to it.
+         Suppliers mostly use Belpex, the Belgian day-ahead price, as a monthly average for buying, often
+         weighted by the household load profile ("Belpex RLP"), which runs a few percent above the plain
+         average.
+
+The month's average market price is the plain (arithmetic) mean of the day-ahead prices. Eneco's
+injection index "Belpex-injectie" is exactly that (its published values match the day-ahead data to
+the cent), so fixed and variable injection are priced on it with no correction factor, and a variable
+contract sells on it even when a weighted index is published for buying.
 """
 from __future__ import annotations
 
@@ -88,18 +94,17 @@ class DynamicTariff(Tariff):
 class VariableTariff(Tariff):
     kind = "variable"
 
-    def __init__(self, opts: Options, market_avg: float | None = None):
+    def __init__(self, opts: Options, index: float | None = None):
         super().__init__(opts)
-        self.market_avg = market_avg
+        self.month_index = index
 
     @property
     def yearly_fee_eur(self) -> float:
         return self.o.variable_yearly_fee_eur
 
     def index(self) -> float | None:
-        """The month's index in EUR/MWh, as given when the tariff was made (`App.variable_index`).
-        The `market_avg` passed to `sell` is not used: the index is the one of the month priced."""
-        return self.market_avg
+        """The month's buy index in EUR/MWh, as given when the tariff was made (`App.variable_index`)."""
+        return self.month_index
 
     def buy(self, t_local, market=None):
         return self.rate(is_night(t_local, self.o))
@@ -112,16 +117,18 @@ class VariableTariff(Tariff):
         return (mult * idx + add) * (1 + o.variable_vat_pct / 100) + o.grid_fees_c_kwh
 
     def sell(self, t_local, market=None, market_avg=None):
-        idx = self.index() or 0.0
-        return self.o.variable_sell_mult * idx + self.o.variable_sell_add - self.o.injection_fee_c_kwh
+        """At the month's plain average market price (`market_avg`), not at the buy index: a published
+        index is weighted by household use, the injection price is not. Without an average: the index."""
+        base = market_avg if market_avg is not None else self.index()
+        return self.o.variable_sell_mult * (base or 0.0) + self.o.variable_sell_add - self.o.injection_fee_c_kwh
 
 
-def tariff(kind: str, opts: Options, market_avg: float | None = None) -> Tariff:
-    """`market_avg`: for a variable contract, its index for the month priced."""
+def tariff(kind: str, opts: Options, index: float | None = None) -> Tariff:
+    """`index`: for a variable contract, its buy index for the month priced (ignored by the others)."""
     if kind == "fixed":
         return FixedTariff(opts)
     if kind == "variable":
-        return VariableTariff(opts, market_avg)
+        return VariableTariff(opts, index)
     return DynamicTariff(opts)
 
 

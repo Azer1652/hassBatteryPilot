@@ -60,7 +60,7 @@ What it does:
 - **Trades with the grid when it pays, and says why not.** Buying a kWh to sell it
   later earns `sell price × round-trip efficiency − wear − buy price`. The grid fees are
   on every kWh bought, so with the default rates a kWh bought at a market price of 0 must
-  be sold at about 180 €/MWh to break even. Buying cheap to avoid buying dear needs a much
+  be sold at about 165 €/MWh to break even. Buying cheap to avoid buying dear needs a much
   smaller difference, about 33 €/MWh, but is limited to what the house uses. The plan
   card shows the best pair of hours of the next 24 hours with your rates, and the selling
   price from which trading would pay.
@@ -699,8 +699,8 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 | Fixed day rate | `fixed_day_rate` | 18.59 c/kWh | Energy price on the fixed contract by day, without grid fees. |
 | Fixed night rate | `fixed_night_rate` | 15.22 c/kWh | The same at night. Equal to the day rate for a single-rate contract. |
 | Fixed contract fee | `fixed_yearly_fee_eur` | 65 €/year | Added in the comparison. |
-| Fixed: sell price × market | `fixed_sell_mult` | 0.0798 | Fixed sell price = this × the month's average market price (EUR/MWh) + the next setting − injection fee. 0 for a flat sell rate. |
-| Fixed: sell price + | `fixed_sell_add` | −2.72 c/kWh | See above; your flat sell rate if the setting above is 0. |
+| Fixed: sell price × market | `fixed_sell_mult` | 0.076 | Fixed sell price = this × the month's average market price (EUR/MWh) + the next setting − injection fee. The factor before Belpex on your supplier's injection tariff sheet (Eneco: *Eneco Injection*), with no correction: Eneco's "Belpex-injectie" is the plain monthly average Battery Pilot calculates. 0 for a flat sell rate. |
+| Fixed: sell price + | `fixed_sell_add` | −3 c/kWh | See above; your flat sell rate if the setting above is 0. |
 | Dynamic: buy price × market | `dynamic_buy_mult` | 0.102 | Dynamic buy price = (this × market + the next setting) × (1 + VAT) + grid fees. |
 | Dynamic: buy price + | `dynamic_buy_add` | 0.408 c/kWh | Supplier margin, before VAT. |
 | Dynamic: VAT | `dynamic_vat_pct` | 6 % | VAT on the dynamic energy price. |
@@ -712,13 +712,13 @@ The defaults are an Eneco contract on a Fluvius connection in Flanders (2026) wi
 | Variable: night price × index | `variable_night_mult` | 0 | The same for the night rate. Leave this and the next one at 0 for a single-rate meter: the night then uses the day formula. |
 | Variable: night price + | `variable_night_add` | 0 c/kWh | The fixed part of the night formula, before VAT. |
 | Variable: VAT | `variable_vat_pct` | 6 % | VAT on the variable energy price; 0 when the formula already includes it. |
-| Variable: sell price × index | `variable_sell_mult` | 0 | Variable sell price = this × index + the next setting − injection fee. |
+| Variable: sell price × market | `variable_sell_mult` | 0 | Variable sell price = this × the month's average market price + the next setting − injection fee. It does not use the published index (see below). |
 | Variable: sell price + | `variable_sell_add` | 0 c/kWh | Usually negative: the supplier's deduction. |
 | Variable contract fee | `variable_yearly_fee_eur` | 0 €/year | Added in the comparison. |
 | Variable: published index | `variable_index_eur_mwh` | 0 (none) | Optional: the index your supplier published for one month, in EUR/MWh. Without it every month uses its average market price. |
 | Variable: month of that index | `variable_index_month` | (empty) | The month (YYYY-MM) that published index is for. Only that month uses it. |
 | Grid fees and taxes | `grid_fees_c_kwh` | 11.33 c/kWh | Added to every bought kWh on both contracts. Update each January. |
-| Injection fee | `injection_fee_c_kwh` | 0.19 c/kWh | Subtracted from every sold kWh on both contracts. |
+| Injection fee | `injection_fee_c_kwh` | 0 c/kWh | The grid operator's fee on every sold kWh, subtracted on every contract. In Flanders 0 for solar panels up to 10 kVA: Fluvius only charges it above that (0.1751 c/kWh excl. VAT in Fluvius Antwerpen in 2026). |
 | Night tariff starts | `night_start` | 22:00 | Night rate, and the window for winter night charging. The window may cross midnight (22:00–07:00) or lie inside one day (01:00–06:00). |
 | Night tariff ends | `night_end` | 07:00 | On winter days the battery reaches its night target by this time. |
 | Weekend is night tariff | `weekend_is_night` | on | The night rate all weekend (Flanders). |
@@ -731,7 +731,11 @@ The contract formulas in full (market prices in EUR/MWh):
 - dynamic buy = (*buy × market* × market price + *buy +*) × (1 + VAT) + grid fees
 - dynamic sell = *sell × market* × market price + *sell +* − injection fee
 - variable buy = (*day* or *night × index* × index + *day* or *night +*) × (1 + VAT) + grid fees
-- variable sell = *sell × index* × index + *sell +* − injection fee
+- variable sell = *sell × market* × the month's average market price + *sell +* − injection fee
+
+The month's average market price is the plain average of the day-ahead prices of the month (so
+far, for the current month). That is the index Belgian suppliers use for injection: Eneco's
+"Belpex-injectie" matches it to the cent.
 
 #### A variable contract
 
@@ -749,6 +753,8 @@ month. Many suppliers weigh Belpex by a typical household's usage ("Belpex RLP")
 can differ a few percent from the plain average. When your supplier publishes the index of
 a month, you can enter it as *Variable: published index* with that month in *Variable:
 month of that index*. Only that month uses it, in the plan, the prices and the comparison.
+The published index is for buying only: injection follows the plain monthly average (Eneco's
+"Belpex-injectie"), so the sell price always uses the average Battery Pilot calculates.
 Battery Pilot keeps it with the month, so you can later enter the next month's index
 without changing the earlier one.
 

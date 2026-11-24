@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.24.1
+
+Sold kWh are now priced the way Eneco and Fluvius bill them. Checked against Eneco's November 2026
+tariff cards, its published index values and Fluvius's 2026 injection tariffs.
+
+- **No injection fee for home solar.** The default *Injection fee* was 0.19 c/kWh, taken off every
+  sold kWh on every contract. Fluvius charges no injection tariff for solar panels up to 10 kVA
+  (0.1751 c/kWh excl. VAT only above that), so the default is now 0.
+- **Fixed sell price without the 5 % cut.** The default *Fixed: sell price × market* was
+  0.084 × 0.95, on the assumption that Eneco's injection index ("Belpex-injectie") sits about 5 %
+  below the plain monthly average. It does not: it is the plain average of the day-ahead prices,
+  which is what Battery Pilot calculates (Eneco's published values match it to the cent). The
+  defaults are now the current Eneco Injection card: 0.076 × Belpex − 3 c/kWh.
+- **A variable contract sells at the month's average market price.** It used to sell at the same
+  index it buys at, so with a published index such as Belpex-RLP-M (a few percent above the plain
+  average) the sell price came out about 0.5 c/kWh too high. Suppliers like Eneco index injection
+  on the plain Belpex average; the published index now prices buying only. The setting is now
+  called *Variable: sell price × market*.
+
+Settings you already saved are not changed by an update: on the Configuration tab set *Injection
+fee* to 0, and *Fixed: sell price × market* and *Fixed: sell price +* to the factor and the
+number on your own injection tariff card.
+
 ## 2.24.0
 
 When something else changes the inverter, the log now says who, and what Battery Pilot does about it.

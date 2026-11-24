@@ -104,9 +104,9 @@ def test_formulas_match_the_original_templates():
     t = datetime(2026, 11, 10, 12, tzinfo=BXL)   # a Tuesday
     dyn, fix = tariffs.DynamicTariff(o), tariffs.FixedTariff(o)
     assert dyn.buy(t, 100) == pytest.approx((0.102 * 100 + 0.408) * 1.06 + 11.33)
-    assert dyn.sell(t, 100) == pytest.approx(0.1 * 100 - 1.3 - 0.19)
+    assert dyn.sell(t, 100) == pytest.approx(0.1 * 100 - 1.3)          # no injection fee up to 10 kVA
     assert fix.buy(t) == pytest.approx(18.59 + 11.33)
-    assert fix.sell(t, None, 100) == pytest.approx(0.084 * 0.95 * 100 - 2.72 - 0.19, abs=1e-9)
+    assert fix.sell(t, None, 100) == pytest.approx(0.076 * 100 - 3, abs=1e-9)   # Eneco Injection, Nov 2026
     assert round(tariffs.breakeven_eur_mwh(15.22, o)) == 137
     assert round(tariffs.breakeven_eur_mwh(18.59, o)) == 168
 

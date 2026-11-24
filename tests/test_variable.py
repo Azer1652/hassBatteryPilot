@@ -25,8 +25,10 @@ def test_the_price_is_the_formula_at_the_months_index():
     night = datetime(2026, 11, 18, 23, 0, tzinfo=BXL)
     assert t.buy(day, 300.0) == pytest.approx((0.1 * 80 + 1.5) * 1.06 + o.grid_fees_c_kwh)   # the hour's price is ignored
     assert t.buy(night, -20.0) == pytest.approx((0.09 * 80 + 1.2) * 1.06 + o.grid_fees_c_kwh)
-    assert t.sell(day, 300.0) == pytest.approx(0.08 * 80 - 1.0 - o.injection_fee_c_kwh)
-    assert t.sell(day, None, 100.0) == t.sell(day, 300.0)       # the index is the month's, not the argument
+    # it sells at the month's plain average market price, not at the (household-weighted) buy index
+    assert t.sell(day, 300.0, 100.0) == pytest.approx(0.08 * 100 - 1.0 - o.injection_fee_c_kwh)
+    assert t.sell(day, None, 100.0) == t.sell(night, -20.0, 100.0)    # the hour's price is ignored
+    assert t.sell(day, 300.0) == pytest.approx(0.08 * 80 - 1.0 - o.injection_fee_c_kwh)   # no average: the index
     assert t.yearly_fee_eur == 30
 
 
@@ -86,7 +88,23 @@ def test_same_usage_prices_the_variable_contract_at_the_months_average():
     assert "variable_eur" not in c.report("2026-06", Options())["same_usage"]      # not filled in: left out
 
 
-def test_a_variable_contract_filled_in_mid_month_counts_its_own_days():
+def test_a_published_index_prices_buying_only():
+    """Eneco Flex buys at Belpex-RLP-M and sells at the plain Belpex average: a published 120 EUR/MWh
+    index against a month that averaged 100 changes the bought kWh, not the sold ones."""
+    o = Options(**VAR)
+    c = Comparison()
+    for h in range(24):
+        c.add_quarter(_quarter(h), 50.0 if h < 12 else 150.0, o, BXL)      # average 100 EUR/MWh
+    plain = c.report("2026-06", o)["same_usage"]["variable_eur"]
+    c.month("2026-06")["variable_index"] = 120.0
+    published = c.report("2026-06", o)["same_usage"]["variable_eur"]
+    night_h = sum(1 for h in range(24) if h < 7 or h >= 22)
+    dearer = (0.25 * (24 - night_h) * (VariableTariff(o, 120.0).rate(False) - VariableTariff(o, 100.0).rate(False))
+              + 0.25 * night_h * (VariableTariff(o, 120.0).rate(True) - VariableTariff(o, 100.0).rate(True))) / 100
+    assert published - plain == pytest.approx(dearer, abs=0.01)          # the sales did not move
+
+
+
     o = Options(**VAR)
     c = Comparison()
     res = {"cost_c": 300.0, "imp": 10.0, "exp": 0.0, "charged": 0.0, "discharged": 0.0, "grid_charged": 0.0,
@@ -187,6 +205,25 @@ async def test_the_app_plans_prices_and_replays_a_variable_contract(tmp_path):
     assert [e for e in app.events if e["text"].startswith("Replayed") and "variable €" in e["text"]]
     await app.publish()
     assert "variable" in fake.published["sensor.battery_pilot_buy_price"]["attributes"]
+
+
+async def test_the_plan_prices_and_trading_sell_at_the_months_average_with_a_published_index(tmp_path):
+    """Planner, the price sensors and the trading line agree: with this month's index entered by hand,
+    a variable kWh is bought at that index and sold at the month's average market price."""
+    day = datetime(2026, 3, 10, tzinfo=TZ)
+    fake = FakeHA(day.astimezone(timezone.utc) - timedelta(minutes=5), soc=50, prices=_prices(day))
+    o = Options(contract="variable", **VAR, variable_index_eur_mwh=300.0, variable_index_month="2026-03")
+    app = App(o, fake, data_dir=str(tmp_path / "data"), clock=lambda: fake.now)
+    assert await app.setup()
+    await app.tick()
+    avg = app.market_avg_month(fake.now)
+    assert avg is not None and abs(avg - 300.0) > 100
+    sell = 0.08 * avg - 1.0 - o.injection_fee_c_kwh
+    pr = app.current_prices()
+    assert pr["variable"]["sell"] == pytest.approx(sell, abs=0.01)
+    assert pr["variable"]["buy"] == pytest.approx(VariableTariff(o, 300.0).buy(fake.now.astimezone(TZ)), abs=0.01)
+    assert app.plan is not None and {round(s.sell, 6) for s in app.plan.steps} == {round(sell, 6)}
+    assert app.trading["variable"]["trade"]["price_c"] == pytest.approx(sell, abs=0.01)
 
 
 async def test_a_variable_contract_without_prices_or_index_has_no_plan(tmp_path):

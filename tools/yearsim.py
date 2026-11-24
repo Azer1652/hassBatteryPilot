@@ -232,7 +232,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
         pv_fc = pvf.kwh
         for kind in kinds_:
             res = replay_day(recs, kind, o, TZ, prices, load, pv_fc, soc[kind],
-                             index if kind == "variable" else avg, replan_every_h,
+                             index if kind == "variable" else avg, replan_every_h, index=index,
                              month_peak_kw=m[kind]["peak_kw"],
                              block_negative=block_negative, peak_shave=peak_shave,
                              solar_hold=solar_hold,
@@ -258,7 +258,7 @@ def run(start: date, days: int, opts: Options | None = None, seed: int = 1, pric
             mk = next(p.eur_mwh for p in prices if p.start <= r.start < p.end)
             for kind in kinds_:
                 t = tariff(kind, o, index)
-                m["nobat"][f"{kind}_c"] += imp * t.buy(local, mk) - exp * t.sell(local, mk, avg)
+                m["nobat"][f"{kind}_c"] += imp * t.buy(local, mk) - exp * t.sell(local, mk, index if kind == "variable" else avg)
             m["nobat"]["peak_kw"] = max(m["nobat"]["peak_kw"], imp * 4)
         m["days"] += 1
         m["pv"] += sum(r.kwh["pv"] for r in recs)

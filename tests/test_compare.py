@@ -10,7 +10,7 @@ from pilot.config import Options
 from pilot.load import LoadProfile
 from pilot.meter import QuarterRecord
 from pilot.prices import PriceSlot
-from pilot.tariffs import DynamicTariff, FixedTariff
+from pilot.tariffs import DynamicTariff, FixedTariff, VariableTariff
 
 BXL = ZoneInfo("Europe/Brussels")
 DAY = datetime(2026, 6, 14, tzinfo=BXL)       # a sunny Sunday
@@ -204,3 +204,22 @@ def test_the_stored_change_is_kept_apart_in_the_report():
                                        "grid_charged": 0.0, "stored_c": -120.0, "peak_kw": 2.0})
     c.month("2026-06")["replay_days"] = 1
     assert c.report("2026-06", o)["with_strategy"]["fixed"]["stored_eur"] == -1.2
+
+
+def test_a_variable_replay_buys_at_its_index_and_sells_at_the_average(monkeypatch):
+    """The replayed plan and the simulated day both sell at the month's average market price; the
+    index (a published Belpex-RLP-M, say) only prices what is bought."""
+    seen = set()
+    sell = VariableTariff.sell
+
+    def spy(self, t_local, market=None, market_avg=None):
+        seen.add((self.index(), market_avg))
+        return sell(self, t_local, market, market_avg)
+
+    monkeypatch.setattr(VariableTariff, "sell", spy)
+    recs, prices, fc = sunny_day()
+    o = Options(variable_day_mult=0.1, variable_day_add=1.5, variable_sell_mult=0.08, variable_sell_add=-1.0)
+    res = replay_day(recs, "variable", o, BXL, prices, LoadProfile(default_kw=0.4), fc, 90.0,
+                     market_avg=60.0, index=200.0)
+    assert res is not None and res["exp"] > 0
+    assert seen == {(200.0, 60.0)}

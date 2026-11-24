@@ -148,7 +148,7 @@ async def test_takes_over_from_battery_playbook(tmp_path, tmpdata):
     oct_ = app.comparison.report("2026-10", o)
     assert oct_["bought_kwh"] == 250 and oct_["market_avg_eur_mwh"] == 95
     # 100 kWh by day, 150 at night, 80 sold at the month's 95 EUR/MWh, the yearly fee and the billed minimum peak
-    fixed = (100 * 29.92 + 150 * 26.55 - 80 * (0.0798 * 95 - 2.72 - 0.19)) / 100 + 65 / 12 + 2.5 * 52.37 / 12
+    fixed = (100 * 29.92 + 150 * 26.55 - 80 * (0.076 * 95 - 3)) / 100 + 65 / 12 + 2.5 * 52.37 / 12
     assert oct_["same_usage"]["fixed_eur"] == pytest.approx(fixed, abs=0.01)
     assert oct_["same_usage"]["dynamic_eur"] == pytest.approx(60.5 - 4.2 + 15 / 12 + 2.5 * 52.37 / 12, abs=0.01)
     assert app.load.default_kw == pytest.approx(0.5)

@@ -141,11 +141,12 @@ class Comparison:
         cap = capacity_month_eur(m["peak_kw"], o) * share
         variable_eur = None
         if o.variable_set and m["market_n"]:
-            # its index: the one published for the month when it was set (kept with the month), else the average
+            # it buys at its index: the one published for the month when it was set (kept with the month),
+            # else the average; it sells at the average
             var = tariff("variable", o, m.get("variable_index") or avg)
             # Its price is the same all month, apart from day and night: priced on the month's totals.
             variable_eur = round((m["p_imp_day"] * var.rate(False) + m["p_imp_night"] * var.rate(True)
-                                  - m["p_exp"] * var.sell(None)) / 100
+                                  - m["p_exp"] * var.sell(None, None, avg)) / 100
                                  + o.variable_yearly_fee_eur / 12 * share + cap, 2)
         out = {
             "month": key,
@@ -239,7 +240,8 @@ class Comparison:
 def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo, prices: list[PriceSlot],
                load: LoadProfile, pv_forecast, soc0: float, market_avg: float | None,
                replan_every_h: int = 1, block_negative: bool = False, month_peak_kw: float = 0.0,
-               peak_shave: bool = False, solar_hold: bool = False, on_replan=None) -> dict | None:
+               peak_shave: bool = False, solar_hold: bool = False, on_replan=None,
+               index: float | None = None) -> dict | None:
     """Replay one day of measured quarters on a contract with its battery strategy.
 
     `pv_forecast(t0, t1)` is the (shade-corrected) forecast the app had; the plan uses
@@ -252,7 +254,8 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     `solar_hold`: it has a feed-in priority switch, so the plan may put solar charging off.
     `on_replan(quarters so far, time)` is called before each plan: the forecast corrects itself with
     the solar measured so far that day, as the app does (`PvForecast.observe`).
-    `market_avg`: the month's average market price; for the variable contract, its index for the month.
+    `market_avg`: the month's average market price (the fixed and variable sell price follow it).
+    `index`: the variable contract's buy index for the month (without it: `market_avg`).
     `cost_c` includes `stored_c`: the change in stored energy over the day, valued as the planner
     values what is left in the battery (negative when the battery ends fuller: a credit).
     """
@@ -261,7 +264,7 @@ def replay_day(records: list[QuarterRecord], kind: str, o: Options, tz: ZoneInfo
     if len(recs) < 88 or len(good) < 0.75 * len(recs):
         return None
     b = Battery.from_options(o)
-    tar = tariff(kind, o, market_avg)
+    tar = tariff(kind, o, index if index is not None else market_avg)
     soc = soc0
     car_at: float | None = None          # the floor of the car session that runs (see below)
     winter_days: dict = {}               # each date is a winter day or not once, as in the app

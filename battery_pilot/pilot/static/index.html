@@ -656,9 +656,10 @@ function comparison(c) {
   if (rows.some((r) => r.estimated_quarters))
     notes.push("† Some quarter-hours had no market price; both contracts use the price of the day before there.");
   if (vr)
-    notes.push("Variable prices each month at its index: the month's average market price, or the index you entered " +
-               "for that month. A supplier that weighs Belpex by a typical household's usage (Belpex RLP) bills a little " +
-               "differently from the plain average. Its total against fixed covers the days it has a result for.");
+    notes.push("Variable buys each month at its index: the month's average market price, or the index you entered " +
+               "for that month (a supplier that weighs Belpex by a typical household's usage, Belpex RLP, bills a little " +
+               "differently from the plain average). It sells at the month's average market price. Its total against " +
+               "fixed covers the days it has a result for.");
   $("cmpnote").textContent = notes.join(" ");
 }
 const signed = (v) => `<span class="${v < 0 ? "neg" : "pos"}">${v < 0 ? "−" : "+"}€${Math.abs(v).toFixed(0)}</span>`;
